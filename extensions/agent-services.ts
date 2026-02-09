@@ -56,9 +56,18 @@ async function api<T = unknown>(
   const base = getBaseUrl();
   if (!base) throw new Error("VERS_INFRA_URL not set");
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  const token = process.env.VERS_AUTH_TOKEN;
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${base}${path}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
