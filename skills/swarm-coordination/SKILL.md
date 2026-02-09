@@ -131,6 +131,8 @@ feed_publish { agent: "coordinator", type: "task_completed", summary: "Auth modu
 
 ### 8. Clean Up
 
+⚠️ **`vers_swarm_teardown` destroys ALL swarm VMs.** The infra VM must NOT be part of the swarm — see Pitfalls below.
+
 ```
 vers_swarm_teardown {}
 feed_publish { agent: "coordinator", type: "agent_stopped", summary: "Swarm teardown complete" }
@@ -193,6 +195,23 @@ Use consistently across all agents:
 - **`blocker`**: Something preventing progress — always needs attention
 - **`question`**: Needs coordinator or human answer
 - **`update`**: Status update or progress checkpoint
+
+## Pitfalls
+
+### Never put the infra VM in the swarm pool
+`vers_swarm_teardown` destroys ALL VMs that were created by `vers_swarm_spawn`. If you spawned the infra VM (running agent-services) through the swarm, teardown kills your coordination layer. **Always create the infra VM separately** via `vers_vm_create` or `vers_vm_restore` — never through `vers_swarm_spawn`.
+
+### Infra VM setup is a direct operation
+Since the infra VM can't be in the swarm, it's fine to set it up directly via `vers_vm_use`. This is the one exception to the "never work on VMs directly" rule — you can't delegate infra setup to an agent that depends on the infra you're setting up.
+
+### Golden images go stale
+Application code baked into golden images drifts from main after merges. After merging changes (especially security patches), either rebuild the golden image or patch in place on restored VMs. Keep golden images minimal — base tooling (node, pi, git) only, not application code that changes frequently.
+
+### Swarm agents may ignore inline source in task prompts
+When sending large source files inline in a task prompt, agents on golden images may find existing (stale) code at the expected paths and use that instead of writing what you provided. Be explicit: "delete the existing directory first" or verify the deployed code matches after the agent finishes.
+
+### All VM ports are public — always use auth
+Vers VMs have no firewall. Every port is reachable at `https://{vmId}.vm.vers.sh:{port}`. Always start agent-services with `VERS_AUTH_TOKEN` set, and pass the same token to all worker VMs via environment variable.
 
 ## Example: Full Coordinated Build
 
