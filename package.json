@@ -11,14 +11,25 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "hono": "^4.0.0",
     "@hono/node-server": "^1.8.0",
+    "@sinclair/typebox": "^0.34.48",
+    "hono": "^4.0.0",
     "ulid": "^2.3.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
+    "@mariozechner/pi-coding-agent": "^0.52.9",
+    "@types/node": "^22.0.0",
     "tsx": "^4.7.0",
-    "vitest": "^2.0.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  },
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": [
+      "./extensions/agent-services.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
   }
 }
