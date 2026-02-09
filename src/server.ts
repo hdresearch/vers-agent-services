@@ -5,14 +5,21 @@ import { boardRoutes } from "./board/routes.js";
 import { feedRoutes } from "./feed/routes.js";
 import { registryRoutes } from "./registry/routes.js";
 import { skillsRoutes } from "./skills/routes.js";
+import { uiRoutes } from "./ui/routes.js";
 
 const app = new Hono();
 
 // Health check — unauthenticated (used for liveness probes)
 app.get("/health", (c) => c.json({ status: "ok", uptime: process.uptime() }));
 
-// Auth middleware — protects all routes below
-app.use("/*", bearerAuth());
+// Mount UI and auth routes (session auth, not bearer)
+app.route("/", uiRoutes);
+
+// Bearer auth — applied per-route to API endpoints
+app.use("/board/*", bearerAuth());
+app.use("/feed/*", bearerAuth());
+app.use("/registry/*", bearerAuth());
+app.use("/skills/*", bearerAuth());
 
 // Mount service routes
 app.route("/board", boardRoutes);

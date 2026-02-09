@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Services</title>
+  <link rel="stylesheet" href="/ui/static/style.css">
+</head>
+<body>
+  <div class="header">
+    <h1>▸ Agent Services</h1>
+    <div class="status">
+      <span id="conn-label">connecting</span>
+      <span class="dot" id="conn-dot"></span>
+    </div>
+  </div>
+
+  <div class="stats" id="stats-bar">
+    <div class="stat">tasks <span class="val" id="stat-total">-</span></div>
+    <div class="stat">open <span class="val" id="stat-open">-</span></div>
+    <div class="stat">blocked <span class="val" id="stat-blocked">-</span></div>
+    <div class="stat">events <span class="val" id="stat-events">-</span></div>
+    <div class="stat">vms <span class="val" id="stat-vms">-</span></div>
+  </div>
+
+  <div class="main">
+    <div class="panel">
+      <div class="panel-header">Board</div>
+      <div class="panel-body" id="board"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">Feed</div>
+      <div class="panel-body" id="feed"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">Registry</div>
+      <div class="panel-body" id="registry"></div>
+    </div>
+  </div>
+
+  <script type="module" src="/ui/static/app.js"></script>
+</body>
+</html>
