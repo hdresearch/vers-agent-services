@@ -137,6 +137,10 @@ curl -X PATCH "$VERS_INFRA_URL/board/tasks/$TASK_ID" \
   -d '{"status": "done"}'
 ```
 
+## Automatic Behavior
+
+The agent-services extension does **not** auto-create board tasks — all task management is manual/explicit. However, agents auto-register in the registry and publish to the feed on startup, so you can discover available agents before assigning tasks.
+
 ## Pi Tools
 
 If the `agent-services` extension is loaded:

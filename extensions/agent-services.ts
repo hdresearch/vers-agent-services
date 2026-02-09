@@ -113,6 +113,7 @@ export default function (pi: ExtensionAPI) {
   // Widget — compact status line, polls every 30s
   // ---------------------------------------------------------------------------
   let widgetTimer: ReturnType<typeof setInterval> | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
   async function updateWidget(ctx: { ui: { setWidget: Function } }) {
     const base = getBaseUrl();
@@ -148,9 +149,23 @@ export default function (pi: ExtensionAPI) {
     if (!getBaseUrl()) return;
     updateWidget(ctx);
     widgetTimer = setInterval(() => updateWidget(ctx), 30_000);
+
+    // Start heartbeat
+    const vmId = process.env.VERS_VM_ID;
+    if (vmId) {
+      heartbeatTimer = setInterval(async () => {
+        try {
+          await api("POST", `/registry/vms/${vmId}/heartbeat`);
+        } catch {}
+      }, 60_000); // Every 60s
+    }
   });
 
   pi.on("session_shutdown", async () => {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
     if (widgetTimer) {
       clearInterval(widgetTimer);
       widgetTimer = null;
@@ -158,12 +173,14 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ---------------------------------------------------------------------------
-  // Auto-publish agent_start / agent_end to the feed
+  // Auto-publish agent_start / agent_end + auto-register in registry
   // ---------------------------------------------------------------------------
   const agentName = process.env.VERS_AGENT_NAME || `agent-${process.pid}`;
 
   pi.on("agent_start", async () => {
     if (!getBaseUrl()) return;
+
+    // Auto-publish to feed
     try {
       await api("POST", "/feed/events", {
         agent: agentName,
@@ -173,10 +190,41 @@ export default function (pi: ExtensionAPI) {
     } catch {
       // best-effort
     }
+
+    // Auto-register in registry
+    try {
+      const vmId = process.env.VERS_VM_ID;
+      if (vmId) {
+        await api("POST", "/registry/vms", {
+          id: vmId,
+          name: agentName,
+          role: process.env.VERS_AGENT_ROLE || "worker",
+          address: `${vmId}.vm.vers.sh`,
+          registeredBy: agentName,
+          metadata: {
+            pid: process.pid,
+            startedAt: new Date().toISOString(),
+          },
+        });
+      }
+    } catch {
+      // Best effort — registry might already have this VM, try update instead
+      try {
+        const vmId = process.env.VERS_VM_ID;
+        if (vmId) {
+          await api("PATCH", `/registry/vms/${vmId}`, {
+            name: agentName,
+            status: "running",
+          });
+        }
+      } catch {}
+    }
   });
 
   pi.on("agent_end", async () => {
     if (!getBaseUrl()) return;
+
+    // Auto-publish to feed
     try {
       await api("POST", "/feed/events", {
         agent: agentName,
@@ -186,7 +234,20 @@ export default function (pi: ExtensionAPI) {
     } catch {
       // best-effort
     }
+
+    // Update registry status
+    try {
+      const vmId = process.env.VERS_VM_ID;
+      if (vmId) {
+        await api("PATCH", `/registry/vms/${vmId}`, { status: "stopped" });
+      }
+    } catch {}
   });
+
+  // ---------------------------------------------------------------------------
+  // Auto-heartbeat — keeps registry entry alive while agent is running
+  // (heartbeatTimer declared above with widgetTimer, started in session_start)
+  // ---------------------------------------------------------------------------
 
   // ===========================================================================
   // Board Tools
