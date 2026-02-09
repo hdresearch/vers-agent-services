@@ -26,7 +26,6 @@
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
-import { StringEnum } from "@mariozechner/pi-ai";
 
 // =============================================================================
 // HTTP client helpers
@@ -56,9 +55,18 @@ async function api<T = unknown>(
   const base = getBaseUrl();
   if (!base) throw new Error("VERS_INFRA_URL not set");
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+
+  const token = process.env.VERS_AUTH_TOKEN;
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const res = await fetch(`${base}${path}`, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
@@ -213,7 +221,7 @@ export default function (pi: ExtensionAPI) {
       "List tasks on the shared board. Optionally filter by status, assignee, or tag.",
     parameters: Type.Object({
       status: Type.Optional(
-        StringEnum(["open", "in_progress", "blocked", "done"] as const, {
+        Type.Union([Type.Literal("open"), Type.Literal("in_progress"), Type.Literal("blocked"), Type.Literal("done")], {
           description: "Filter by task status",
         }),
       ),
@@ -244,7 +252,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       id: Type.String({ description: "Task ID to update" }),
       status: Type.Optional(
-        StringEnum(["open", "in_progress", "blocked", "done"] as const, {
+        Type.Union([Type.Literal("open"), Type.Literal("in_progress"), Type.Literal("blocked"), Type.Literal("done")], {
           description: "New status",
         }),
       ),
@@ -273,7 +281,7 @@ export default function (pi: ExtensionAPI) {
       taskId: Type.String({ description: "Task ID to add the note to" }),
       author: Type.String({ description: "Who is writing this note (agent name)" }),
       content: Type.String({ description: "Note content" }),
-      type: StringEnum(["finding", "blocker", "question", "update"] as const, {
+      type: Type.Union([Type.Literal("finding"), Type.Literal("blocker"), Type.Literal("question"), Type.Literal("update")], {
         description: "Note type",
       }),
     }),
@@ -304,23 +312,7 @@ export default function (pi: ExtensionAPI) {
       "Publish an event to the activity feed. Used for coordination, progress reporting, and audit trails.",
     parameters: Type.Object({
       agent: Type.String({ description: "Agent name publishing the event" }),
-      type: StringEnum(
-        [
-          "task_started",
-          "task_completed",
-          "task_failed",
-          "blocker_found",
-          "question",
-          "finding",
-          "skill_proposed",
-          "file_changed",
-          "cost_update",
-          "agent_started",
-          "agent_stopped",
-          "custom",
-        ] as const,
-        { description: "Event type" },
-      ),
+      type: Type.String({ description: "Event type (task_started, task_completed, task_failed, blocker_found, question, finding, skill_proposed, file_changed, cost_update, agent_started, agent_stopped, custom)" }),
       summary: Type.String({ description: "Short human-readable summary" }),
       detail: Type.Optional(Type.String({ description: "Longer detail or structured data" })),
     }),
@@ -386,12 +378,12 @@ export default function (pi: ExtensionAPI) {
     description: "List VMs in the coordination registry. Optionally filter by role or status.",
     parameters: Type.Object({
       role: Type.Optional(
-        StringEnum(["infra", "lieutenant", "worker", "golden", "custom"] as const, {
+        Type.Union([Type.Literal("infra"), Type.Literal("lieutenant"), Type.Literal("worker"), Type.Literal("golden"), Type.Literal("custom")], {
           description: "Filter by role",
         }),
       ),
       status: Type.Optional(
-        StringEnum(["running", "paused", "stopped"] as const, {
+        Type.Union([Type.Literal("running"), Type.Literal("paused"), Type.Literal("stopped")], {
           description: "Filter by status",
         }),
       ),
@@ -419,7 +411,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       id: Type.String({ description: "VM ID (from Vers)" }),
       name: Type.String({ description: "Human-readable name for this VM" }),
-      role: StringEnum(["infra", "lieutenant", "worker", "golden", "custom"] as const, {
+      role: Type.Union([Type.Literal("infra"), Type.Literal("lieutenant"), Type.Literal("worker"), Type.Literal("golden"), Type.Literal("custom")], {
         description: "VM role in the swarm",
       }),
       address: Type.String({ description: "Network address or endpoint for this VM" }),
@@ -452,7 +444,7 @@ export default function (pi: ExtensionAPI) {
     description:
       "Discover VMs by role — find workers, lieutenants, or other agents in the swarm.",
     parameters: Type.Object({
-      role: StringEnum(["infra", "lieutenant", "worker", "golden", "custom"] as const, {
+      role: Type.Union([Type.Literal("infra"), Type.Literal("lieutenant"), Type.Literal("worker"), Type.Literal("golden"), Type.Literal("custom")], {
         description: "Role to search for",
       }),
     }),

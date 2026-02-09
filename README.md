@@ -55,9 +55,29 @@ curl -X POST http://infra-vm:3000/feed/events \
 curl http://infra-vm:3000/feed/stream
 ```
 
+## Authentication
+
+All endpoints (except `/health`) are protected by bearer token auth when `VERS_AUTH_TOKEN` is set.
+
+```bash
+# Start server with auth enabled
+VERS_AUTH_TOKEN=$(openssl rand -hex 32) npm start
+
+# Authenticated request
+curl -H "Authorization: Bearer $VERS_AUTH_TOKEN" http://infra-vm:3000/board/tasks
+
+# Health check — always unauthenticated
+curl http://infra-vm:3000/health
+```
+
+If `VERS_AUTH_TOKEN` is **not set**, the server runs in dev mode with no auth (a warning is logged).
+
+For agent swarms, pass the same token to both the infra VM and all worker VMs via environment variable. The pi extension (`agent-services.ts`) automatically sends the token from `VERS_AUTH_TOKEN` on all API calls.
+
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3000` | Server port |
 | `DATA_DIR` | `./data` | Persistent storage directory |
+| `VERS_AUTH_TOKEN` | _(none)_ | Bearer token for API auth. If unset, all endpoints are open. |
