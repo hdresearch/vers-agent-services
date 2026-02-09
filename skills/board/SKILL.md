@@ -1,0 +1,168 @@
+# Task Board
+
+Shared task board for coordinating work across agents. Agents create tasks, claim them, post notes with findings, and mark them done.
+
+## When to Use
+
+- **Orchestrating multi-agent work** — break work into tasks, assign to agents
+- **Tracking blockers** — agents post blocker notes so others can help
+- **Sharing findings** — post notes on tasks with discoveries, questions, updates
+- **Checking what's in progress** — list tasks by status or assignee
+
+## Convention
+
+`VERS_INFRA_URL` env var points to the infra VM (e.g., `http://abc123.vm.vers.sh:3000`). All endpoints below are relative to this base URL.
+
+## API Reference
+
+### Create a Task
+
+```bash
+curl -X POST "$VERS_INFRA_URL/board/tasks" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Implement auth middleware",
+    "description": "Add JWT validation to all API routes",
+    "createdBy": "orchestrator",
+    "assignee": "backend-lt",
+    "tags": ["auth", "backend"],
+    "dependencies": []
+  }'
+```
+
+Returns `201`. Required: `title`, `createdBy`. Optional: `description`, `status` (default: `open`), `assignee`, `tags`, `dependencies`.
+
+### List Tasks
+
+```bash
+# All tasks
+curl "$VERS_INFRA_URL/board/tasks"
+
+# Filter by status
+curl "$VERS_INFRA_URL/board/tasks?status=in_progress"
+
+# Filter by assignee
+curl "$VERS_INFRA_URL/board/tasks?assignee=backend-lt"
+
+# Filter by tag
+curl "$VERS_INFRA_URL/board/tasks?tag=auth"
+```
+
+Returns `{ tasks: [...], count: N }`. Sorted newest first. Valid statuses: `open`, `in_progress`, `blocked`, `done`.
+
+### Get a Task
+
+```bash
+curl "$VERS_INFRA_URL/board/tasks/01ABC123..."
+```
+
+### Update a Task
+
+```bash
+curl -X PATCH "$VERS_INFRA_URL/board/tasks/01ABC123..." \
+  -H "Content-Type: application/json" \
+  -d '{"status": "in_progress", "assignee": "backend-lt"}'
+```
+
+Updatable: `title`, `description`, `status`, `assignee` (set `null` to unassign), `tags`, `dependencies`.
+
+### Delete a Task
+
+```bash
+curl -X DELETE "$VERS_INFRA_URL/board/tasks/01ABC123..."
+```
+
+### Add a Note
+
+```bash
+curl -X POST "$VERS_INFRA_URL/board/tasks/01ABC123.../notes" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "author": "backend-lt",
+    "content": "Found the root cause — missing CORS header in preflight",
+    "type": "finding"
+  }'
+```
+
+Returns `201`. Required: `author`, `content`, `type`. Valid types: `finding`, `blocker`, `question`, `update`.
+
+### Get Notes
+
+```bash
+curl "$VERS_INFRA_URL/board/tasks/01ABC123.../notes"
+```
+
+Returns `{ notes: [...], count: N }`.
+
+## Common Patterns
+
+### Agent Claims a Task
+
+```bash
+# List open tasks assigned to me (or unassigned)
+curl "$VERS_INFRA_URL/board/tasks?status=open&assignee=my-agent"
+
+# Claim and start
+curl -X PATCH "$VERS_INFRA_URL/board/tasks/$TASK_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "in_progress", "assignee": "my-agent"}'
+```
+
+### Report a Blocker
+
+```bash
+curl -X POST "$VERS_INFRA_URL/board/tasks/$TASK_ID/notes" \
+  -H "Content-Type: application/json" \
+  -d '{"author": "my-agent", "content": "Cannot proceed — DB credentials missing from env", "type": "blocker"}'
+
+curl -X PATCH "$VERS_INFRA_URL/board/tasks/$TASK_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "blocked"}'
+```
+
+### Complete a Task
+
+```bash
+curl -X POST "$VERS_INFRA_URL/board/tasks/$TASK_ID/notes" \
+  -H "Content-Type: application/json" \
+  -d '{"author": "my-agent", "content": "Auth middleware implemented and tested", "type": "update"}'
+
+curl -X PATCH "$VERS_INFRA_URL/board/tasks/$TASK_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "done"}'
+```
+
+## Pi Tools
+
+If the `agent-services` extension is loaded:
+
+- **`board_create_task`** — Create a new task
+- **`board_list_tasks`** — List/filter tasks
+- **`board_update_task`** — Update status, assignee, etc.
+- **`board_add_note`** — Post a finding, blocker, question, or update
+
+## Task Schema
+
+```typescript
+interface Task {
+  id: string;              // ULID
+  title: string;
+  description?: string;
+  status: "open" | "in_progress" | "blocked" | "done";
+  assignee?: string;
+  tags: string[];
+  dependencies: string[];  // Task IDs this depends on
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  notes: Note[];
+}
+
+interface Note {
+  id: string;
+  author: string;
+  content: string;
+  type: "finding" | "blocker" | "question" | "update";
+  createdAt: string;
+}
+```
