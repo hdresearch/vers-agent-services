@@ -1,0 +1,24 @@
+{
+  "name": "vers-agent-services",
+  "version": "0.1.0",
+  "description": "Lightweight coordination services for Vers agent swarms — shared task board, activity feed, skill registry, and more",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "@hono/node-server": "^1.8.0",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "tsx": "^4.7.0",
+    "vitest": "^2.0.0",
+    "@types/node": "^22.0.0"
+  }
+}
