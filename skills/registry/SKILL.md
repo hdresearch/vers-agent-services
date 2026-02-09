@@ -1,3 +1,8 @@
+---
+name: registry
+description: VM service discovery registry. Use when registering VMs, discovering services by role, sending heartbeats, or recovering from session loss.
+---
+
 # VM Registry
 
 Service discovery for persistent Vers VMs. Agents register themselves so other agents can find them without hardcoded addresses.

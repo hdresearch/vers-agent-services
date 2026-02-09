@@ -1,3 +1,8 @@
+---
+name: board
+description: Shared task board for coordinating work across agents. Use when creating, assigning, tracking, or querying tasks in a swarm.
+---
+
 # Task Board
 
 Shared task board for coordinating work across agents. Agents create tasks, claim them, post notes with findings, and mark them done.

@@ -1,3 +1,8 @@
+---
+name: swarm-coordination
+description: Orchestrate multi-agent swarms using Vers VMs with board, feed, and registry coordination. Use when spinning up swarms, assigning tasks, monitoring progress, or recovering from session drops.
+---
+
 # Swarm Coordination
 
 Use this skill when orchestrating a multi-agent swarm using Vers VMs. It combines the **Vers swarm tools** (from pi-v) with the **agent services tools** (board, feed, registry) into a unified coordination workflow.

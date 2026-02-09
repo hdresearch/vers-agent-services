@@ -1,3 +1,8 @@
+---
+name: feed
+description: Real-time activity feed for agent coordination. Use when publishing events, monitoring agent activity, or tailing the event stream.
+---
+
 # Activity Feed
 
 Real-time event stream for agent coordination. Agents publish events (task started, finding, blocker) and subscribe to see what other agents are doing.
