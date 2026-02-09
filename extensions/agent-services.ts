@@ -2,7 +2,7 @@
  * Agent Services Extension
  *
  * Gives pi agents tools to interact with the vers-agent-services coordination
- * layer: shared task board, activity feed, and VM registry.
+ * layer: shared task board, activity feed, VM registry, and SkillHub.
  *
  * Configuration:
  *   VERS_INFRA_URL — Base URL of the running vers-agent-services instance
@@ -22,11 +22,22 @@
  *   registry_register  — Register a VM in the registry
  *   registry_discover  — Discover VMs by role
  *   registry_heartbeat — Send a heartbeat for a VM
+ *
+ *   skillhub_sync      — Manually sync skills/extensions from SkillHub
+ *
+ * SkillHub client:
+ *   On session start, syncs enabled skills from the hub to
+ *   ~/.pi/agent/skills/_hub/ so pi discovers them automatically.
+ *   Subscribes to SSE stream for real-time updates.
+ *   Also syncs extensions to ~/.pi/agent/extensions/_hub/.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
+import { homedir } from "node:os";
+import { mkdir, writeFile, readFile, readdir, rm } from "node:fs/promises";
+import { join } from "node:path";
 
 // =============================================================================
 // HTTP client helpers
@@ -105,6 +116,212 @@ function err(text: string) {
 }
 
 // =============================================================================
+// SkillHub client — sync skills & extensions from hub to local filesystem
+// =============================================================================
+
+const HUB_SKILLS_DIR = join(homedir(), ".pi", "agent", "skills", "_hub");
+const HUB_EXTENSIONS_DIR = join(homedir(), ".pi", "agent", "extensions", "_hub");
+
+async function syncSkillsFromHub(): Promise<string[]> {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) return [];
+
+  const synced: string[] = [];
+
+  try {
+    const res = await api<{ skills: Array<{ name: string; version: number; content: string }>; count: number }>(
+      "GET",
+      "/skills/items?enabled=true",
+    );
+    const { skills } = res;
+
+    await mkdir(HUB_SKILLS_DIR, { recursive: true });
+
+    for (const skill of skills) {
+      const skillDir = join(HUB_SKILLS_DIR, skill.name);
+      await mkdir(skillDir, { recursive: true });
+
+      // Check if we already have this version
+      const versionFile = join(skillDir, ".version");
+      const currentVersion = await readFile(versionFile, "utf-8").catch(() => "0");
+      if (parseInt(currentVersion) >= skill.version) continue;
+
+      // Write SKILL.md and version tracker
+      await writeFile(join(skillDir, "SKILL.md"), skill.content);
+      await writeFile(versionFile, String(skill.version));
+      synced.push(`${skill.name} v${skill.version}`);
+    }
+
+    // Remove skills that were deleted from hub
+    const hubNames = new Set(skills.map((s) => s.name));
+    const localDirs = await readdir(HUB_SKILLS_DIR).catch(() => [] as string[]);
+    for (const dir of localDirs) {
+      if (!hubNames.has(dir)) {
+        await rm(join(HUB_SKILLS_DIR, dir), { recursive: true });
+        synced.push(`${dir} (removed)`);
+      }
+    }
+  } catch {
+    // Best effort — don't crash if hub is unreachable
+  }
+
+  return synced;
+}
+
+async function syncExtensionsFromHub(): Promise<string[]> {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) return [];
+
+  const synced: string[] = [];
+
+  try {
+    const res = await api<{
+      extensions: Array<{ name: string; version: number; content: string }>;
+      count: number;
+    }>("GET", "/skills/extensions?enabled=true");
+    const { extensions } = res;
+
+    await mkdir(HUB_EXTENSIONS_DIR, { recursive: true });
+
+    for (const ext of extensions) {
+      const extDir = join(HUB_EXTENSIONS_DIR, ext.name);
+      await mkdir(extDir, { recursive: true });
+
+      const versionFile = join(extDir, ".version");
+      const currentVersion = await readFile(versionFile, "utf-8").catch(() => "0");
+      if (parseInt(currentVersion) >= ext.version) continue;
+
+      // Write the extension .ts source
+      await writeFile(join(extDir, `${ext.name}.ts`), ext.content);
+      await writeFile(versionFile, String(ext.version));
+      synced.push(`${ext.name} v${ext.version}`);
+    }
+
+    // Remove extensions that were deleted from hub
+    const hubNames = new Set(extensions.map((e) => e.name));
+    const localDirs = await readdir(HUB_EXTENSIONS_DIR).catch(() => [] as string[]);
+    for (const dir of localDirs) {
+      if (!hubNames.has(dir)) {
+        await rm(join(HUB_EXTENSIONS_DIR, dir), { recursive: true });
+        synced.push(`${dir} (removed)`);
+      }
+    }
+  } catch {
+    // Best effort — don't crash if hub is unreachable
+  }
+
+  return synced;
+}
+
+// ---------------------------------------------------------------------------
+// SSE stream for real-time skill/extension updates
+// ---------------------------------------------------------------------------
+
+let sseAbort: AbortController | null = null;
+
+async function handleSkillEvent(event: { type: string; name: string; kind?: string }): Promise<void> {
+  if (event.kind === "extension") {
+    // Handle extension events
+    const extDir = join(HUB_EXTENSIONS_DIR, event.name);
+
+    if (event.type === "extension_removed") {
+      await rm(extDir, { recursive: true, force: true });
+      return;
+    }
+
+    if (event.type === "extension_published" || event.type === "extension_updated") {
+      try {
+        const ext = await api<{ name: string; version: number; content: string }>(
+          "GET",
+          `/skills/extensions/${encodeURIComponent(event.name)}`,
+        );
+        await mkdir(extDir, { recursive: true });
+        await writeFile(join(extDir, `${ext.name}.ts`), ext.content);
+        await writeFile(join(extDir, ".version"), String(ext.version));
+      } catch {
+        // Best effort
+      }
+    }
+    return;
+  }
+
+  // Handle skill events
+  const skillDir = join(HUB_SKILLS_DIR, event.name);
+
+  if (event.type === "skill_removed") {
+    await rm(skillDir, { recursive: true, force: true });
+    return;
+  }
+
+  if (event.type === "skill_published" || event.type === "skill_updated") {
+    try {
+      const skill = await api<{ name: string; version: number; content: string }>(
+        "GET",
+        `/skills/items/${encodeURIComponent(event.name)}`,
+      );
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(join(skillDir, "SKILL.md"), skill.content);
+      await writeFile(join(skillDir, ".version"), String(skill.version));
+    } catch {
+      // Best effort
+    }
+  }
+}
+
+async function startSkillStream(): Promise<void> {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) return;
+
+  sseAbort = new AbortController();
+  const headers: Record<string, string> = {};
+  const token = process.env.VERS_AUTH_TOKEN;
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  try {
+    const res = await fetch(`${baseUrl}/skills/stream`, {
+      headers,
+      signal: sseAbort.signal,
+    });
+
+    const reader = res.body?.getReader();
+    if (!reader) return;
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        try {
+          const event = JSON.parse(line.slice(6));
+          await handleSkillEvent(event);
+        } catch {
+          // Skip malformed SSE data
+        }
+      }
+    }
+  } catch {
+    if (sseAbort?.signal.aborted) return; // intentional disconnect
+    // Reconnect after delay
+    setTimeout(() => startSkillStream(), 5000);
+  }
+}
+
+function stopSkillStream(): void {
+  if (sseAbort) {
+    sseAbort.abort();
+    sseAbort = null;
+  }
+}
+
+// =============================================================================
 // Extension
 // =============================================================================
 
@@ -159,6 +376,13 @@ export default function (pi: ExtensionAPI) {
         } catch {}
       }, 60_000); // Every 60s
     }
+
+    // Sync skills and extensions from SkillHub
+    syncSkillsFromHub().catch(() => {});
+    syncExtensionsFromHub().catch(() => {});
+
+    // Subscribe to SSE stream for real-time updates
+    startSkillStream();
   });
 
   pi.on("session_shutdown", async () => {
@@ -170,6 +394,9 @@ export default function (pi: ExtensionAPI) {
       clearInterval(widgetTimer);
       widgetTimer = null;
     }
+
+    // Stop SkillHub SSE stream
+    stopSkillStream();
   });
 
   // ---------------------------------------------------------------------------
@@ -555,6 +782,33 @@ export default function (pi: ExtensionAPI) {
           `/registry/vms/${encodeURIComponent(params.id)}/heartbeat`,
         );
         return ok(JSON.stringify(result, null, 2), { result });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  // ===========================================================================
+  // SkillHub Tools
+  // ===========================================================================
+
+  pi.registerTool({
+    name: "skillhub_sync",
+    label: "Sync SkillHub",
+    description:
+      "Pull latest skills and extensions from the SkillHub. Happens automatically on session start, but can be triggered manually.",
+    parameters: Type.Object({}),
+    async execute() {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const synced = await syncSkillsFromHub();
+        const extsSynced = await syncExtensionsFromHub();
+        const total = synced.length + extsSynced.length;
+        const text =
+          total > 0
+            ? `Synced from hub:\nSkills: ${synced.join(", ") || "up to date"}\nExtensions: ${extsSynced.join(", ") || "up to date"}${extsSynced.length > 0 ? "\n\nNote: Extension changes require /reload to take effect." : ""}`
+            : "Everything up to date.";
+        return ok(text, { skills: synced, extensions: extsSynced });
       } catch (e: any) {
         return err(e.message);
       }
