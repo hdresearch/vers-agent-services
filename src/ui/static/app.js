@@ -103,12 +103,13 @@ async function loadFeed() {
     const feed = feedEl();
     feed.innerHTML = '';
     const list = Array.isArray(events) ? events : (events.events || []);
+    list.reverse();
     eventCount = 0;
     for (const evt of list) {
       feed.appendChild(renderEvent(evt));
       eventCount++;
     }
-    feed.scrollTop = feed.scrollHeight;
+    feed.scrollTop = 0;
     document.getElementById('stat-events').textContent = eventCount;
   } catch (e) {
     feedEl().innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
@@ -129,12 +130,12 @@ function startSSE() {
     try {
       const evt = JSON.parse(e.data);
       const feed = feedEl();
-      feed.appendChild(renderEvent(evt));
+      feed.prepend(renderEvent(evt));
       eventCount++;
       document.getElementById('stat-events').textContent = eventCount;
-      // Auto-scroll if near bottom
-      if (feed.scrollHeight - feed.scrollTop - feed.clientHeight < 100) {
-        feed.scrollTop = feed.scrollHeight;
+      // Auto-scroll if near top
+      if (feed.scrollTop < 100) {
+        feed.scrollTop = 0;
       }
     } catch {}
   };
