@@ -7,6 +7,7 @@ import { logRoutes } from "./log/routes.js";
 import { registryRoutes } from "./registry/routes.js";
 import { skillsRoutes } from "./skills/routes.js";
 import { reportsRoutes, sharePublicRoutes } from "./reports/routes.js";
+import { usageRoutes } from "./usage/routes.js";
 import { uiRoutes } from "./ui/routes.js";
 
 const app = new Hono();
@@ -27,6 +28,7 @@ app.use("/log/*", bearerAuth());
 app.use("/registry/*", bearerAuth());
 app.use("/skills/*", bearerAuth());
 app.use("/reports/*", bearerAuth());
+app.use("/usage/*", bearerAuth());
 
 // Mount service routes
 app.route("/board", boardRoutes);
@@ -35,6 +37,7 @@ app.route("/log", logRoutes);
 app.route("/registry", registryRoutes);
 app.route("/skills", skillsRoutes);
 app.route("/reports", reportsRoutes);
+app.route("/usage", usageRoutes);
 
 // TODO: mount these as they're built
 // app.route("/context", contextRoutes);
