@@ -141,6 +141,14 @@ done
 curl -s "$VERS_INFRA_URL/feed/events?agent=backend-lt&limit=5" | jq '.[].summary'
 ```
 
+## Automatic Behavior
+
+The agent-services extension automatically publishes these events — no manual action needed:
+- **`agent_started`** — on `agent_start` lifecycle hook
+- **`agent_stopped`** — on `agent_end` lifecycle hook
+
+All other event types (`task_started`, `finding`, `blocker_found`, etc.) must be published manually by the agent using `feed_publish`.
+
 ## Pi Tools
 
 If the `agent-services` extension is loaded:

@@ -174,6 +174,16 @@ curl -X POST "http://localhost:3000/registry/vms" \
   }"
 ```
 
+## Automatic Behavior
+
+The agent-services extension automatically handles registration for agents with `VERS_VM_ID` set:
+- **On startup**: Registers the VM in the registry (role from `VERS_AGENT_ROLE`, defaults to `worker`)
+- **Every 60s**: Sends a heartbeat to keep the entry alive
+- **On shutdown**: Updates status to `stopped`
+- **On conflict**: If the VM is already registered, falls back to a PATCH update
+
+You only need to manually register VMs that don't run the extension (e.g., infra VMs set up via direct SSH).
+
 ## Pi Tools
 
 If the `agent-services` extension is loaded, use these tools instead of curl:

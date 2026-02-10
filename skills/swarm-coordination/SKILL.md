@@ -35,6 +35,25 @@ You have access to three categories of tools:
 - `registry_heartbeat` — Keep registrations alive
 - `registry_list` — List all registered VMs
 
+## Environment Variables Agents Receive
+
+When spawned via `vers_swarm_spawn`, agents get these env vars:
+- `ANTHROPIC_API_KEY` — for LLM calls
+- `VERS_API_KEY` — for Vers API
+- `VERS_INFRA_URL` — coordination services URL
+- `VERS_AUTH_TOKEN` — auth token for coordination services
+- `VERS_VM_ID` — this VM's ID (for self-registration)
+- `VERS_AGENT_ROLE` — agent's role (worker, lieutenant, etc.)
+- `VERS_AGENT_NAME` — agent's label/name
+
+The agent-services extension automatically:
+- Publishes `agent_started`/`agent_stopped` to the feed
+- Registers the agent in the registry on startup (using `VERS_VM_ID`)
+- Sends periodic heartbeats (every 60s) to keep registry entry alive
+- Updates registry status to `stopped` on shutdown
+
+This means **you don't need to manually register swarm agents** — they self-register the moment they boot. You only need to register VMs created outside the extension (e.g., infra VMs).
+
 ## Recommended Workflow
 
 Follow this sequence when spinning up a coordinated swarm:
@@ -77,19 +96,15 @@ vers_swarm_spawn {
 }
 ```
 
-### 4. Register Agents
+### 4. Verify Agent Registration
 
-After spawning, register each agent in the registry so other agents (and you) can discover them:
+Agents self-register automatically on boot (via the extension). Verify they've checked in:
 
 ```
-registry_register {
-  id: "<vm-id>",
-  name: "worker-auth",
-  role: "worker",
-  address: "<vm-address>",
-  registeredBy: "coordinator"
-}
+registry_list { status: "running", role: "worker" }
 ```
+
+If an agent hasn't appeared after ~10s, check `feed_list` for its `agent_started` event or `vers_swarm_status` for errors.
 
 ### 5. Assign Tasks
 
@@ -145,24 +160,16 @@ feed_publish { agent: "coordinator", type: "agent_stopped", summary: "Swarm tear
 
 ## Recovery Pattern
 
-If a coordinator session drops (disconnect, crash, compaction), you can resume:
+If a coordinator session drops (disconnect, crash, compaction), follow the **recovery skill** (`skills/recovery/SKILL.md`) for the full protocol. Quick summary:
 
-### 1. Discover What's Running
-```
-registry_list { status: "running" }    # Find active VMs
-board_list_tasks { status: "in_progress" }  # Find assigned work
-```
+1. `registry_list { status: "running" }` — find active VMs
+2. `board_list_tasks {}` — find all work items by status
+3. `feed_list { limit: 50 }` — understand what happened
+4. Cross-reference: are `in_progress` task assignees still in the registry?
+5. Re-assign orphaned tasks, resolve blockers, spawn replacements
+6. `feed_publish` a recovery event
 
-### 2. Check Activity
-```
-feed_list { limit: 50 }  # What happened while we were away?
-```
-
-### 3. Resume Coordination
-- For agents still working: `vers_swarm_status` + `vers_swarm_read` to check progress
-- For completed tasks: Update board status
-- For failed/stuck agents: Reassign tasks to new agents or resolve blockers
-- The registry + board give you enough state to reconstruct the full picture
+Since agents auto-register and heartbeat, the registry is your source of truth for what's alive. VMs missing heartbeats for 5+ min are stale and excluded from `registry_discover`.
 
 ## Conventions
 
@@ -233,10 +240,8 @@ board_create_task { title: "Write integration tests", tags: ["test"], createdBy:
 # 3. Spawn agents
 vers_swarm_spawn { commitId: "abc123", count: 3, labels: ["auth", "api", "tests"], anthropicApiKey: "sk-..." }
 
-# 4. Register in registry
-registry_register { id: "vm-1", name: "worker-auth", role: "worker", address: "...", registeredBy: "coordinator" }
-registry_register { id: "vm-2", name: "worker-api", role: "worker", address: "...", registeredBy: "coordinator" }
-registry_register { id: "vm-3", name: "worker-tests", role: "worker", address: "...", registeredBy: "coordinator" }
+# 4. Verify agents self-registered (automatic via extension)
+registry_list { status: "running", role: "worker" }  # Should show 3 agents
 
 # 5. Assign and dispatch
 board_update_task { id: "task-1", status: "in_progress", assignee: "worker-auth" }
