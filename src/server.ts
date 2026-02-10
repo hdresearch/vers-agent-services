@@ -4,6 +4,7 @@ import { bearerAuth } from "./auth.js";
 import { boardRoutes } from "./board/routes.js";
 import { feedRoutes } from "./feed/routes.js";
 import { registryRoutes } from "./registry/routes.js";
+import { skillsRoutes } from "./skills/routes.js";
 
 const app = new Hono();
 
@@ -17,9 +18,9 @@ app.use("/*", bearerAuth());
 app.route("/board", boardRoutes);
 app.route("/feed", feedRoutes);
 app.route("/registry", registryRoutes);
+app.route("/skills", skillsRoutes);
 
 // TODO: mount these as they're built
-// app.route("/skills", skillsRoutes);
 // app.route("/context", contextRoutes);
 // app.route("/cost", costRoutes);
 
