@@ -26,10 +26,14 @@
  *   skillhub_sync      — Manually sync skills/extensions from SkillHub
  *
  * SkillHub client:
- *   On session start, syncs enabled skills from the hub to
- *   ~/.pi/agent/skills/_hub/ so pi discovers them automatically.
+ *   On session start, syncs enabled skills and extensions from the hub to
+ *   ~/.pi/agent/skills/_hub/ and ~/.pi/agent/extensions/_hub/.
  *   Subscribes to SSE stream for real-time updates.
- *   Also syncs extensions to ~/.pi/agent/extensions/_hub/.
+ *
+ *   On turn_start (with 60s cooldown), does a lightweight skill-only sync:
+ *   fetches the manifest (names + versions), compares locally, and only
+ *   downloads changed skills. Extensions are skipped since they require
+ *   /reload to take effect.
  */
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -121,6 +125,76 @@ function err(text: string) {
 
 const HUB_SKILLS_DIR = join(homedir(), ".pi", "agent", "skills", "_hub");
 const HUB_EXTENSIONS_DIR = join(homedir(), ".pi", "agent", "extensions", "_hub");
+
+// Cooldown tracking for turn_start skill sync
+const TURN_SYNC_COOLDOWN_MS = 60_000; // 60 seconds
+let lastTurnSyncAt = 0;
+
+/**
+ * Lightweight skill sync for turn_start: fetch manifest (names + versions only),
+ * compare against local .version files, and only fetch full content for changed skills.
+ * Skips extensions (they need /reload which we can't trigger programmatically yet).
+ */
+async function syncSkillsLightweight(): Promise<string[]> {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) return [];
+
+  const synced: string[] = [];
+
+  try {
+    // Step 1: Get lightweight manifest (no content, just names + versions)
+    const manifest = await api<{
+      skills: Array<{ name: string; version: number }>;
+      extensions: Array<{ name: string; version: number }>;
+    }>("GET", "/skills/manifest");
+
+    const remoteSkills = manifest.skills;
+
+    await mkdir(HUB_SKILLS_DIR, { recursive: true });
+
+    // Step 2: Compare versions against local state
+    const needsUpdate: Array<{ name: string; version: number }> = [];
+
+    for (const skill of remoteSkills) {
+      const versionFile = join(HUB_SKILLS_DIR, skill.name, ".version");
+      const currentVersion = await readFile(versionFile, "utf-8").catch(() => "0");
+      if (parseInt(currentVersion) < skill.version) {
+        needsUpdate.push(skill);
+      }
+    }
+
+    // Step 3: Only fetch full content for skills that changed
+    for (const skill of needsUpdate) {
+      try {
+        const full = await api<{ name: string; version: number; content: string }>(
+          "GET",
+          `/skills/items/${encodeURIComponent(skill.name)}`,
+        );
+        const skillDir = join(HUB_SKILLS_DIR, skill.name);
+        await mkdir(skillDir, { recursive: true });
+        await writeFile(join(skillDir, "SKILL.md"), full.content);
+        await writeFile(join(skillDir, ".version"), String(full.version));
+        synced.push(`${full.name} v${full.version}`);
+      } catch {
+        // Best effort — skip individual skill failures
+      }
+    }
+
+    // Step 4: Remove skills deleted from hub
+    const hubNames = new Set(remoteSkills.map((s) => s.name));
+    const localDirs = await readdir(HUB_SKILLS_DIR).catch(() => [] as string[]);
+    for (const dir of localDirs) {
+      if (!hubNames.has(dir)) {
+        await rm(join(HUB_SKILLS_DIR, dir), { recursive: true });
+        synced.push(`${dir} (removed)`);
+      }
+    }
+  } catch {
+    // Best effort — don't block the turn if hub is unreachable
+  }
+
+  return synced;
+}
 
 async function syncSkillsFromHub(): Promise<string[]> {
   const baseUrl = getBaseUrl();
@@ -383,6 +457,20 @@ export default function (pi: ExtensionAPI) {
 
     // Subscribe to SSE stream for real-time updates
     startSkillStream();
+  });
+
+  // ---------------------------------------------------------------------------
+  // turn_start — lightweight skill sync with cooldown
+  // ---------------------------------------------------------------------------
+  pi.on("turn_start", async () => {
+    if (!getBaseUrl()) return;
+
+    const now = Date.now();
+    if (now - lastTurnSyncAt < TURN_SYNC_COOLDOWN_MS) return;
+    lastTurnSyncAt = now;
+
+    // Fire-and-forget: don't block the turn
+    syncSkillsLightweight().catch(() => {});
   });
 
   pi.on("session_shutdown", async () => {
