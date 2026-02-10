@@ -1,6 +1,7 @@
 import { ulid } from "ulid";
-import { readFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
+import duckdb from "duckdb";
 
 // --- Types ---
 
@@ -72,13 +73,19 @@ export interface VMInput {
 
 export interface SessionFilters {
   agent?: string;
-  range?: string; // e.g. "7d", "30d", "24h"
+  range?: string;
 }
 
 export interface VMFilters {
   role?: VMRole;
   agent?: string;
   range?: string;
+}
+
+export interface AgentUsage {
+  tokens: number;
+  cost: number;
+  sessions: number;
 }
 
 export interface UsageSummary {
@@ -89,7 +96,7 @@ export interface UsageSummary {
     sessions: number;
     vms: number;
   };
-  byAgent: Record<string, { tokens: number; cost: number; sessions: number }>;
+  byAgent: Record<string, AgentUsage>;
 }
 
 // --- Validation ---
@@ -102,7 +109,7 @@ const VALID_VM_ROLES: Set<string> = new Set([
   "golden",
 ]);
 
-function parseDuration(duration: string): number | null {
+function parseDurationMs(duration: string): number | null {
   const match = duration.match(/^(\d+)(h|d)$/);
   if (!match) return null;
   const value = parseInt(match[1], 10);
@@ -145,61 +152,93 @@ export class ValidationError extends Error {
   }
 }
 
+// --- Promisified DuckDB helpers ---
+
+function dbRun(conn: duckdb.Connection, sql: string, ...params: any[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    conn.run(sql, ...params, (err: any) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+function dbAll(conn: duckdb.Connection, sql: string, ...params: any[]): Promise<duckdb.TableData> {
+  return new Promise((resolve, reject) => {
+    conn.all(sql, ...params, (err: any, rows: duckdb.TableData) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+}
+
 // --- Store ---
 
 export class UsageStore {
-  private sessions: SessionRecord[] = [];
-  private vms: VMRecord[] = [];
-  private sessionsPath: string;
-  private vmsPath: string;
+  private db: duckdb.Database;
+  private conn: duckdb.Connection;
+  private ready: Promise<void>;
 
-  constructor(
-    sessionsPath = "data/usage-sessions.jsonl",
-    vmsPath = "data/usage-vms.jsonl"
-  ) {
-    this.sessionsPath = sessionsPath;
-    this.vmsPath = vmsPath;
-    this.loadSessions();
-    this.loadVMs();
-  }
-
-  private loadSessions(): void {
-    if (!existsSync(this.sessionsPath)) return;
-    const content = readFileSync(this.sessionsPath, "utf-8").trim();
-    if (!content) return;
-    for (const line of content.split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        this.sessions.push(JSON.parse(line) as SessionRecord);
-      } catch {
-        // skip malformed lines
-      }
-    }
-  }
-
-  private loadVMs(): void {
-    if (!existsSync(this.vmsPath)) return;
-    const content = readFileSync(this.vmsPath, "utf-8").trim();
-    if (!content) return;
-    for (const line of content.split("\n")) {
-      if (!line.trim()) continue;
-      try {
-        this.vms.push(JSON.parse(line) as VMRecord);
-      } catch {
-        // skip malformed lines
-      }
-    }
-  }
-
-  private appendToFile(filePath: string, record: object): void {
-    const dir = dirname(filePath);
+  constructor(dbPath = "data/usage.duckdb") {
+    const dir = dirname(dbPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    appendFileSync(filePath, JSON.stringify(record) + "\n");
+
+    this.db = new duckdb.Database(dbPath);
+    this.conn = this.db.connect();
+    this.ready = this.initTables();
+  }
+
+  private async initTables(): Promise<void> {
+    await dbRun(
+      this.conn,
+      `CREATE TABLE IF NOT EXISTS sessions (
+        id VARCHAR PRIMARY KEY,
+        session_id VARCHAR NOT NULL,
+        agent VARCHAR NOT NULL,
+        parent_agent VARCHAR,
+        model VARCHAR NOT NULL,
+        tokens_input INTEGER NOT NULL,
+        tokens_output INTEGER NOT NULL,
+        tokens_cache_read INTEGER NOT NULL,
+        tokens_cache_write INTEGER NOT NULL,
+        tokens_total INTEGER NOT NULL,
+        cost_input DOUBLE NOT NULL,
+        cost_output DOUBLE NOT NULL,
+        cost_cache_read DOUBLE NOT NULL,
+        cost_cache_write DOUBLE NOT NULL,
+        cost_total DOUBLE NOT NULL,
+        turns INTEGER NOT NULL,
+        tool_calls JSON NOT NULL,
+        started_at TIMESTAMP NOT NULL,
+        ended_at TIMESTAMP NOT NULL,
+        recorded_at TIMESTAMP NOT NULL
+      )`
+    );
+
+    await dbRun(
+      this.conn,
+      `CREATE TABLE IF NOT EXISTS vm_records (
+        id VARCHAR PRIMARY KEY,
+        vm_id VARCHAR NOT NULL,
+        role VARCHAR NOT NULL,
+        agent VARCHAR NOT NULL,
+        commit_id VARCHAR,
+        created_at TIMESTAMP NOT NULL,
+        destroyed_at TIMESTAMP,
+        recorded_at TIMESTAMP NOT NULL
+      )`
+    );
+  }
+
+  async ensureReady(): Promise<void> {
+    await this.ready;
   }
 
   // --- Sessions ---
 
-  recordSession(input: SessionInput): SessionRecord {
+  async recordSession(input: SessionInput): Promise<SessionRecord> {
+    await this.ready;
+
     if (!input.sessionId || typeof input.sessionId !== "string" || !input.sessionId.trim()) {
       throw new ValidationError("sessionId is required");
     }
@@ -225,8 +264,37 @@ export class UsageStore {
       throw new ValidationError("endedAt is required");
     }
 
-    const record: SessionRecord = {
-      id: ulid(),
+    const id = ulid();
+    const now = new Date().toISOString();
+    const toolCalls = input.toolCalls || {};
+
+    await dbRun(
+      this.conn,
+      `INSERT INTO sessions VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+      id,
+      input.sessionId.trim(),
+      input.agent.trim(),
+      input.parentAgent?.trim() || null,
+      input.model.trim(),
+      input.tokens.input,
+      input.tokens.output,
+      input.tokens.cacheRead,
+      input.tokens.cacheWrite,
+      input.tokens.total,
+      input.cost.input,
+      input.cost.output,
+      input.cost.cacheRead,
+      input.cost.cacheWrite,
+      input.cost.total,
+      input.turns,
+      JSON.stringify(toolCalls),
+      input.startedAt,
+      input.endedAt,
+      now
+    );
+
+    return {
+      id,
       sessionId: input.sessionId.trim(),
       agent: input.agent.trim(),
       parentAgent: input.parentAgent?.trim() || null,
@@ -234,41 +302,45 @@ export class UsageStore {
       tokens: input.tokens,
       cost: input.cost,
       turns: input.turns,
-      toolCalls: input.toolCalls || {},
+      toolCalls,
       startedAt: input.startedAt,
       endedAt: input.endedAt,
-      recordedAt: new Date().toISOString(),
+      recordedAt: now,
     };
-
-    this.sessions.push(record);
-    this.appendToFile(this.sessionsPath, record);
-    return record;
   }
 
-  listSessions(filters?: SessionFilters): SessionRecord[] {
-    let results = [...this.sessions];
+  async listSessions(filters?: SessionFilters): Promise<SessionRecord[]> {
+    await this.ready;
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let paramIdx = 1;
 
     if (filters?.agent) {
-      results = results.filter((s) => s.agent === filters.agent);
+      conditions.push(`agent = $${paramIdx++}`);
+      params.push(filters.agent);
     }
     if (filters?.range) {
-      const ms = parseDuration(filters.range);
+      const ms = parseDurationMs(filters.range);
       if (ms !== null) {
-        const cutoff = Date.now() - ms;
-        results = results.filter(
-          (s) => new Date(s.startedAt).getTime() >= cutoff
-        );
+        const cutoff = new Date(Date.now() - ms).toISOString();
+        conditions.push(`started_at >= $${paramIdx++}`);
+        params.push(cutoff);
       }
     }
 
-    // Sort by startedAt descending (most recent first)
-    results.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
-    return results;
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const sql = `SELECT * FROM sessions ${where} ORDER BY started_at DESC`;
+    const rows = await dbAll(this.conn, sql, ...params);
+
+    return rows.map(rowToSession);
   }
 
   // --- VMs ---
 
-  recordVM(input: VMInput): VMRecord {
+  async recordVM(input: VMInput): Promise<VMRecord> {
+    await this.ready;
+
     if (!input.vmId || typeof input.vmId !== "string" || !input.vmId.trim()) {
       throw new ValidationError("vmId is required");
     }
@@ -282,98 +354,146 @@ export class UsageStore {
       throw new ValidationError("createdAt is required");
     }
 
-    // Check if this is an update (destroy event for existing VM)
-    const existing = this.vms.find((v) => v.vmId === input.vmId.trim());
-    if (existing && input.destroyedAt) {
-      existing.destroyedAt = input.destroyedAt;
-      // Rewrite not needed for JSONL — we append the updated record
-      // Consumers should use the latest record for each vmId
-      const updated: VMRecord = { ...existing };
-      this.appendToFile(this.vmsPath, updated);
-      return updated;
+    // Check if this is a destroy update for an existing VM
+    if (input.destroyedAt) {
+      const existing = await dbAll(
+        this.conn,
+        `SELECT * FROM vm_records WHERE vm_id = $1 ORDER BY recorded_at DESC LIMIT 1`,
+        input.vmId.trim()
+      );
+      if (existing.length > 0) {
+        await dbRun(
+          this.conn,
+          `UPDATE vm_records SET destroyed_at = $1 WHERE id = $2`,
+          input.destroyedAt,
+          existing[0].id
+        );
+        const updated = rowToVM(existing[0]);
+        updated.destroyedAt = input.destroyedAt;
+        return updated;
+      }
     }
 
-    const record: VMRecord = {
-      id: ulid(),
+    const id = ulid();
+    const now = new Date().toISOString();
+
+    await dbRun(
+      this.conn,
+      `INSERT INTO vm_records VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      id,
+      input.vmId.trim(),
+      input.role,
+      input.agent.trim(),
+      input.commitId?.trim() || null,
+      input.createdAt,
+      input.destroyedAt || null,
+      now
+    );
+
+    return {
+      id,
       vmId: input.vmId.trim(),
       role: input.role,
       agent: input.agent.trim(),
       commitId: input.commitId?.trim(),
       createdAt: input.createdAt,
       destroyedAt: input.destroyedAt,
-      recordedAt: new Date().toISOString(),
+      recordedAt: now,
     };
-
-    this.vms.push(record);
-    this.appendToFile(this.vmsPath, record);
-    return record;
   }
 
-  listVMs(filters?: VMFilters): VMRecord[] {
-    // Deduplicate by vmId — take latest record per vmId
-    const byVmId = new Map<string, VMRecord>();
-    for (const vm of this.vms) {
-      byVmId.set(vm.vmId, vm);
-    }
-    let results = Array.from(byVmId.values());
+  async listVMs(filters?: VMFilters): Promise<VMRecord[]> {
+    await this.ready;
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let paramIdx = 1;
 
     if (filters?.role) {
-      results = results.filter((v) => v.role === filters.role);
+      conditions.push(`role = $${paramIdx++}`);
+      params.push(filters.role);
     }
     if (filters?.agent) {
-      results = results.filter((v) => v.agent === filters.agent);
+      conditions.push(`agent = $${paramIdx++}`);
+      params.push(filters.agent);
     }
     if (filters?.range) {
-      const ms = parseDuration(filters.range);
+      const ms = parseDurationMs(filters.range);
       if (ms !== null) {
-        const cutoff = Date.now() - ms;
-        results = results.filter(
-          (v) => new Date(v.createdAt).getTime() >= cutoff
-        );
+        const cutoff = new Date(Date.now() - ms).toISOString();
+        conditions.push(`created_at >= $${paramIdx++}`);
+        params.push(cutoff);
       }
     }
 
-    // Sort by createdAt descending
-    results.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-    return results;
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const sql = `SELECT * FROM vm_records ${where} ORDER BY created_at DESC`;
+    const rows = await dbAll(this.conn, sql, ...params);
+
+    return rows.map(rowToVM);
   }
 
-  // --- Summary ---
+  // --- Summary (SQL aggregation) ---
 
-  summary(range = "7d"): UsageSummary {
-    const sessions = this.listSessions({ range });
-    const vms = this.listVMs({ range });
+  async summary(range = "7d"): Promise<UsageSummary> {
+    await this.ready;
 
-    const byAgent: Record<string, { tokens: number; cost: number; sessions: number }> = {};
+    const ms = parseDurationMs(range);
+    const cutoff = ms !== null ? new Date(Date.now() - ms).toISOString() : new Date(0).toISOString();
 
-    let totalTokens = 0;
-    let totalCost = 0;
+    // Aggregate sessions by agent using SQL
+    const agentRows = await dbAll(
+      this.conn,
+      `SELECT
+        agent,
+        SUM(tokens_total) as tokens,
+        ROUND(SUM(cost_total), 2) as cost,
+        COUNT(*) as sessions
+      FROM sessions
+      WHERE started_at >= $1
+      GROUP BY agent
+      ORDER BY cost DESC`,
+      cutoff
+    );
 
-    for (const session of sessions) {
-      totalTokens += session.tokens.total;
-      totalCost += session.cost.total;
+    // Total sessions
+    const totalRows = await dbAll(
+      this.conn,
+      `SELECT
+        COALESCE(SUM(tokens_total), 0) as tokens,
+        ROUND(COALESCE(SUM(cost_total), 0), 2) as cost,
+        COUNT(*) as sessions
+      FROM sessions
+      WHERE started_at >= $1`,
+      cutoff
+    );
 
-      if (!byAgent[session.agent]) {
-        byAgent[session.agent] = { tokens: 0, cost: 0, sessions: 0 };
-      }
-      byAgent[session.agent].tokens += session.tokens.total;
-      byAgent[session.agent].cost += session.cost.total;
-      byAgent[session.agent].sessions += 1;
-    }
+    // Count VMs in range
+    const vmRows = await dbAll(
+      this.conn,
+      `SELECT COUNT(*) as vms FROM vm_records WHERE created_at >= $1`,
+      cutoff
+    );
 
-    // Round cost to 2 decimal places
-    totalCost = Math.round(totalCost * 100) / 100;
-    for (const agent of Object.keys(byAgent)) {
-      byAgent[agent].cost = Math.round(byAgent[agent].cost * 100) / 100;
+    const totals = totalRows[0] || { tokens: 0, cost: 0, sessions: 0 };
+    const vmCount = vmRows[0]?.vms || 0;
+
+    const byAgent: Record<string, AgentUsage> = {};
+    for (const row of agentRows) {
+      byAgent[row.agent] = {
+        tokens: Number(row.tokens),
+        cost: Number(row.cost),
+        sessions: Number(row.sessions),
+      };
     }
 
     return {
       range,
       totals: {
-        tokens: totalTokens,
-        cost: totalCost,
-        sessions: sessions.length,
-        vms: vms.length,
+        tokens: Number(totals.tokens),
+        cost: Number(totals.cost),
+        sessions: Number(totals.sessions),
+        vms: Number(vmCount),
       },
       byAgent,
     };
@@ -381,11 +501,80 @@ export class UsageStore {
 
   // --- Accessors for testing ---
 
-  get sessionCount(): number {
-    return this.sessions.length;
+  async sessionCount(): Promise<number> {
+    await this.ready;
+    const rows = await dbAll(this.conn, "SELECT COUNT(*) as cnt FROM sessions");
+    return Number(rows[0].cnt);
   }
 
-  get vmCount(): number {
-    return this.vms.length;
+  async vmCount(): Promise<number> {
+    await this.ready;
+    const rows = await dbAll(this.conn, "SELECT COUNT(*) as cnt FROM vm_records");
+    return Number(rows[0].cnt);
   }
+
+  async close(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.db.close((err: any) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  }
+}
+
+// --- Row mappers ---
+
+function rowToSession(row: duckdb.RowData): SessionRecord {
+  let toolCalls: Record<string, number> = {};
+  if (row.tool_calls) {
+    toolCalls = typeof row.tool_calls === "string" ? JSON.parse(row.tool_calls) : row.tool_calls;
+  }
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    agent: row.agent,
+    parentAgent: row.parent_agent || null,
+    model: row.model,
+    tokens: {
+      input: row.tokens_input,
+      output: row.tokens_output,
+      cacheRead: row.tokens_cache_read,
+      cacheWrite: row.tokens_cache_write,
+      total: row.tokens_total,
+    },
+    cost: {
+      input: row.cost_input,
+      output: row.cost_output,
+      cacheRead: row.cost_cache_read,
+      cacheWrite: row.cost_cache_write,
+      total: row.cost_total,
+    },
+    turns: row.turns,
+    toolCalls,
+    startedAt: toISOString(row.started_at),
+    endedAt: toISOString(row.ended_at),
+    recordedAt: toISOString(row.recorded_at),
+  };
+}
+
+function rowToVM(row: duckdb.RowData): VMRecord {
+  const record: VMRecord = {
+    id: row.id,
+    vmId: row.vm_id,
+    role: row.role as VMRole,
+    agent: row.agent,
+    createdAt: toISOString(row.created_at),
+    recordedAt: toISOString(row.recorded_at),
+  };
+  if (row.commit_id) record.commitId = row.commit_id;
+  if (row.destroyed_at) record.destroyedAt = toISOString(row.destroyed_at);
+  return record;
+}
+
+/** DuckDB returns timestamps as Date objects — normalize to ISO string */
+function toISOString(val: any): string {
+  if (val instanceof Date) return val.toISOString();
+  if (typeof val === "string") return val;
+  return String(val);
 }

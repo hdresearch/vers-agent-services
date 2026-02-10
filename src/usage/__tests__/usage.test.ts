@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Hono } from "hono";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -44,24 +44,23 @@ function makeVMInput(overrides: Partial<VMInput> = {}): VMInput {
 describe("UsageStore", () => {
   let store: UsageStore;
   let tmpDir: string;
-  let sessionsPath: string;
-  let vmsPath: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     tmpDir = mkdtempSync(join(tmpdir(), "usage-test-"));
-    sessionsPath = join(tmpDir, "sessions.jsonl");
-    vmsPath = join(tmpDir, "vms.jsonl");
-    store = new UsageStore(sessionsPath, vmsPath);
+    const dbPath = join(tmpDir, "usage.duckdb");
+    store = new UsageStore(dbPath);
+    await store.ensureReady();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await store.close();
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
   describe("recordSession", () => {
-    it("records a session with all fields", () => {
+    it("records a session with all fields", async () => {
       const input = makeSessionInput();
-      const record = store.recordSession(input);
+      const record = await store.recordSession(input);
       expect(record.id).toBeTruthy();
       expect(record.sessionId).toBe("sess-001");
       expect(record.agent).toBe("lt-build");
@@ -74,102 +73,104 @@ describe("UsageStore", () => {
       expect(record.recordedAt).toBeTruthy();
     });
 
-    it("defaults parentAgent to null", () => {
-      const record = store.recordSession(makeSessionInput({ parentAgent: undefined }));
+    it("defaults parentAgent to null", async () => {
+      const record = await store.recordSession(makeSessionInput({ parentAgent: undefined }));
       expect(record.parentAgent).toBeNull();
     });
 
-    it("defaults toolCalls to empty object", () => {
-      const record = store.recordSession(makeSessionInput({ toolCalls: undefined }));
+    it("defaults toolCalls to empty object", async () => {
+      const record = await store.recordSession(makeSessionInput({ toolCalls: undefined }));
       expect(record.toolCalls).toEqual({});
     });
 
-    it("rejects missing sessionId", () => {
-      expect(() => store.recordSession(makeSessionInput({ sessionId: "" }))).toThrow(ValidationError);
+    it("rejects missing sessionId", async () => {
+      await expect(store.recordSession(makeSessionInput({ sessionId: "" }))).rejects.toThrow(ValidationError);
     });
 
-    it("rejects missing agent", () => {
-      expect(() => store.recordSession(makeSessionInput({ agent: "" }))).toThrow(ValidationError);
+    it("rejects missing agent", async () => {
+      await expect(store.recordSession(makeSessionInput({ agent: "" }))).rejects.toThrow(ValidationError);
     });
 
-    it("rejects missing model", () => {
-      expect(() => store.recordSession(makeSessionInput({ model: "" }))).toThrow(ValidationError);
+    it("rejects missing model", async () => {
+      await expect(store.recordSession(makeSessionInput({ model: "" }))).rejects.toThrow(ValidationError);
     });
 
-    it("rejects invalid tokens", () => {
-      expect(() =>
+    it("rejects invalid tokens", async () => {
+      await expect(
         store.recordSession(makeSessionInput({ tokens: { input: 0 } as any }))
-      ).toThrow(ValidationError);
+      ).rejects.toThrow(ValidationError);
     });
 
-    it("rejects invalid cost", () => {
-      expect(() =>
+    it("rejects invalid cost", async () => {
+      await expect(
         store.recordSession(makeSessionInput({ cost: { total: 1 } as any }))
-      ).toThrow(ValidationError);
+      ).rejects.toThrow(ValidationError);
     });
 
-    it("rejects negative turns", () => {
-      expect(() => store.recordSession(makeSessionInput({ turns: -1 }))).toThrow(ValidationError);
+    it("rejects negative turns", async () => {
+      await expect(store.recordSession(makeSessionInput({ turns: -1 }))).rejects.toThrow(ValidationError);
     });
 
-    it("rejects missing startedAt", () => {
-      expect(() => store.recordSession(makeSessionInput({ startedAt: "" }))).toThrow(ValidationError);
+    it("rejects missing startedAt", async () => {
+      await expect(store.recordSession(makeSessionInput({ startedAt: "" }))).rejects.toThrow(ValidationError);
     });
 
-    it("rejects missing endedAt", () => {
-      expect(() => store.recordSession(makeSessionInput({ endedAt: "" }))).toThrow(ValidationError);
+    it("rejects missing endedAt", async () => {
+      await expect(store.recordSession(makeSessionInput({ endedAt: "" }))).rejects.toThrow(ValidationError);
     });
   });
 
   describe("listSessions", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       const now = new Date();
-      store.recordSession(makeSessionInput({
+      await store.recordSession(makeSessionInput({
         sessionId: "s1",
         agent: "orchestrator",
         startedAt: new Date(now.getTime() - 1000).toISOString(),
       }));
-      store.recordSession(makeSessionInput({
+      await store.recordSession(makeSessionInput({
         sessionId: "s2",
         agent: "lt-build",
         startedAt: new Date(now.getTime() - 2000).toISOString(),
       }));
-      store.recordSession(makeSessionInput({
+      await store.recordSession(makeSessionInput({
         sessionId: "s3",
         agent: "orchestrator",
         startedAt: new Date(now.getTime() - 3000).toISOString(),
       }));
     });
 
-    it("lists all sessions", () => {
-      expect(store.listSessions()).toHaveLength(3);
+    it("lists all sessions", async () => {
+      const sessions = await store.listSessions();
+      expect(sessions).toHaveLength(3);
     });
 
-    it("filters by agent", () => {
-      const sessions = store.listSessions({ agent: "orchestrator" });
+    it("filters by agent", async () => {
+      const sessions = await store.listSessions({ agent: "orchestrator" });
       expect(sessions).toHaveLength(2);
       expect(sessions.every((s) => s.agent === "orchestrator")).toBe(true);
     });
 
-    it("filters by range", () => {
-      const sessions = store.listSessions({ range: "1h" });
+    it("filters by range", async () => {
+      const sessions = await store.listSessions({ range: "1h" });
       expect(sessions).toHaveLength(3);
     });
 
-    it("returns most recent first", () => {
-      const sessions = store.listSessions();
+    it("returns most recent first", async () => {
+      const sessions = await store.listSessions();
       expect(sessions[0].sessionId).toBe("s1");
       expect(sessions[2].sessionId).toBe("s3");
     });
 
-    it("returns empty for no matches", () => {
-      expect(store.listSessions({ agent: "nonexistent" })).toHaveLength(0);
+    it("returns empty for no matches", async () => {
+      const sessions = await store.listSessions({ agent: "nonexistent" });
+      expect(sessions).toHaveLength(0);
     });
   });
 
   describe("recordVM", () => {
-    it("records a VM creation", () => {
-      const record = store.recordVM(makeVMInput());
+    it("records a VM creation", async () => {
+      const record = await store.recordVM(makeVMInput());
       expect(record.id).toBeTruthy();
       expect(record.vmId).toBe("vm-abc-123");
       expect(record.role).toBe("worker");
@@ -179,44 +180,44 @@ describe("UsageStore", () => {
       expect(record.recordedAt).toBeTruthy();
     });
 
-    it("records a VM with destroyedAt", () => {
-      const record = store.recordVM(makeVMInput({ destroyedAt: new Date().toISOString() }));
+    it("records a VM with destroyedAt", async () => {
+      const record = await store.recordVM(makeVMInput({ destroyedAt: new Date().toISOString() }));
       expect(record.destroyedAt).toBeTruthy();
     });
 
-    it("rejects missing vmId", () => {
-      expect(() => store.recordVM(makeVMInput({ vmId: "" }))).toThrow(ValidationError);
+    it("rejects missing vmId", async () => {
+      await expect(store.recordVM(makeVMInput({ vmId: "" }))).rejects.toThrow(ValidationError);
     });
 
-    it("rejects invalid role", () => {
-      expect(() => store.recordVM(makeVMInput({ role: "bad" as any }))).toThrow(ValidationError);
+    it("rejects invalid role", async () => {
+      await expect(store.recordVM(makeVMInput({ role: "bad" as any }))).rejects.toThrow(ValidationError);
     });
 
-    it("rejects missing agent", () => {
-      expect(() => store.recordVM(makeVMInput({ agent: "" }))).toThrow(ValidationError);
+    it("rejects missing agent", async () => {
+      await expect(store.recordVM(makeVMInput({ agent: "" }))).rejects.toThrow(ValidationError);
     });
 
-    it("rejects missing createdAt", () => {
-      expect(() => store.recordVM(makeVMInput({ createdAt: "" }))).toThrow(ValidationError);
+    it("rejects missing createdAt", async () => {
+      await expect(store.recordVM(makeVMInput({ createdAt: "" }))).rejects.toThrow(ValidationError);
     });
   });
 
   describe("listVMs", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       const now = new Date();
-      store.recordVM(makeVMInput({
+      await store.recordVM(makeVMInput({
         vmId: "vm-1",
         role: "worker",
         agent: "lt-build",
         createdAt: new Date(now.getTime() - 1000).toISOString(),
       }));
-      store.recordVM(makeVMInput({
+      await store.recordVM(makeVMInput({
         vmId: "vm-2",
         role: "lieutenant",
         agent: "orchestrator",
         createdAt: new Date(now.getTime() - 2000).toISOString(),
       }));
-      store.recordVM(makeVMInput({
+      await store.recordVM(makeVMInput({
         vmId: "vm-3",
         role: "worker",
         agent: "lt-test",
@@ -224,53 +225,54 @@ describe("UsageStore", () => {
       }));
     });
 
-    it("lists all VMs", () => {
-      expect(store.listVMs()).toHaveLength(3);
+    it("lists all VMs", async () => {
+      const vms = await store.listVMs();
+      expect(vms).toHaveLength(3);
     });
 
-    it("filters by role", () => {
-      const vms = store.listVMs({ role: "worker" });
+    it("filters by role", async () => {
+      const vms = await store.listVMs({ role: "worker" });
       expect(vms).toHaveLength(2);
       expect(vms.every((v) => v.role === "worker")).toBe(true);
     });
 
-    it("filters by agent", () => {
-      const vms = store.listVMs({ agent: "orchestrator" });
+    it("filters by agent", async () => {
+      const vms = await store.listVMs({ agent: "orchestrator" });
       expect(vms).toHaveLength(1);
       expect(vms[0].vmId).toBe("vm-2");
     });
 
-    it("filters by range", () => {
-      const vms = store.listVMs({ range: "1h" });
+    it("filters by range", async () => {
+      const vms = await store.listVMs({ range: "1h" });
       expect(vms).toHaveLength(3);
     });
 
-    it("returns most recent first", () => {
-      const vms = store.listVMs();
+    it("returns most recent first", async () => {
+      const vms = await store.listVMs();
       expect(vms[0].vmId).toBe("vm-1");
       expect(vms[2].vmId).toBe("vm-3");
     });
 
-    it("deduplicates by vmId", () => {
-      // Record a destroy event for vm-1
-      store.recordVM(makeVMInput({
+    it("updates existing VM on destroy", async () => {
+      await store.recordVM(makeVMInput({
         vmId: "vm-1",
         role: "worker",
         agent: "lt-build",
         createdAt: new Date(Date.now() - 1000).toISOString(),
         destroyedAt: new Date().toISOString(),
       }));
-      const vms = store.listVMs();
-      expect(vms).toHaveLength(3); // still 3 unique vmIds
+      const vms = await store.listVMs();
+      // Should still have 3 VMs (vm-1 was updated, not duplicated)
+      expect(vms).toHaveLength(3);
       const vm1 = vms.find((v) => v.vmId === "vm-1");
       expect(vm1?.destroyedAt).toBeTruthy();
     });
   });
 
   describe("summary", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       const now = new Date();
-      store.recordSession(makeSessionInput({
+      await store.recordSession(makeSessionInput({
         sessionId: "s1",
         agent: "orchestrator",
         tokens: { input: 100000, output: 50000, cacheRead: 10000, cacheWrite: 5000, total: 165000 },
@@ -278,7 +280,7 @@ describe("UsageStore", () => {
         startedAt: new Date(now.getTime() - 1000).toISOString(),
         endedAt: now.toISOString(),
       }));
-      store.recordSession(makeSessionInput({
+      await store.recordSession(makeSessionInput({
         sessionId: "s2",
         agent: "lt-build",
         tokens: { input: 200000, output: 100000, cacheRead: 20000, cacheWrite: 10000, total: 330000 },
@@ -286,18 +288,18 @@ describe("UsageStore", () => {
         startedAt: new Date(now.getTime() - 2000).toISOString(),
         endedAt: now.toISOString(),
       }));
-      store.recordVM(makeVMInput({
+      await store.recordVM(makeVMInput({
         vmId: "vm-1",
         createdAt: new Date(now.getTime() - 1000).toISOString(),
       }));
-      store.recordVM(makeVMInput({
+      await store.recordVM(makeVMInput({
         vmId: "vm-2",
         createdAt: new Date(now.getTime() - 2000).toISOString(),
       }));
     });
 
-    it("computes totals", () => {
-      const summary = store.summary("7d");
+    it("computes totals", async () => {
+      const summary = await store.summary("7d");
       expect(summary.range).toBe("7d");
       expect(summary.totals.tokens).toBe(495000);
       expect(summary.totals.cost).toBe(3.21);
@@ -305,8 +307,8 @@ describe("UsageStore", () => {
       expect(summary.totals.vms).toBe(2);
     });
 
-    it("breaks down by agent", () => {
-      const summary = store.summary("7d");
+    it("breaks down by agent", async () => {
+      const summary = await store.summary("7d");
       expect(summary.byAgent["orchestrator"]).toBeDefined();
       expect(summary.byAgent["orchestrator"].tokens).toBe(165000);
       expect(summary.byAgent["orchestrator"].cost).toBe(1.07);
@@ -316,53 +318,66 @@ describe("UsageStore", () => {
       expect(summary.byAgent["lt-build"].sessions).toBe(1);
     });
 
-    it("respects range filter", () => {
-      // With a very short range, nothing should match
-      // Record a session far in the past (we can't easily test this with in-memory,
-      // but we can verify the range param is passed through)
-      const summary = store.summary("1h");
+    it("respects range filter", async () => {
+      const summary = await store.summary("1h");
       expect(summary.range).toBe("1h");
       expect(summary.totals.sessions).toBe(2); // both within 1h
+    });
+
+    it("returns zeros for empty range", async () => {
+      // Create a new store with no data
+      const emptyDbPath = join(tmpDir, "empty.duckdb");
+      const emptyStore = new UsageStore(emptyDbPath);
+      await emptyStore.ensureReady();
+      const summary = await emptyStore.summary("7d");
+      expect(summary.totals.tokens).toBe(0);
+      expect(summary.totals.cost).toBe(0);
+      expect(summary.totals.sessions).toBe(0);
+      expect(summary.totals.vms).toBe(0);
+      expect(summary.byAgent).toEqual({});
+      await emptyStore.close();
     });
   });
 
   describe("persistence", () => {
-    it("persists sessions to JSONL and reloads", () => {
-      store.recordSession(makeSessionInput({ sessionId: "persist-1" }));
-      store.recordSession(makeSessionInput({ sessionId: "persist-2" }));
+    it("persists sessions to DuckDB and reloads", async () => {
+      const dbPath = join(tmpDir, "persist.duckdb");
+      const store1 = new UsageStore(dbPath);
+      await store1.ensureReady();
+      await store1.recordSession(makeSessionInput({ sessionId: "persist-1" }));
+      await store1.recordSession(makeSessionInput({ sessionId: "persist-2" }));
+      await store1.close();
 
-      // Create new store from same files
-      const store2 = new UsageStore(sessionsPath, vmsPath);
-      expect(store2.sessionCount).toBe(2);
-      const sessions = store2.listSessions();
+      // Create new store from same file
+      const store2 = new UsageStore(dbPath);
+      await store2.ensureReady();
+      expect(await store2.sessionCount()).toBe(2);
+      const sessions = await store2.listSessions();
       expect(sessions.some((s) => s.sessionId === "persist-1")).toBe(true);
       expect(sessions.some((s) => s.sessionId === "persist-2")).toBe(true);
+      await store2.close();
     });
 
-    it("persists VMs to JSONL and reloads", () => {
-      store.recordVM(makeVMInput({ vmId: "vm-persist-1" }));
-      store.recordVM(makeVMInput({ vmId: "vm-persist-2" }));
+    it("persists VMs to DuckDB and reloads", async () => {
+      const dbPath = join(tmpDir, "persist-vms.duckdb");
+      const store1 = new UsageStore(dbPath);
+      await store1.ensureReady();
+      await store1.recordVM(makeVMInput({ vmId: "vm-persist-1" }));
+      await store1.recordVM(makeVMInput({ vmId: "vm-persist-2" }));
+      await store1.close();
 
-      const store2 = new UsageStore(sessionsPath, vmsPath);
-      expect(store2.vmCount).toBe(2);
+      const store2 = new UsageStore(dbPath);
+      await store2.ensureReady();
+      expect(await store2.vmCount()).toBe(2);
+      await store2.close();
     });
 
-    it("writes valid JSONL", () => {
-      store.recordSession(makeSessionInput());
-      const content = readFileSync(sessionsPath, "utf-8").trim();
-      const lines = content.split("\n");
-      expect(lines).toHaveLength(1);
-      const parsed = JSON.parse(lines[0]);
-      expect(parsed.sessionId).toBe("sess-001");
-    });
-
-    it("starts fresh if files are missing", () => {
-      const freshStore = new UsageStore(
-        join(tmpDir, "nonexistent-sessions.jsonl"),
-        join(tmpDir, "nonexistent-vms.jsonl")
-      );
-      expect(freshStore.sessionCount).toBe(0);
-      expect(freshStore.vmCount).toBe(0);
+    it("starts fresh if DB is new", async () => {
+      const freshStore = new UsageStore(join(tmpDir, "fresh.duckdb"));
+      await freshStore.ensureReady();
+      expect(await freshStore.sessionCount()).toBe(0);
+      expect(await freshStore.vmCount()).toBe(0);
+      await freshStore.close();
     });
   });
 });

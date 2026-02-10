@@ -9,7 +9,7 @@ export const usageRoutes = new Hono();
 usageRoutes.post("/sessions", async (c) => {
   try {
     const body = await c.req.json();
-    const record = store.recordSession(body);
+    const record = await store.recordSession(body);
     return c.json(record, 201);
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
@@ -21,7 +21,7 @@ usageRoutes.post("/sessions", async (c) => {
 usageRoutes.post("/vms", async (c) => {
   try {
     const body = await c.req.json();
-    const record = store.recordVM(body);
+    const record = await store.recordVM(body);
     return c.json(record, 201);
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
@@ -30,18 +30,18 @@ usageRoutes.post("/vms", async (c) => {
 });
 
 // GET / — usage summary
-usageRoutes.get("/", (c) => {
+usageRoutes.get("/", async (c) => {
   const range = c.req.query("range") || "7d";
-  const summary = store.summary(range);
+  const summary = await store.summary(range);
   return c.json(summary);
 });
 
 // GET /sessions — list sessions
-usageRoutes.get("/sessions", (c) => {
+usageRoutes.get("/sessions", async (c) => {
   const agent = c.req.query("agent");
   const range = c.req.query("range");
 
-  const sessions = store.listSessions({
+  const sessions = await store.listSessions({
     agent: agent || undefined,
     range: range || undefined,
   });
@@ -49,12 +49,12 @@ usageRoutes.get("/sessions", (c) => {
 });
 
 // GET /vms — list VM records
-usageRoutes.get("/vms", (c) => {
+usageRoutes.get("/vms", async (c) => {
   const role = c.req.query("role") as VMRole | undefined;
   const agent = c.req.query("agent");
   const range = c.req.query("range");
 
-  const vms = store.listVMs({
+  const vms = await store.listVMs({
     role: role || undefined,
     agent: agent || undefined,
     range: range || undefined,
