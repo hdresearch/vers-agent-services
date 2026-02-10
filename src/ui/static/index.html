@@ -23,18 +23,39 @@
     <div class="stat">vms <span class="val" id="stat-vms">-</span></div>
   </div>
 
+  <div class="tab-bar">
+    <button class="tab active" data-tab="board">Board</button>
+    <button class="tab" data-tab="feed">Feed</button>
+    <button class="tab" data-tab="registry">Registry</button>
+    <button class="tab" data-tab="log">Log</button>
+  </div>
+
   <div class="main">
-    <div class="panel">
-      <div class="panel-header">Board</div>
+    <div class="panel tab-content active" id="tab-board">
       <div class="panel-body" id="board"></div>
     </div>
-    <div class="panel">
-      <div class="panel-header">Feed</div>
+    <div class="panel tab-content" id="tab-feed">
       <div class="panel-body" id="feed"></div>
     </div>
-    <div class="panel">
-      <div class="panel-header">Registry</div>
+    <div class="panel tab-content" id="tab-registry">
       <div class="panel-body" id="registry"></div>
+    </div>
+    <div class="panel tab-content" id="tab-log">
+      <div class="log-toolbar">
+        <div class="log-filters">
+          <button class="log-range active" data-range="24h">24h</button>
+          <button class="log-range" data-range="1h">1h</button>
+          <button class="log-range" data-range="7d">7d</button>
+          <button class="log-range" data-range="30d">30d</button>
+          <button class="log-range" data-range="all">all</button>
+        </div>
+        <div class="log-toggle">
+          <label class="toggle-label">
+            <input type="checkbox" id="log-raw-toggle"> raw
+          </label>
+        </div>
+      </div>
+      <div class="panel-body" id="log"></div>
     </div>
   </div>
 

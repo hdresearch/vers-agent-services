@@ -183,11 +183,94 @@ function renderRegistry(vms) {
   document.getElementById('stat-vms').textContent = vms.length;
 }
 
+// ─── Tabs ───
+
+function initTabs() {
+  const tabs = document.querySelectorAll('.tab');
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      tabs.forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(p => p.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
+    });
+  });
+}
+
+// ─── Log ───
+
+let logRange = '24h';
+let logRawMode = false;
+let logRefreshTimer = null;
+
+async function loadLog() {
+  const el = document.getElementById('log');
+  try {
+    if (logRawMode) {
+      const params = logRange === 'all' ? '' : `?last=${logRange}`;
+      const res = await fetch(`${API}/log/raw${params}`);
+      if (!res.ok) throw new Error(`API /log/raw: ${res.status}`);
+      const text = await res.text();
+      el.innerHTML = text.trim()
+        ? `<div class="log-raw">${esc(text)}</div>`
+        : '<div class="empty">No log entries</div>';
+    } else {
+      const params = logRange === 'all' ? '' : `?last=${logRange}`;
+      const data = await api(`/log${params}`);
+      renderLog(data.entries || []);
+    }
+    // Scroll to bottom (newest at bottom, chronological)
+    el.scrollTop = el.scrollHeight;
+  } catch (e) {
+    el.innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderLog(entries) {
+  const el = document.getElementById('log');
+  if (!entries.length) {
+    el.innerHTML = '<div class="empty">No log entries</div>';
+    return;
+  }
+  let html = '';
+  for (const entry of entries) {
+    const agent = entry.agent ? `<span class="log-agent">@${esc(entry.agent)}</span>` : '';
+    html += `<div class="log-entry">
+      <span class="log-ts">${esc(entry.timestamp)}</span>${agent}
+      <div class="log-text">${esc(entry.text)}</div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function initLog() {
+  // Range buttons
+  document.querySelectorAll('.log-range').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.log-range').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      logRange = btn.dataset.range;
+      loadLog();
+    });
+  });
+
+  // Raw toggle
+  document.getElementById('log-raw-toggle').addEventListener('change', (e) => {
+    logRawMode = e.target.checked;
+    loadLog();
+  });
+
+  // Auto-refresh every 30s
+  logRefreshTimer = setInterval(loadLog, 30000);
+}
+
 // ─── Init ───
 
 async function init() {
-  await Promise.all([loadBoard(), loadFeed(), loadRegistry()]);
+  initTabs();
+  await Promise.all([loadBoard(), loadFeed(), loadRegistry(), loadLog()]);
   startSSE();
+  initLog();
 
   // Poll board and registry every 10s
   setInterval(loadBoard, 10000);
