@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Report Viewer</title>
+  <link rel="stylesheet" href="/ui/static/style.css">
+  <style>
+    .report-viewer {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 24px 20px;
+    }
+    .report-meta {
+      display: flex; gap: 16px; align-items: center; flex-wrap: wrap;
+      padding: 12px 0; border-bottom: 1px solid var(--border);
+      margin-bottom: 24px; font-size: 12px; color: var(--text-dim);
+    }
+    .report-meta .author { color: var(--purple); font-weight: 500; }
+    .report-meta .tag {
+      background: #222; padding: 1px 6px; border-radius: 3px;
+      font-size: 10px; color: var(--blue);
+    }
+    .report-meta .date { color: var(--text-dim); }
+    .report-title {
+      font-size: 22px; font-weight: 700; color: var(--text-bright);
+      margin-bottom: 4px; line-height: 1.3;
+    }
+    .report-content {
+      color: var(--text); line-height: 1.7; font-size: 14px;
+    }
+    .report-content h1 { font-size: 20px; color: var(--text-bright); margin: 28px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+    .report-content h2 { font-size: 17px; color: var(--text-bright); margin: 24px 0 10px; }
+    .report-content h3 { font-size: 15px; color: var(--text-bright); margin: 20px 0 8px; }
+    .report-content p { margin: 10px 0; }
+    .report-content ul, .report-content ol { margin: 10px 0; padding-left: 24px; }
+    .report-content li { margin: 4px 0; }
+    .report-content code {
+      background: var(--bg-card); padding: 2px 6px; border-radius: 3px;
+      font-size: 13px; color: var(--accent);
+    }
+    .report-content pre {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 4px; padding: 14px 16px; overflow-x: auto;
+      margin: 12px 0; font-size: 13px; line-height: 1.5;
+    }
+    .report-content pre code {
+      background: none; padding: 0; color: var(--text);
+    }
+    .report-content blockquote {
+      border-left: 3px solid var(--blue); padding: 4px 16px;
+      margin: 12px 0; color: var(--text-dim); background: var(--bg-card);
+    }
+    .report-content a { color: var(--blue); text-decoration: none; }
+    .report-content a:hover { text-decoration: underline; }
+    .report-content table { border-collapse: collapse; margin: 12px 0; width: 100%; }
+    .report-content th, .report-content td {
+      border: 1px solid var(--border); padding: 6px 10px; text-align: left; font-size: 13px;
+    }
+    .report-content th { background: var(--bg-card); color: var(--text-bright); font-weight: 600; }
+    .report-content hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+    .report-content img { max-width: 100%; border-radius: 4px; }
+    .back-link {
+      display: inline-block; margin-bottom: 16px;
+      color: var(--accent); text-decoration: none; font-size: 12px;
+    }
+    .back-link:hover { text-decoration: underline; }
+    .share-btn {
+      background: var(--bg-card); border: 1px solid var(--border); color: var(--text-dim);
+      padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 11px;
+      font-family: inherit; transition: border-color 0.15s;
+    }
+    .share-btn:hover { border-color: #444; color: var(--text); }
+    .share-btn.copied { border-color: var(--accent); color: var(--accent); }
+    .error-msg {
+      color: var(--red); text-align: center; padding: 60px 20px;
+      font-size: 16px;
+    }
+    .loading {
+      color: var(--text-dim); text-align: center; padding: 60px 20px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1><a href="/ui/" style="color:var(--accent);text-decoration:none">▸ Agent Services</a></h1>
+    <div class="status">
+      <span>report viewer</span>
+    </div>
+  </div>
+
+  <div class="report-viewer">
+    <a href="/ui/" class="back-link">← dashboard</a>
+    <div id="report-container">
+      <div class="loading">Loading report…</div>
+    </div>
+  </div>
+
+  <script>
+    // Minimal markdown renderer — handles the most common markdown constructs
+    function renderMarkdown(md) {
+      let html = md;
+
+      // Escape HTML
+      html = html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+      // Code blocks (``` ... ```)
+      html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
+        `<pre><code class="lang-${lang}">${code.trim()}</code></pre>`
+      );
+
+      // Inline code
+      html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+      // Images
+      html = html.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">');
+
+      // Links
+      html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+
+      // Headings
+      html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+      html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+      html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+      // Horizontal rule
+      html = html.replace(/^---+$/gm, '<hr>');
+
+      // Bold & italic
+      html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+      html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+      // Blockquotes
+      html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+      // Merge consecutive blockquotes
+      html = html.replace(/<\/blockquote>\n<blockquote>/g, '\n');
+
+      // Unordered lists
+      html = html.replace(/^(\s*)[-*] (.+)$/gm, '$1<li>$2</li>');
+
+      // Ordered lists
+      html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+
+      // Wrap consecutive <li> in <ul>
+      html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+      // Tables
+      html = html.replace(/^(\|.+\|)\n(\|[-| :]+\|)\n((?:\|.+\|\n?)+)/gm, (_, header, sep, body) => {
+        const ths = header.split('|').filter(c => c.trim()).map(c => `<th>${c.trim()}</th>`).join('');
+        const rows = body.trim().split('\n').map(row => {
+          const tds = row.split('|').filter(c => c.trim()).map(c => `<td>${c.trim()}</td>`).join('');
+          return `<tr>${tds}</tr>`;
+        }).join('');
+        return `<table><thead><tr>${ths}</tr></thead><tbody>${rows}</tbody></table>`;
+      });
+
+      // Paragraphs: wrap remaining loose text lines
+      const lines = html.split('\n');
+      const result = [];
+      let inPre = false;
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.includes('<pre>')) inPre = true;
+        if (line.includes('</pre>')) { inPre = false; result.push(line); continue; }
+        if (inPre) { result.push(line); continue; }
+
+        if (line.trim() === '') {
+          result.push('');
+        } else if (/^<(h[1-6]|ul|ol|li|blockquote|pre|table|thead|tbody|tr|hr|img)/.test(line.trim())) {
+          result.push(line);
+        } else {
+          result.push(`<p>${line}</p>`);
+        }
+      }
+
+      return result.join('\n');
+    }
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s || '';
+      return d.innerHTML;
+    }
+
+    function formatDate(iso) {
+      return new Date(iso).toLocaleString();
+    }
+
+    async function loadReport() {
+      const container = document.getElementById('report-container');
+      // Get report ID from URL: /ui/report/:id
+      const parts = window.location.pathname.split('/');
+      const id = parts[parts.length - 1];
+
+      if (!id) {
+        container.innerHTML = '<div class="error-msg">No report ID specified</div>';
+        return;
+      }
+
+      try {
+        const res = await fetch(`/ui/api/reports/${id}`);
+        if (!res.ok) {
+          container.innerHTML = '<div class="error-msg">Report not found</div>';
+          return;
+        }
+        const report = await res.json();
+
+        document.title = `${report.title} — Agent Services`;
+
+        const tags = (report.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join(' ');
+
+        container.innerHTML = `
+          <div class="report-title">${esc(report.title)}</div>
+          <div class="report-meta">
+            <span class="author">@${esc(report.author)}</span>
+            <span class="date">${formatDate(report.createdAt)}</span>
+            ${tags}
+            <button class="share-btn" onclick="shareReport()" title="Copy link">⎘ share</button>
+          </div>
+          <div class="report-content">${renderMarkdown(report.content)}</div>
+        `;
+      } catch (e) {
+        container.innerHTML = `<div class="error-msg">Failed to load report: ${esc(e.message)}</div>`;
+      }
+    }
+
+    function shareReport() {
+      const url = window.location.href;
+      navigator.clipboard.writeText(url).then(() => {
+        const btn = document.querySelector('.share-btn');
+        btn.textContent = '✓ copied';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.textContent = '⎘ share';
+          btn.classList.remove('copied');
+        }, 2000);
+      }).catch(() => {
+        // Fallback
+        prompt('Share this URL:', url);
+      });
+    }
+
+    loadReport();
+  </script>
+</body>
+</html>

@@ -102,6 +102,16 @@ uiRoutes.get("/ui/", (c) => {
   }
 });
 
+// Report viewer
+uiRoutes.get("/ui/report/:id", (c) => {
+  try {
+    const html = readFileSync(join(getStaticDir(), "report.html"), "utf-8");
+    return c.html(html);
+  } catch (e) {
+    return c.text("Report viewer not found", 500);
+  }
+});
+
 // Static files
 uiRoutes.get("/ui/static/:file", (c) => {
   const file = c.req.param("file");
