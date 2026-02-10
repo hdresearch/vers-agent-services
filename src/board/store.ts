@@ -10,7 +10,7 @@ export interface Note {
   createdAt: string;
 }
 
-export type TaskStatus = "open" | "in_progress" | "blocked" | "done";
+export type TaskStatus = "open" | "in_progress" | "in_review" | "blocked" | "done";
 
 export interface Task {
   id: string;
@@ -57,7 +57,7 @@ export interface TaskFilters {
   tag?: string;
 }
 
-const VALID_STATUSES: Set<string> = new Set(["open", "in_progress", "blocked", "done"]);
+const VALID_STATUSES: Set<string> = new Set(["open", "in_progress", "in_review", "blocked", "done"]);
 const VALID_NOTE_TYPES: Set<string> = new Set(["finding", "blocker", "question", "update"]);
 
 export class BoardStore {

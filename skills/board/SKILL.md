@@ -137,6 +137,16 @@ curl -X PATCH "$VERS_INFRA_URL/board/tasks/$TASK_ID" \
   -d '{"status": "done"}'
 ```
 
+## Self-Management
+
+**Orchestrators are responsible for keeping the board current.** Don't wait to be asked. The board is the persistence layer — a new session reads it to understand what's happening. If it's stale, recovery fails.
+
+- Create tasks as work is identified (even from casual conversation)
+- Update status immediately when work starts, finishes, or gets blocked
+- Add notes with findings, decisions, context as work progresses
+- Close tasks when PRs merge or work is verified
+- Clean up stale tasks — if an agent is gone, update the task
+
 ## Automatic Behavior
 
 The agent-services extension does **not** auto-create board tasks — all task management is manual/explicit. However, agents auto-register in the registry and publish to the feed on startup, so you can discover available agents before assigning tasks.

@@ -510,7 +510,7 @@ export default function (pi: ExtensionAPI) {
       "List tasks on the shared board. Optionally filter by status, assignee, or tag.",
     parameters: Type.Object({
       status: Type.Optional(
-        StringEnum(["open", "in_progress", "blocked", "done"] as const, {
+        StringEnum(["open", "in_progress", "in_review", "blocked", "done"] as const, {
           description: "Filter by task status",
         }),
       ),
@@ -541,7 +541,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({
       id: Type.String({ description: "Task ID to update" }),
       status: Type.Optional(
-        StringEnum(["open", "in_progress", "blocked", "done"] as const, {
+        StringEnum(["open", "in_progress", "in_review", "blocked", "done"] as const, {
           description: "New status",
         }),
       ),
