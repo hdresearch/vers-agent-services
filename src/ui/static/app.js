@@ -183,15 +183,51 @@ function renderRegistry(vms) {
   document.getElementById('stat-vms').textContent = vms.length;
 }
 
+// ─── Reports ───
+
+async function loadReports() {
+  try {
+    const data = await api('/reports');
+    renderReports(data.reports || []);
+  } catch (e) {
+    document.getElementById('reports').innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderReports(reports) {
+  const el = document.getElementById('reports');
+  if (!reports.length) {
+    el.innerHTML = '<div class="empty">No reports</div>';
+    document.getElementById('stat-reports').textContent = '0';
+    return;
+  }
+
+  let html = '';
+  for (const r of reports) {
+    const tags = (r.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join(' ');
+    html += `<a class="report-card" href="/ui/report/${r.id}">
+      <div class="report-title">${esc(r.title)}</div>
+      <div class="report-meta">
+        <span class="report-author">@${esc(r.author)}</span>
+        ${tags}
+        <span>${timeAgo(r.createdAt)}</span>
+      </div>
+    </a>`;
+  }
+  el.innerHTML = html;
+  document.getElementById('stat-reports').textContent = reports.length;
+}
+
 // ─── Init ───
 
 async function init() {
-  await Promise.all([loadBoard(), loadFeed(), loadRegistry()]);
+  await Promise.all([loadBoard(), loadFeed(), loadRegistry(), loadReports()]);
   startSSE();
 
-  // Poll board and registry every 10s
+  // Poll board, registry, reports every 10s
   setInterval(loadBoard, 10000);
   setInterval(loadRegistry, 10000);
+  setInterval(loadReports, 10000);
 }
 
 init();
