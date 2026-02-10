@@ -317,6 +317,21 @@ describe("Board Routes", () => {
     expect(res.status).toBe(404);
   });
 
+  it("GET /board/:id — convenience alias returns task", async () => {
+    const createRes = await app.request("/board/tasks", json({ title: "Shortcut", createdBy: "a" }));
+    const created = await createRes.json();
+    const res = await app.request(`/board/${created.id}`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.title).toBe("Shortcut");
+    expect(body.id).toBe(created.id);
+  });
+
+  it("GET /board/:id — convenience alias 404 for unknown", async () => {
+    const res = await app.request("/board/nonexistent");
+    expect(res.status).toBe(404);
+  });
+
   it("PATCH /board/tasks/:id — updates task", async () => {
     const createRes = await app.request("/board/tasks", json({ title: "T1", createdBy: "a" }));
     const created = await createRes.json();

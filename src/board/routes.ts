@@ -45,6 +45,13 @@ boardRoutes.get("/tasks/:id", (c) => {
   return c.json(task);
 });
 
+// Get a single task (convenience alias — /board/:id)
+boardRoutes.get("/:id", (c) => {
+  const task = store.getTask(c.req.param("id"));
+  if (!task) return c.json({ error: "task not found" }, 404);
+  return c.json(task);
+});
+
 // Update a task
 boardRoutes.patch("/tasks/:id", async (c) => {
   try {
