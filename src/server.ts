@@ -3,6 +3,7 @@ import { serve } from "@hono/node-server";
 import { bearerAuth } from "./auth.js";
 import { boardRoutes } from "./board/routes.js";
 import { feedRoutes } from "./feed/routes.js";
+import { logRoutes } from "./log/routes.js";
 import { registryRoutes } from "./registry/routes.js";
 import { skillsRoutes } from "./skills/routes.js";
 import { reportsRoutes } from "./reports/routes.js";
@@ -19,6 +20,7 @@ app.route("/", uiRoutes);
 // Bearer auth — applied per-route to API endpoints
 app.use("/board/*", bearerAuth());
 app.use("/feed/*", bearerAuth());
+app.use("/log/*", bearerAuth());
 app.use("/registry/*", bearerAuth());
 app.use("/skills/*", bearerAuth());
 app.use("/reports/*", bearerAuth());
@@ -26,6 +28,7 @@ app.use("/reports/*", bearerAuth());
 // Mount service routes
 app.route("/board", boardRoutes);
 app.route("/feed", feedRoutes);
+app.route("/log", logRoutes);
 app.route("/registry", registryRoutes);
 app.route("/skills", skillsRoutes);
 app.route("/reports", reportsRoutes);
