@@ -35,6 +35,9 @@ You have access to three categories of tools:
 - `registry_heartbeat` — Keep registrations alive
 - `registry_list` — List all registered VMs
 
+### SkillHub (fleet-wide skill management)
+The infra server includes a SkillHub at `/skills/*` for centrally managing skills and extensions across all agents. The extension automatically syncs skills from the hub to `~/.pi/agent/skills/_hub/` on session start and subscribes to SSE for live updates. This is handled transparently — agents don't need to interact with SkillHub directly unless publishing new skills.
+
 ## Environment Variables Agents Receive
 
 When spawned via `vers_swarm_spawn`, agents get these env vars:
@@ -224,6 +227,9 @@ When sending large source files inline in a task prompt, agents on golden images
 
 ### All VM ports are public — always use auth
 Vers VMs have no firewall. Every port is reachable at `https://{vmId}.vm.vers.sh:{port}`. Always start agent-services with `VERS_AUTH_TOKEN` set, and pass the same token to all worker VMs via environment variable.
+
+### Web UI for monitoring
+The infra VM serves a dashboard at `/ui/` with a 3-panel view of board, feed (live SSE), and registry. Use `POST /auth/magic-link` to generate a browser-accessible auth link. Useful for human operators monitoring the swarm.
 
 ## Example: Full Coordinated Build
 

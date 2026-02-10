@@ -79,3 +79,5 @@ The agent-services extension handles these on every agent boot — no manual act
 - Updates registry status to `stopped` on shutdown
 
 You only need to manually register VMs that were created outside the extension (e.g., infra VMs set up via `vers_vm_use`).
+
+Additionally, the extension syncs skills from the SkillHub (`/skills/*`) to `~/.pi/agent/skills/_hub/` on session start and subscribes to SSE for live updates — so recovered agents automatically get the latest skill definitions.
