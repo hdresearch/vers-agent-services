@@ -25,6 +25,16 @@
  *
  *   skillhub_sync      — Manually sync skills/extensions from SkillHub
  *
+ *   usage_summary      — Get cost & token usage summary
+ *   usage_sessions     — List usage session records
+ *   usage_vms          — List VM lifecycle records
+ *
+ * Auto-tracking (no tool calls needed):
+ *   - Accumulates tokens & cost from each turn's assistant message usage
+ *   - Counts tool calls by tool name
+ *   - On agent_end, POSTs session summary to /usage/sessions
+ *   - On VM lifecycle tool results, POSTs to /usage/vms
+ *
  * SkillHub client:
  *   On session start, syncs enabled skills and extensions from the hub to
  *   ~/.pi/agent/skills/_hub/ and ~/.pi/agent/extensions/_hub/.
@@ -492,6 +502,125 @@ export default function (pi: ExtensionAPI) {
   // ---------------------------------------------------------------------------
   const agentName = process.env.VERS_AGENT_NAME || `agent-${process.pid}`;
 
+  // ---------------------------------------------------------------------------
+  // Usage tracking — accumulate tokens, cost, tool calls across the session
+  // ---------------------------------------------------------------------------
+  let usageSessionId = "";
+  let usageModel = "";
+  let usageStartedAt = "";
+  let usageTurns = 0;
+  let usageTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  let usageCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+  let usageToolCalls: Record<string, number> = {};
+
+  function resetUsageAccumulators() {
+    usageStartedAt = new Date().toISOString();
+    usageTurns = 0;
+    usageTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+    usageCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+    usageToolCalls = {};
+  }
+
+  // Reset accumulators and capture session metadata on agent start
+  pi.on("agent_start", async (_event, ctx) => {
+    resetUsageAccumulators();
+    usageSessionId = ctx.sessionManager.getSessionId();
+    usageModel = ctx.model?.id || "unknown";
+  });
+
+  // Accumulate token usage from each turn's assistant message
+  pi.on("turn_end", async (event, ctx) => {
+    usageTurns++;
+    usageModel = ctx.model?.id || usageModel;
+
+    // event.message is AgentMessage — if it's an AssistantMessage it has .usage
+    const msg = event.message as any;
+    if (msg?.role === "assistant" && msg?.usage) {
+      const u = msg.usage;
+      usageTokens.input += u.input || 0;
+      usageTokens.output += u.output || 0;
+      usageTokens.cacheRead += u.cacheRead || 0;
+      usageTokens.cacheWrite += u.cacheWrite || 0;
+      usageTokens.total += u.totalTokens || 0;
+
+      if (u.cost) {
+        usageCost.input += u.cost.input || 0;
+        usageCost.output += u.cost.output || 0;
+        usageCost.cacheRead += u.cost.cacheRead || 0;
+        usageCost.cacheWrite += u.cost.cacheWrite || 0;
+        usageCost.total += u.cost.total || 0;
+      }
+    }
+  });
+
+  // Count tool calls by name + track VM lifecycle events
+  pi.on("tool_result", async (event) => {
+    const toolName = event.toolName;
+    usageToolCalls[toolName] = (usageToolCalls[toolName] || 0) + 1;
+
+    // Track VM lifecycle from vers tool results
+    if (!getBaseUrl() || event.isError) return;
+
+    try {
+      if (toolName === "vers_vm_create" || toolName === "vers_vm_restore") {
+        const text = event.content
+          ?.filter((c: any) => c.type === "text")
+          .map((c: any) => c.text)
+          .join("");
+        // Try to extract VM ID from tool result text
+        const vmIdMatch = text?.match(/vm[_-]?id["\s:]+["']?([a-zA-Z0-9_-]+)/i)
+          || text?.match(/"id"\s*:\s*"([a-f0-9-]{8,})"/)
+          || text?.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
+        if (vmIdMatch) {
+          await api("POST", "/usage/vms", {
+            vmId: vmIdMatch[1],
+            role: (event.input as any)?.role || "worker",
+            agent: agentName,
+            commitId: (event.input as any)?.commitId,
+            createdAt: new Date().toISOString(),
+          }).catch(() => {});
+        }
+      } else if (toolName === "vers_vm_delete") {
+        const inputVmId = (event.input as any)?.vmId;
+        const text = event.content
+          ?.filter((c: any) => c.type === "text")
+          .map((c: any) => c.text)
+          .join("");
+        const vmIdMatch = text?.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/);
+        const vmId = inputVmId || vmIdMatch?.[1];
+        if (vmId) {
+          await api("POST", "/usage/vms", {
+            vmId,
+            role: "worker",
+            agent: agentName,
+            createdAt: new Date().toISOString(),
+            destroyedAt: new Date().toISOString(),
+          }).catch(() => {});
+        }
+      } else if (toolName === "vers_vm_commit") {
+        const inputVmId = (event.input as any)?.vmId;
+        if (inputVmId) {
+          // Record the commit as a notable VM event (create with commitId)
+          const text = event.content
+            ?.filter((c: any) => c.type === "text")
+            .map((c: any) => c.text)
+            .join("");
+          const commitMatch = text?.match(/commit[_-]?id["\s:]+["']?([a-zA-Z0-9_-]+)/i)
+            || text?.match(/"commitId"\s*:\s*"([^"]+)"/);
+          await api("POST", "/usage/vms", {
+            vmId: inputVmId,
+            role: "golden",
+            agent: agentName,
+            commitId: commitMatch?.[1],
+            createdAt: new Date().toISOString(),
+          }).catch(() => {});
+        }
+      }
+    } catch {
+      // best-effort VM tracking
+    }
+  });
+
   pi.on("agent_start", async () => {
     if (!getBaseUrl()) return;
 
@@ -539,12 +668,39 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_end", async () => {
     if (!getBaseUrl()) return;
 
-    // Auto-publish to feed
+    // POST session usage summary
+    const endedAt = new Date().toISOString();
     try {
+      const roundedCost = {
+        input: Math.round(usageCost.input * 1e6) / 1e6,
+        output: Math.round(usageCost.output * 1e6) / 1e6,
+        cacheRead: Math.round(usageCost.cacheRead * 1e6) / 1e6,
+        cacheWrite: Math.round(usageCost.cacheWrite * 1e6) / 1e6,
+        total: Math.round(usageCost.total * 1e6) / 1e6,
+      };
+      await api("POST", "/usage/sessions", {
+        sessionId: usageSessionId || `session-${Date.now()}`,
+        agent: agentName,
+        parentAgent: process.env.VERS_PARENT_AGENT || null,
+        model: usageModel,
+        tokens: { ...usageTokens },
+        cost: roundedCost,
+        turns: usageTurns,
+        toolCalls: { ...usageToolCalls },
+        startedAt: usageStartedAt || endedAt,
+        endedAt,
+      });
+    } catch {
+      // best-effort — don't block agent shutdown
+    }
+
+    // Auto-publish to feed (enriched with usage data)
+    try {
+      const costStr = (Math.round(usageCost.total * 100) / 100).toFixed(2);
       await api("POST", "/feed/events", {
         agent: agentName,
         type: "agent_stopped",
-        summary: `Agent ${agentName} finished processing`,
+        summary: `Agent ${agentName} finished (${usageTurns} turns, ${usageTokens.total} tokens, $${costStr})`,
       });
     } catch {
       // best-effort
@@ -952,6 +1108,92 @@ export default function (pi: ExtensionAPI) {
             ? `Synced from hub:\nSkills: ${synced.join(", ") || "up to date"}\nExtensions: ${extsSynced.join(", ") || "up to date"}${extsSynced.length > 0 ? "\n\nNote: Extension changes require /reload to take effect." : ""}`
             : "Everything up to date.";
         return ok(text, { skills: synced, extensions: extsSynced });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  // ===========================================================================
+  // Usage Tools
+  // ===========================================================================
+
+  pi.registerTool({
+    name: "usage_summary",
+    label: "Usage: Summary",
+    description:
+      "Get cost & token usage summary across the agent fleet. Returns totals and per-agent breakdown.",
+    parameters: Type.Object({
+      range: Type.Optional(
+        Type.String({ description: 'Time range, e.g. "7d", "30d", "24h" (default: "7d")' }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const qs = new URLSearchParams();
+        if (params.range) qs.set("range", params.range);
+        const query = qs.toString();
+        const result = await api("GET", `/usage${query ? `?${query}` : ""}`);
+        return ok(JSON.stringify(result, null, 2), { result });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "usage_sessions",
+    label: "Usage: Sessions",
+    description:
+      "List session usage records. Shows tokens, cost, turns, and tool calls per session.",
+    parameters: Type.Object({
+      agent: Type.Optional(Type.String({ description: "Filter by agent name" })),
+      range: Type.Optional(
+        Type.String({ description: 'Time range, e.g. "7d", "30d", "24h"' }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const qs = new URLSearchParams();
+        if (params.agent) qs.set("agent", params.agent);
+        if (params.range) qs.set("range", params.range);
+        const query = qs.toString();
+        const result = await api("GET", `/usage/sessions${query ? `?${query}` : ""}`);
+        return ok(JSON.stringify(result, null, 2), { result });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "usage_vms",
+    label: "Usage: VMs",
+    description:
+      "List VM lifecycle records — creation, commit, and destruction events.",
+    parameters: Type.Object({
+      role: Type.Optional(
+        StringEnum(["orchestrator", "lieutenant", "worker", "infra", "golden"] as const, {
+          description: "Filter by VM role",
+        }),
+      ),
+      agent: Type.Optional(Type.String({ description: "Filter by agent name" })),
+      range: Type.Optional(
+        Type.String({ description: 'Time range, e.g. "7d", "30d", "24h"' }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const qs = new URLSearchParams();
+        if (params.role) qs.set("role", params.role);
+        if (params.agent) qs.set("agent", params.agent);
+        if (params.range) qs.set("range", params.range);
+        const query = qs.toString();
+        const result = await api("GET", `/usage/vms${query ? `?${query}` : ""}`);
+        return ok(JSON.stringify(result, null, 2), { result });
       } catch (e: any) {
         return err(e.message);
       }
