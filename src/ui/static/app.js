@@ -276,6 +276,66 @@ function stopLogRefresh() {
   }
 }
 
+// ─── Journal ───
+
+let journalRefreshTimer = null;
+
+async function loadJournal() {
+  const range = document.getElementById('journal-range').value;
+  const authorFilter = document.getElementById('journal-author-filter').value.trim();
+  const tagFilter = document.getElementById('journal-tag-filter').value.trim();
+  const container = document.getElementById('journal-entries');
+
+  try {
+    let path = `/journal?last=${range}`;
+    if (authorFilter) path += `&author=${encodeURIComponent(authorFilter)}`;
+    if (tagFilter) path += `&tag=${encodeURIComponent(tagFilter)}`;
+    const data = await api(path);
+    let entries = data.entries || [];
+
+    // Reverse for newest-first display
+    entries.reverse();
+
+    if (!entries.length) {
+      container.innerHTML = '<div class="empty">No journal entries for this time range</div>';
+      document.getElementById('journal-count').textContent = '0';
+      return;
+    }
+
+    let html = '';
+    for (const entry of entries) {
+      const author = entry.author ? `<span class="log-agent">${esc(entry.author)}</span>` : '';
+      const mood = entry.mood ? `<span class="journal-mood">${esc(entry.mood)}</span>` : '';
+      const tags = (entry.tags || []).map(t => `<span class="tag">${esc(t)}</span>`).join('');
+      const tagsHtml = tags ? `<span class="journal-tags">${tags}</span>` : '';
+      html += `<div class="log-entry">
+        <span class="log-time">${timeAgo(entry.timestamp)}</span>
+        ${author}
+        ${mood}
+        ${tagsHtml}
+        <span class="log-text">${esc(entry.text)}</span>
+      </div>`;
+    }
+    container.innerHTML = html;
+    document.getElementById('journal-count').textContent = entries.length;
+  } catch (e) {
+    container.innerHTML = `<div class="empty">Failed to load journal: ${esc(e.message)}</div>`;
+  }
+}
+
+function startJournalRefresh() {
+  if (journalRefreshTimer) return;
+  loadJournal();
+  journalRefreshTimer = setInterval(loadJournal, 30000);
+}
+
+function stopJournalRefresh() {
+  if (journalRefreshTimer) {
+    clearInterval(journalRefreshTimer);
+    journalRefreshTimer = null;
+  }
+}
+
 // ─── Tabs ───
 
 function switchView(viewName) {
@@ -287,11 +347,16 @@ function switchView(viewName) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(`view-${viewName}`)?.classList.add('active');
 
-  // Start/stop log polling based on view
+  // Start/stop polling based on view
   if (viewName === 'log') {
     startLogRefresh();
   } else {
     stopLogRefresh();
+  }
+  if (viewName === 'journal') {
+    startJournalRefresh();
+  } else {
+    stopJournalRefresh();
   }
 }
 
@@ -314,9 +379,19 @@ async function init() {
   // Log filter controls
   document.getElementById('log-range').addEventListener('change', loadLog);
   document.getElementById('log-agent-filter').addEventListener('input', () => {
-    // Debounce agent filter
     clearTimeout(window._logFilterTimeout);
     window._logFilterTimeout = setTimeout(loadLog, 300);
+  });
+
+  // Journal filter controls
+  document.getElementById('journal-range').addEventListener('change', loadJournal);
+  document.getElementById('journal-author-filter').addEventListener('input', () => {
+    clearTimeout(window._journalAuthorTimeout);
+    window._journalAuthorTimeout = setTimeout(loadJournal, 300);
+  });
+  document.getElementById('journal-tag-filter').addEventListener('input', () => {
+    clearTimeout(window._journalTagTimeout);
+    window._journalTagTimeout = setTimeout(loadJournal, 300);
   });
 }
 
