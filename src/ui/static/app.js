@@ -218,6 +218,83 @@ function renderReports(reports) {
   document.getElementById('stat-reports').textContent = reports.length;
 }
 
+// ─── Log ───
+
+let logRefreshTimer = null;
+
+async function loadLog() {
+  const range = document.getElementById('log-range').value;
+  const agentFilter = document.getElementById('log-agent-filter').value.trim();
+  const container = document.getElementById('log-entries');
+
+  try {
+    let path = `/log?last=${range}`;
+    const data = await api(path);
+    let entries = data.entries || [];
+
+    // Client-side agent filter (API doesn't support ?agent= yet)
+    if (agentFilter) {
+      const q = agentFilter.toLowerCase();
+      entries = entries.filter(e => (e.agent || '').toLowerCase().includes(q));
+    }
+
+    // Reverse for newest-first display
+    entries.reverse();
+
+    if (!entries.length) {
+      container.innerHTML = '<div class="empty">No log entries for this time range</div>';
+      document.getElementById('log-count').textContent = '0';
+      return;
+    }
+
+    let html = '';
+    for (const entry of entries) {
+      const agent = entry.agent ? esc(entry.agent) : '<span style="color:var(--text-dim)">—</span>';
+      html += `<div class="log-entry">
+        <span class="log-time">${timeAgo(entry.timestamp)}</span>
+        <span class="log-agent">${agent}</span>
+        <span class="log-text">${esc(entry.text)}</span>
+      </div>`;
+    }
+    container.innerHTML = html;
+    document.getElementById('log-count').textContent = entries.length;
+  } catch (e) {
+    container.innerHTML = `<div class="empty">Failed to load log: ${esc(e.message)}</div>`;
+  }
+}
+
+function startLogRefresh() {
+  if (logRefreshTimer) return;
+  loadLog();
+  logRefreshTimer = setInterval(loadLog, 30000);
+}
+
+function stopLogRefresh() {
+  if (logRefreshTimer) {
+    clearInterval(logRefreshTimer);
+    logRefreshTimer = null;
+  }
+}
+
+// ─── Tabs ───
+
+function switchView(viewName) {
+  // Update tab buttons
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.tab[data-view="${viewName}"]`)?.classList.add('active');
+
+  // Update views
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.getElementById(`view-${viewName}`)?.classList.add('active');
+
+  // Start/stop log polling based on view
+  if (viewName === 'log') {
+    startLogRefresh();
+  } else {
+    stopLogRefresh();
+  }
+}
+
 // ─── Init ───
 
 async function init() {
@@ -228,6 +305,19 @@ async function init() {
   setInterval(loadBoard, 10000);
   setInterval(loadRegistry, 10000);
   setInterval(loadReports, 10000);
+
+  // Tab switching
+  document.querySelectorAll('.tab').forEach(tab => {
+    tab.addEventListener('click', () => switchView(tab.dataset.view));
+  });
+
+  // Log filter controls
+  document.getElementById('log-range').addEventListener('change', loadLog);
+  document.getElementById('log-agent-filter').addEventListener('input', () => {
+    // Debounce agent filter
+    clearTimeout(window._logFilterTimeout);
+    window._logFilterTimeout = setTimeout(loadLog, 300);
+  });
 }
 
 init();
