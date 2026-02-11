@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
+    "postbuild": "rm -rf dist/ui/static && cp -r src/ui/static dist/ui/static",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest"

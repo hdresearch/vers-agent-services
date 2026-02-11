@@ -30,7 +30,13 @@ feedRoutes.post("/events", async (c) => {
     return c.json({ error: "Missing or invalid 'summary' field" }, 400);
   }
 
-  const event = feedStore.publish(input as PublishInput);
+  const event = feedStore.publish({
+    agent: input.agent as string,
+    type: input.type as PublishInput["type"],
+    summary: input.summary as string,
+    detail: input.detail as string | undefined,
+    metadata: input.metadata as Record<string, unknown> | undefined,
+  });
   return c.json(event, 201);
 });
 
