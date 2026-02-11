@@ -6,7 +6,7 @@ import { feedRoutes } from "./feed/routes.js";
 import { logRoutes } from "./log/routes.js";
 import { registryRoutes } from "./registry/routes.js";
 import { skillsRoutes } from "./skills/routes.js";
-import { reportsRoutes } from "./reports/routes.js";
+import { reportsRoutes, sharePublicRoutes } from "./reports/routes.js";
 import { uiRoutes } from "./ui/routes.js";
 
 const app = new Hono();
@@ -16,6 +16,9 @@ app.get("/health", (c) => c.json({ status: "ok", uptime: process.uptime() }));
 
 // Mount UI and auth routes (session auth, not bearer)
 app.route("/", uiRoutes);
+
+// Public share link route — NO auth required (must be before bearer auth)
+app.route("/reports", sharePublicRoutes);
 
 // Bearer auth — applied per-route to API endpoints
 app.use("/board/*", bearerAuth());
