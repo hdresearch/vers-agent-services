@@ -1,6 +1,6 @@
 # vers-agent-services
 
-A userspace coordination layer for AI agent swarms on [Vers](https://vers.sh). Not a platform requirement — an optional package that makes multi-agent work better by providing shared task tracking, real-time event streaming, service discovery, and centralized skill management.
+A userspace coordination layer for AI agent swarms on [Vers](https://vers.sh). Not a platform requirement — an optional package that makes multi-agent work better by providing shared task tracking, real-time event streaming, service discovery, work logging, usage tracking, and centralized skill management.
 
 Install it as a [pi](https://github.com/mariozechner/pi-coding-agent) package:
 
@@ -8,7 +8,7 @@ Install it as a [pi](https://github.com/mariozechner/pi-coding-agent) package:
 pi install https://github.com/hdresearch/vers-agent-services
 ```
 
-This gives your agents tools (`board_create_task`, `feed_publish`, `registry_discover`, etc.) and automatic behaviors (self-registration, heartbeat, lifecycle events) — no manual wiring needed.
+This gives your agents tools (`board_create_task`, `feed_publish`, `log_append`, `usage_summary`, etc.) and automatic behaviors (self-registration, heartbeat, lifecycle events, usage tracking) — no manual wiring needed.
 
 ## Quick Start
 
@@ -44,29 +44,36 @@ export VERS_AGENT_ROLE=worker
 pi install https://github.com/hdresearch/vers-agent-services
 ```
 
-Agents automatically register in the registry, publish lifecycle events to the feed, and send heartbeats — all without any manual setup.
+Agents automatically register in the registry, publish lifecycle events to the feed, track token usage, and send heartbeats — all without any manual setup.
 
 ## Architecture
 
 A single Hono HTTP server runs on one "infra VM". All agent VMs communicate with it over HTTP. A pi extension wraps the API into tools and handles automatic behaviors.
 
 ```
-┌──────────────────────────────────────┐
-│  Infra VM (:3000)                    │
-│  ├── /board/*     Task tracking      │
-│  ├── /feed/*      Activity stream    │
-│  ├── /registry/*  Service discovery  │
-│  ├── /skills/*    SkillHub registry  │
-│  ├── /ui/*        Web dashboard      │
-│  └── /health      Liveness probe     │
-└──────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│  Infra VM (:3000)                       │
+│  ├── /board/*      Task tracking        │
+│  ├── /feed/*       Activity stream      │
+│  ├── /log/*        Work log             │
+│  ├── /journal/*    Personal journal     │
+│  ├── /registry/*   Service discovery    │
+│  ├── /skills/*     SkillHub registry    │
+│  ├── /reports/*    Reports + sharing    │
+│  ├── /commits/*    Commit ledger        │
+│  ├── /usage/*      Cost tracking        │
+│  ├── /ui/*         Web dashboard        │
+│  ├── /auth/*       Magic link auth      │
+│  └── /health       Liveness probe       │
+└─────────────────────────────────────────┘
         ▲       ▲       ▲       ▲
     Agent-1  Agent-2  Agent-3  Orchestrator
     (worker) (worker) (worker)  (pi)
 ```
 
 **Components:**
-- **Server** — Hono app with board, feed, registry, and skills services (in-memory + JSONL persistence)
+- **Server** — Hono app with 9 service modules: board, feed, log, journal, registry, skills, reports, commits, and usage
+- **Storage** — JSONL for board/feed/log/journal/registry, SQLite for commits, DuckDB for usage
 - **Pi extension** (`extensions/agent-services.ts`) — registers tools and handles auto-behaviors
 - **Skills** (`skills/`) — coordination protocols agents can reference
 
@@ -86,7 +93,7 @@ Agents create tasks, claim them, post notes with findings/blockers, and mark the
 | `/board/tasks/:id/notes` | `POST` | Add a note (finding, blocker, question, update) |
 | `/board/tasks/:id/notes` | `GET` | List notes for a task |
 
-Task statuses: `open`, `in_progress`, `blocked`, `done`
+Task statuses: `open`, `in_progress`, `in_review`, `blocked`, `done`
 Note types: `finding`, `blocker`, `question`, `update`
 
 ### Feed — Activity Event Stream
@@ -103,6 +110,26 @@ Real-time event stream for coordination and observability. Supports SSE for live
 | `/feed/stream` | `GET` | SSE stream (filter: `?agent=`, reconnect: `?since=<ulid>`) |
 
 Event types: `task_started`, `task_completed`, `task_failed`, `blocker_found`, `question`, `finding`, `skill_proposed`, `file_changed`, `cost_update`, `agent_started`, `agent_stopped`, `custom`
+
+### Log — Append-Only Work Log
+
+Carmack `.plan`-style work log. Timestamped, append-only, JSONL-backed. For operational records — what happened, what was decided, what's next.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/log` | `POST` | Append an entry (`{ text, agent? }`) |
+| `/log` | `GET` | Query entries (filter: `?since=`, `?until=`, `?last=`) |
+| `/log/raw` | `GET` | Query entries as plain text (same filters) |
+
+### Journal — Personal Narrative Log
+
+Separate from operational logs. For thoughts, vibes, product intuitions, feelings. Supports mood tags and categorization.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/journal` | `POST` | Write an entry (`{ text, author, mood?, tags? }`) |
+| `/journal` | `GET` | Query entries (filter: `?since=`, `?until=`, `?last=`, `?author=`, `?tag=`, `?raw=true`) |
+| `/journal/raw` | `GET` | Query entries as plain text (same filters) |
 
 ### Registry — VM Service Discovery
 
@@ -142,29 +169,69 @@ Central registry for managing skills and extensions across an agent fleet. Agent
 | `/skills/agents` | `GET` | List all agents and their sync manifests |
 | `/skills/agents/:agentId` | `GET` | Get a specific agent's manifest |
 
+### Reports — Markdown Reports with Sharing
+
+Create structured reports and share them with external stakeholders via public share links.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/reports` | `POST` | Create a report (`{ title, author, content, tags? }`) |
+| `/reports` | `GET` | List reports (filter: `?author=`, `?tag=`) |
+| `/reports/:id` | `GET` | Get a single report |
+| `/reports/:id` | `DELETE` | Delete a report |
+| `/reports/:id/share` | `POST` | Create a share link (`{ createdBy, expiresAt?, label? }`) |
+| `/reports/:id/shares` | `GET` | List share links for a report |
+| `/reports/share/:linkId` | `DELETE` | Revoke a share link |
+| `/reports/share/:linkId/access` | `GET` | View access log for a share link |
+| `/reports/share/:linkId` | `GET` | **Public** — view shared report (no auth required) |
+
+### Commits — VM Snapshot Ledger
+
+Tracks Vers VM commits (golden images, infra snapshots, rollback points). SQLite-backed.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/commits` | `POST` | Record a commit (`{ commitId, vmId, label?, agent?, tags? }`) |
+| `/commits` | `GET` | List commits (filter: `?tag=`, `?agent=`, `?label=`, `?since=`, `?vmId=`) |
+| `/commits/:id` | `GET` | Get a commit by commitId |
+| `/commits/:id` | `DELETE` | Remove a commit entry |
+
+### Usage — Cost & Token Tracking
+
+Tracks token usage, cost, and VM lifecycle across the agent fleet. DuckDB-backed for efficient aggregation.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/usage` | `GET` | Usage summary (filter: `?range=7d`) |
+| `/usage/sessions` | `POST` | Record a session (auto-posted by extension on agent_end) |
+| `/usage/sessions` | `GET` | List sessions (filter: `?agent=`, `?range=`) |
+| `/usage/vms` | `POST` | Record a VM lifecycle event |
+| `/usage/vms` | `GET` | List VM records (filter: `?role=`, `?agent=`, `?range=`) |
+
 ## Web UI
 
-A dashboard is served at `/ui/` providing a 3-panel view of the coordination layer:
-- **Board** — task list with status, assignee, and tags
-- **Feed** — live activity stream (auto-updates via SSE)
-- **Registry** — registered VMs with status and heartbeat info
+A dashboard is served at `/ui/` with 3 tabs:
+- **Dashboard** — board tasks, feed stream (live via SSE), registry status
+- **Log** — work log entries
+- **Journal** — personal journal entries
 
 ### Authentication
 
 The UI uses magic link authentication:
 
 ```bash
-# Generate a magic link (server-side)
+# Generate a magic link (requires bearer auth)
 curl -X POST http://infra-vm:3000/auth/magic-link \
-  -H "Authorization: Bearer $VERS_AUTH_TOKEN" \
-  -H "Content-Type: application/json"
+  -H "Authorization: Bearer $VERS_AUTH_TOKEN"
 ```
 
-The returned URL can be opened in a browser to authenticate into the dashboard.
+The returned URL can be opened in a browser. The UI proxies API requests through `/ui/api/*`, injecting the bearer token server-side so the browser never needs it.
 
 ## Authentication
 
-All endpoints except `/health` are protected by bearer token auth when `VERS_AUTH_TOKEN` is set.
+All API endpoints are protected by bearer token auth when `VERS_AUTH_TOKEN` is set. Exceptions:
+- `/health` — always open (liveness probe)
+- `/reports/share/:linkId` — public share links (no auth)
 
 ```bash
 # Start server with auth
@@ -193,6 +260,17 @@ When installed via `pi install`, the extension registers these tools:
 | `board_update_task` | Update task (status, assignee, title, tags) |
 | `board_add_note` | Add a note to a task (finding, blocker, question, update) |
 
+### Log Tools
+| Tool | Description |
+|------|-------------|
+| `log_append` | Append a timestamped work log entry |
+| `log_query` | Query log entries by time range, with optional raw text output |
+
+### Journal Tools
+| Tool | Description |
+|------|-------------|
+| `journal_entry` | Write a personal journal entry with optional mood/tags |
+
 ### Feed Tools
 | Tool | Description |
 |------|-------------|
@@ -208,6 +286,18 @@ When installed via `pi install`, the extension registers these tools:
 | `registry_discover` | Discover VMs by role |
 | `registry_heartbeat` | Send a heartbeat for a VM |
 
+### SkillHub Tools
+| Tool | Description |
+|------|-------------|
+| `skillhub_sync` | Pull latest skills and extensions from the SkillHub |
+
+### Usage Tools
+| Tool | Description |
+|------|-------------|
+| `usage_summary` | Get cost & token usage summary across the fleet |
+| `usage_sessions` | List session usage records (tokens, cost, turns, tool calls) |
+| `usage_vms` | List VM lifecycle records (creation, commit, destruction) |
+
 ## Automatic Behaviors
 
 The extension performs these actions automatically — no agent code needed:
@@ -215,10 +305,13 @@ The extension performs these actions automatically — no agent code needed:
 | Behavior | Trigger | Detail |
 |----------|---------|--------|
 | **Publish `agent_started`** | `agent_start` lifecycle hook | Posts to feed with agent name |
-| **Publish `agent_stopped`** | `agent_end` lifecycle hook | Posts to feed with agent name |
+| **Publish `agent_stopped`** | `agent_end` lifecycle hook | Posts to feed with turn count, tokens, and cost |
 | **Registry self-registration** | `agent_start` lifecycle hook | Registers VM using `VERS_VM_ID`, role from `VERS_AGENT_ROLE` (default: `worker`) |
 | **Heartbeat** | Every 60 seconds | Keeps registry entry alive via `POST /registry/vms/:id/heartbeat` |
 | **Registry status update** | `agent_end` lifecycle hook | Sets VM status to `stopped` |
+| **Usage tracking** | Every turn + `agent_end` | Accumulates tokens, cost, tool calls; posts session summary on end |
+| **VM lifecycle tracking** | `tool_result` for vers_vm_* tools | Records VM create/commit/delete events to `/usage/vms` |
+| **SkillHub sync** | `session_start` + `turn_start` (60s cooldown) | Syncs skills/extensions from hub; subscribes to SSE for live updates |
 | **Status widget** | `session_start` + every 30s | Shows board/feed/registry summary in pi TUI |
 
 Agent name is derived from `VERS_AGENT_NAME` (falls back to `agent-<pid>`).
@@ -231,7 +324,11 @@ The package includes these skills (available to agents after install):
 |-------|-------------|
 | `board` | Task board usage patterns, API reference, common workflows |
 | `feed` | Activity feed patterns, SSE streaming, event types reference |
+| `log` | Work log patterns, querying, raw output for piping into models |
 | `registry` | Service discovery, heartbeat patterns, self-registration |
+| `reports` | Creating reports, generating share links, access tracking |
+| `commits` | Commit ledger for tracking VM snapshots |
+| `deploy` | Deploying agent-services: pre-deploy snapshot, pull/build/restart, rollback |
 | `recovery` | Protocol for recovering orchestrator state after session loss |
 | `swarm-coordination` | Full multi-agent orchestration workflow combining all services |
 
@@ -254,6 +351,7 @@ The package includes these skills (available to agents after install):
 | `VERS_VM_ID` | _(none)_ | This VM's Vers ID. Enables auto-registration and heartbeat. |
 | `VERS_AGENT_NAME` | `agent-<pid>` | Human-readable agent name for feed events and registry |
 | `VERS_AGENT_ROLE` | `worker` | Role for registry registration (`infra`, `lieutenant`, `worker`, `golden`, `custom`) |
+| `VERS_PARENT_AGENT` | _(none)_ | Parent agent name (included in usage session records) |
 
 ## Development
 
