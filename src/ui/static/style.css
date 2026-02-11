@@ -165,6 +165,49 @@ html, body {
 .report-card .report-author { color: var(--purple); }
 .report-card .tag { background: #222; padding: 1px 6px; border-radius: 3px; font-size: 10px; color: var(--blue); }
 
+/* Review Queue */
+.review-list {
+  overflow-y: auto; height: calc(100vh - 130px); padding: 12px 20px;
+}
+.review-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px;
+  padding: 16px; margin-bottom: 12px; border-left: 3px solid var(--yellow);
+}
+.review-card-header { margin-bottom: 8px; }
+.review-title { color: var(--text-bright); font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+.review-meta { font-size: 11px; color: var(--text-dim); }
+.review-author { color: var(--purple); font-weight: 500; }
+.review-time { margin-left: 8px; }
+.review-summary {
+  padding: 8px 0; font-size: 12px; color: var(--text); line-height: 1.6;
+  border-top: 1px solid var(--border); margin-top: 8px;
+}
+.review-artifacts {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.review-artifact {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: #1a1a2a; padding: 4px 10px; border-radius: 3px;
+  font-size: 11px; color: var(--blue); text-decoration: none;
+  border: 1px solid #2a2a3a; transition: border-color 0.15s;
+}
+.review-artifact:hover { border-color: var(--blue); }
+.review-actions {
+  display: flex; gap: 8px; margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.btn {
+  background: none; border: 1px solid var(--border); color: var(--text);
+  padding: 6px 16px; border-radius: 3px; font-family: inherit; font-size: 11px;
+  cursor: pointer; transition: all 0.15s; font-weight: 600;
+}
+.btn:hover { background: var(--bg-panel); }
+.btn-approve { color: var(--accent); border-color: var(--accent); }
+.btn-approve:hover { background: #0a2a0a; }
+.btn-reject { color: var(--red); border-color: var(--red); }
+.btn-reject:hover { background: #2a0a0a; }
+
 .empty { color: var(--text-dim); font-style: italic; padding: 20px; text-align: center; }
 
 /* Log view */

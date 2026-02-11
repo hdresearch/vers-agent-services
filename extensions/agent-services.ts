@@ -903,6 +903,80 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerTool({
+    name: "board_submit_for_review",
+    label: "Board: Submit for Review",
+    description:
+      "Submit a task for review — sets status to in_review, adds a summary note, and optionally attaches artifacts.",
+    parameters: Type.Object({
+      taskId: Type.String({ description: "Task ID to submit for review" }),
+      summary: Type.String({ description: "Review summary describing what was done" }),
+      artifacts: Type.Optional(
+        Type.Array(
+          Type.Object({
+            type: StringEnum(["branch", "report", "deploy", "diff", "file", "url"] as const, {
+              description: "Artifact type",
+            }),
+            url: Type.String({ description: "URL or path to the artifact" }),
+            label: Type.String({ description: "Human-readable label for the artifact" }),
+          }),
+          { description: "Artifacts to attach" },
+        ),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const body: Record<string, unknown> = {
+          summary: params.summary,
+          reviewedBy: agentName,
+        };
+        if (params.artifacts) body.artifacts = params.artifacts;
+        const task = await api(
+          "POST",
+          `/board/tasks/${encodeURIComponent(params.taskId)}/review`,
+          body,
+        );
+        return ok(JSON.stringify(task, null, 2), { task });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "board_add_artifact",
+    label: "Board: Add Artifact",
+    description:
+      "Add artifact link(s) to any task — branches, reports, deploys, diffs, files, or URLs.",
+    parameters: Type.Object({
+      taskId: Type.String({ description: "Task ID to add artifacts to" }),
+      artifacts: Type.Array(
+        Type.Object({
+          type: StringEnum(["branch", "report", "deploy", "diff", "file", "url"] as const, {
+            description: "Artifact type",
+          }),
+          url: Type.String({ description: "URL or path to the artifact" }),
+          label: Type.String({ description: "Human-readable label for the artifact" }),
+        }),
+        { description: "Artifacts to attach" },
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const task = await api(
+          "POST",
+          `/board/tasks/${encodeURIComponent(params.taskId)}/artifacts`,
+          { artifacts: params.artifacts.map((a) => ({ ...a, addedBy: agentName })) },
+        );
+        return ok(JSON.stringify(task, null, 2), { task });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
   // ===========================================================================
   // Log Tools
   // ===========================================================================
