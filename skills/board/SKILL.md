@@ -137,6 +137,66 @@ curl -X PATCH "$VERS_INFRA_URL/board/tasks/$TASK_ID" \
   -d '{"status": "done"}'
 ```
 
+## Board Update Protocol for LTs
+
+Lieutenants follow a strict protocol for board updates. The board is the source of truth — if the board is stale, the orchestrator can't coordinate.
+
+### On task assignment
+
+Set status to `in_progress` and assign yourself immediately. Don't start work silently.
+
+```bash
+curl -X PATCH "$VERS_INFRA_URL/board/tasks/$TASK_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "in_progress", "assignee": "my-lt-name"}'
+```
+
+### While working
+
+Add notes as things happen — findings, decisions, blockers. Don't batch them.
+
+```bash
+# Found something relevant
+curl -X POST "$VERS_INFRA_URL/board/tasks/$TASK_ID/notes" \
+  -H "Content-Type: application/json" \
+  -d '{"author": "my-lt-name", "content": "Auth tokens expire after 1h, not 24h as documented", "type": "finding"}'
+
+# Made a design decision
+curl -X POST "$VERS_INFRA_URL/board/tasks/$TASK_ID/notes" \
+  -H "Content-Type: application/json" \
+  -d '{"author": "my-lt-name", "content": "Using SQLite instead of JSONL — need row-level revocation", "type": "update"}'
+```
+
+### When blocked
+
+Set status to `blocked` with a note explaining what's wrong and what you need.
+
+```bash
+curl -X POST "$VERS_INFRA_URL/board/tasks/$TASK_ID/notes" \
+  -H "Content-Type: application/json" \
+  -d '{"author": "my-lt-name", "content": "Cannot SSH to infra VM — no key access. Need orchestrator to deploy.", "type": "blocker"}'
+
+curl -X PATCH "$VERS_INFRA_URL/board/tasks/$TASK_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "blocked"}'
+```
+
+### When done
+
+Set status to `in_review` and add a summary note with: what changed, branch name, test results.
+
+```bash
+curl -X POST "$VERS_INFRA_URL/board/tasks/$TASK_ID/notes" \
+  -H "Content-Type: application/json" \
+  -d '{"author": "my-lt-name", "content": "Branch feat/share-links pushed. 24 new tests, all passing. Added SQLite store, admin routes, public viewer route.", "type": "update"}'
+
+curl -X PATCH "$VERS_INFRA_URL/board/tasks/$TASK_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"status": "in_review"}'
+```
+
+The orchestrator moves tasks from `in_review` to `done` after verification. LTs don't mark their own tasks `done`.
+
 ## Self-Management
 
 **Orchestrators are responsible for keeping the board current.** Don't wait to be asked. The board is the persistence layer — a new session reads it to understand what's happening. If it's stale, recovery fails.
