@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // Agent Fleet Metrics — Token Burn Visualization
 // Canvas-based force-directed agent tree, animated connections, sparklines
+// Features: draggable bubbles, hierarchical collapse/expand, glowing edges
 // ═══════════════════════════════════════════════════════════════════════════
 
 const METRICS_API = '/ui/api';
@@ -40,7 +41,13 @@ let timelineCanvas, timelineCtx;
 let metricsActive = false;
 let lastFetchTime = 0;
 let animTime = 0;
-let particleSystems = [];
+
+// Drag state
+let dragNode = null;
+let dragOffsetX = 0, dragOffsetY = 0;
+let dragPrevX = 0, dragPrevY = 0;
+let dragVelX = 0, dragVelY = 0;
+let isDragging = false;
 
 // Animated counter targets
 let counterTargets = { tokens: 0, cost: 0, sessions: 0, agents: 0 };
@@ -124,17 +131,15 @@ function buildTree() {
   // Build parent map from sessions
   const parentMap = {};
   const modelMap = {};
-  const sessionCountMap = {};
 
   for (const s of sessions) {
     if (s.parentAgent) {
       parentMap[s.agent] = s.parentAgent;
     }
     modelMap[s.agent] = s.model;
-    sessionCountMap[s.agent] = (sessionCountMap[s.agent] || 0) + 1;
   }
 
-  // Build nodes
+  // Determine max tokens for sizing
   const maxTokens = Math.max(...Object.values(agents).map(a => a.tokens || 0), 1);
   treeNodes = [];
   const nodeIndex = {};
@@ -146,9 +151,7 @@ function buildTree() {
 
   for (const name of allAgents) {
     const a = agents[name];
-    const tokenRatio = (a.tokens || 0) / maxTokens;
     const isRoot = roots.includes(name);
-    const radius = 18 + tokenRatio * 32;
 
     // Determine recent activity for glow intensity
     const agentSessions = sessions.filter(s => s.agent === name);
@@ -156,29 +159,98 @@ function buildTree() {
       const t = new Date(s.endedAt).getTime();
       return t > max ? t : max;
     }, 0);
-    const recency = Math.max(0, 1 - (Date.now() - latestEnd) / (24 * 3600000)); // 0-1 over 24h
+    const recency = Math.max(0, 1 - (Date.now() - latestEnd) / (24 * 3600000));
 
     const node = {
       name,
       x: 0, y: 0,
       vx: 0, vy: 0,
-      radius,
+      // Base radius (own tokens only) — will be recalculated
+      ownTokens: a.tokens || 0,
+      rollupTokens: a.tokens || 0, // will be summed below
+      radius: 0, // computed dynamically
+      baseRadius: 0, // own-token radius
+      collapsedRadius: 0, // rollup-token radius
       tokens: a.tokens || 0,
       cost: a.cost || 0,
       sessions: a.sessions || 0,
       model: modelMap[name] || 'unknown',
       isRoot,
       parent: parentMap[name] || null,
+      children: [], // filled below
       recency,
-      tokenRatio,
+      tokenRatio: (a.tokens || 0) / maxTokens,
       glowPhase: Math.random() * Math.PI * 2,
+      // Hierarchy state
+      collapsed: true, // starts collapsed
+      hasChildren: false,
+      // Animation interpolation: 0 = collapsed, 1 = expanded
+      expandT: 0,
+      expandTarget: 0, // 0 or 1
+      // For children: position inside parent when collapsed
+      homeX: 0, homeY: 0, // target position when expanded
+      visible: true, // hidden when inside collapsed parent
+      insideParent: null, // ref to parent node if collapsed inside
     };
 
     treeNodes.push(node);
     nodeIndex[name] = node;
   }
 
-  // Position nodes — hierarchical layout with some randomness
+  // Build children arrays
+  for (const node of treeNodes) {
+    if (node.parent && nodeIndex[node.parent]) {
+      nodeIndex[node.parent].children.push(node);
+    }
+  }
+
+  // Compute rollup tokens (recursive sum of subtree)
+  function computeRollup(node) {
+    let sum = node.ownTokens;
+    for (const child of node.children) {
+      sum += computeRollup(child);
+    }
+    node.rollupTokens = sum;
+    return sum;
+  }
+  for (const r of roots) {
+    if (nodeIndex[r]) computeRollup(nodeIndex[r]);
+  }
+
+  // Compute radii
+  const maxRollup = Math.max(...treeNodes.map(n => n.rollupTokens), 1);
+  for (const node of treeNodes) {
+    node.hasChildren = node.children.length > 0;
+    const ownRatio = node.ownTokens / maxTokens;
+    const rollupRatio = node.rollupTokens / maxRollup;
+    node.baseRadius = 18 + ownRatio * 32;
+    node.collapsedRadius = node.hasChildren
+      ? Math.max(40, 30 + rollupRatio * 50)
+      : node.baseRadius;
+    node.tokenRatio = ownRatio;
+  }
+
+  // Mark initial visibility: children of collapsed parents are hidden
+  function markVisibility(node) {
+    for (const child of node.children) {
+      if (node.collapsed) {
+        child.visible = false;
+        child.insideParent = node;
+      } else {
+        child.visible = true;
+        child.insideParent = null;
+      }
+      markVisibility(child);
+    }
+  }
+  for (const r of roots) {
+    if (nodeIndex[r]) {
+      nodeIndex[r].visible = true;
+      markVisibility(nodeIndex[r]);
+    }
+  }
+
+  // Position nodes
   layoutTree(roots, nodeIndex);
 
   // Build edges
@@ -186,7 +258,7 @@ function buildTree() {
   for (const node of treeNodes) {
     if (node.parent && nodeIndex[node.parent]) {
       const parent = nodeIndex[node.parent];
-      const tokenFlow = node.tokens / maxTokens;
+      const tokenFlow = node.ownTokens / maxTokens;
       treeEdges.push({
         source: parent,
         target: node,
@@ -235,7 +307,6 @@ function layoutTree(roots, nodeIndex) {
     }
   }
 
-  // Assign any unvisited nodes
   for (const node of treeNodes) {
     if (levels[node.name] === undefined) levels[node.name] = 1;
   }
@@ -249,8 +320,6 @@ function layoutTree(roots, nodeIndex) {
   }
 
   const levelKeys = Object.keys(byLevel).map(Number).sort((a, b) => a - b);
-
-  // Position
   const cx = canvasW / 2;
   const cy = canvasH * 0.18;
   const levelSpacing = Math.min(canvasH * 0.28, 180);
@@ -263,16 +332,85 @@ function layoutTree(roots, nodeIndex) {
     const startX = cx - totalWidth / 2;
 
     for (let i = 0; i < count; i++) {
-      nodes[i].x = count === 1 ? cx : startX + i * spacing;
-      nodes[i].y = cy + lv * levelSpacing;
-      // Add slight randomness
-      nodes[i].x += (Math.random() - 0.5) * 20;
-      nodes[i].y += (Math.random() - 0.5) * 10;
+      const nx = count === 1 ? cx : startX + i * spacing;
+      const ny = cy + lv * levelSpacing;
+      nodes[i].x = nx + (Math.random() - 0.5) * 20;
+      nodes[i].y = ny + (Math.random() - 0.5) * 10;
+      nodes[i].homeX = nodes[i].x;
+      nodes[i].homeY = nodes[i].y;
+    }
+  }
+
+  // Place hidden children at their parent's position
+  for (const node of treeNodes) {
+    if (!node.visible && node.insideParent) {
+      node.x = node.insideParent.x;
+      node.y = node.insideParent.y;
     }
   }
 }
 
-// ─── Force Simulation (gentle, just for organic movement) ───
+// ─── Hierarchy Toggle ───
+
+function toggleExpand(node) {
+  if (!node.hasChildren) return;
+
+  node.collapsed = !node.collapsed;
+  node.expandTarget = node.collapsed ? 0 : 1;
+
+  if (!node.collapsed) {
+    // Expanding: position children in a circle around parent, make visible
+    const count = node.children.length;
+    const spreadRadius = node.collapsedRadius + 60 + count * 15;
+    for (let i = 0; i < count; i++) {
+      const angle = -Math.PI / 2 + (i / count) * Math.PI * 2;
+      const child = node.children[i];
+      // Start at parent center
+      child.x = node.x;
+      child.y = node.y;
+      // Target position
+      child.homeX = node.x + Math.cos(angle) * spreadRadius;
+      child.homeY = node.y + Math.sin(angle) * spreadRadius;
+      child.visible = true;
+      child.insideParent = null;
+      // Give initial velocity outward (explosion)
+      child.vx = Math.cos(angle) * 3;
+      child.vy = Math.sin(angle) * 3;
+    }
+  } else {
+    // Collapsing: animate children back to parent center
+    for (const child of node.children) {
+      child.homeX = node.x;
+      child.homeY = node.y;
+      child.insideParent = node;
+      // Velocity toward parent
+      const dx = node.x - child.x;
+      const dy = node.y - child.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      child.vx = (dx / dist) * 4;
+      child.vy = (dy / dist) * 4;
+      // Also collapse any grandchildren
+      if (child.hasChildren && !child.collapsed) {
+        collapseRecursive(child);
+      }
+    }
+  }
+}
+
+function collapseRecursive(node) {
+  node.collapsed = true;
+  node.expandTarget = 0;
+  node.expandT = 0;
+  for (const child of node.children) {
+    child.insideParent = node;
+    child.homeX = node.x;
+    child.homeY = node.y;
+    child.visible = false;
+    if (child.hasChildren) collapseRecursive(child);
+  }
+}
+
+// ─── Force Simulation ───
 
 function tickForces() {
   const centerX = canvasW / 2;
@@ -282,10 +420,59 @@ function tickForces() {
   const edgeAttraction = 0.003;
   const centerGravity = 0.0002;
 
-  // Repulsion between nodes
-  for (let i = 0; i < treeNodes.length; i++) {
-    for (let j = i + 1; j < treeNodes.length; j++) {
-      const a = treeNodes[i], b = treeNodes[j];
+  // Animate expandT toward expandTarget
+  for (const node of treeNodes) {
+    if (node.hasChildren) {
+      const speed = 0.06;
+      node.expandT += (node.expandTarget - node.expandT) * speed;
+      if (Math.abs(node.expandT - node.expandTarget) < 0.001) {
+        node.expandT = node.expandTarget;
+      }
+    }
+  }
+
+  // Compute effective radius for each node
+  for (const node of treeNodes) {
+    if (node.hasChildren) {
+      // Interpolate between collapsed (big) and expanded (own-size)
+      node.radius = node.collapsedRadius + (node.baseRadius - node.collapsedRadius) * node.expandT;
+    } else {
+      node.radius = node.baseRadius;
+    }
+  }
+
+  // Filter to visible nodes for physics
+  const visibleNodes = treeNodes.filter(n => n.visible);
+
+  // Handle collapsing children: snap to parent when close enough
+  for (const node of treeNodes) {
+    if (node.insideParent && node.visible) {
+      const p = node.insideParent;
+      const dx = p.x - node.x;
+      const dy = p.y - node.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < 5 && p.collapsed) {
+        node.visible = false;
+        node.x = p.x;
+        node.y = p.y;
+        node.vx = 0;
+        node.vy = 0;
+        continue;
+      }
+      // Spring toward parent center
+      node.vx += dx * 0.08;
+      node.vy += dy * 0.08;
+    }
+  }
+
+  // Re-filter after hiding
+  const activeNodes = treeNodes.filter(n => n.visible);
+
+  // Repulsion between visible nodes
+  for (let i = 0; i < activeNodes.length; i++) {
+    for (let j = i + 1; j < activeNodes.length; j++) {
+      const a = activeNodes[i], b = activeNodes[j];
+      if (a === dragNode || b === dragNode) continue; // don't push dragged node
       const dx = b.x - a.x, dy = b.y - a.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1;
       const minDist = a.radius + b.radius + 40;
@@ -293,33 +480,61 @@ function tickForces() {
         const force = repulsion / (dist * dist);
         const fx = (dx / dist) * force;
         const fy = (dy / dist) * force;
-        a.vx -= fx; a.vy -= fy;
-        b.vx += fx; b.vy += fy;
+        if (a !== dragNode) { a.vx -= fx; a.vy -= fy; }
+        if (b !== dragNode) { b.vx += fx; b.vy += fy; }
       }
     }
   }
 
-  // Edge attraction
+  // Edge attraction (only for visible edges)
   for (const edge of treeEdges) {
+    if (!edge.target.visible || !edge.source.visible) continue;
+    // Skip edges for collapsed children
+    if (edge.source.collapsed && edge.source.children.includes(edge.target)) continue;
+
     const dx = edge.target.x - edge.source.x;
     const dy = edge.target.y - edge.source.y;
     const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    const idealDist = 160;
+    const idealDist = 140 + edge.source.radius + edge.target.radius;
     const force = (dist - idealDist) * edgeAttraction;
     const fx = (dx / dist) * force;
     const fy = (dy / dist) * force;
-    edge.source.vx += fx; edge.source.vy += fy;
-    edge.target.vx -= fx; edge.target.vy -= fy;
+    if (edge.source !== dragNode) { edge.source.vx += fx; edge.source.vy += fy; }
+    if (edge.target !== dragNode) { edge.target.vx -= fx; edge.target.vy -= fy; }
   }
 
-  // Center gravity
-  for (const node of treeNodes) {
-    node.vx += (centerX - node.x) * centerGravity;
-    node.vy += (centerY - node.y) * centerGravity * 0.3;
+  // Expanded children: spring toward homeX/homeY
+  for (const node of activeNodes) {
+    if (node.parent && !node.insideParent) {
+      const parentNode = treeNodes.find(n => n.name === node.parent);
+      if (parentNode && !parentNode.collapsed && node !== dragNode) {
+        // Gentle pull toward home position (which moves with parent)
+        const count = parentNode.children.length;
+        const spreadRadius = parentNode.collapsedRadius + 60 + count * 15;
+        const idx = parentNode.children.indexOf(node);
+        if (idx >= 0) {
+          const angle = -Math.PI / 2 + (idx / count) * Math.PI * 2;
+          const targetX = parentNode.x + Math.cos(angle) * spreadRadius;
+          const targetY = parentNode.y + Math.sin(angle) * spreadRadius;
+          node.vx += (targetX - node.x) * 0.01;
+          node.vy += (targetY - node.y) * 0.01;
+        }
+      }
+    }
+  }
+
+  // Center gravity (only for root/top-level visible nodes)
+  for (const node of activeNodes) {
+    if (node === dragNode) continue;
+    if (!node.insideParent) {
+      node.vx += (centerX - node.x) * centerGravity;
+      node.vy += (centerY - node.y) * centerGravity * 0.3;
+    }
   }
 
   // Apply velocities
-  for (const node of treeNodes) {
+  for (const node of activeNodes) {
+    if (node === dragNode) continue; // pinned while dragging
     node.vx *= damping;
     node.vy *= damping;
     node.x += node.vx;
@@ -338,7 +553,6 @@ function drawTree(time) {
   const ctx = treeCtx;
   ctx.clearRect(0, 0, canvasW, canvasH);
 
-  // Background
   ctx.fillStyle = C.bg;
   ctx.fillRect(0, 0, canvasW, canvasH);
 
@@ -352,7 +566,6 @@ function drawGrid(ctx, time) {
   const spacing = 50;
   ctx.lineWidth = 1;
 
-  // Horizontal lines
   for (let y = 0; y < canvasH; y += spacing) {
     const dist = Math.abs(y - canvasH / 2) / canvasH;
     ctx.strokeStyle = dist < 0.3 ? C.gridBright : C.grid;
@@ -362,7 +575,6 @@ function drawGrid(ctx, time) {
     ctx.stroke();
   }
 
-  // Vertical lines
   for (let x = 0; x < canvasW; x += spacing) {
     const dist = Math.abs(x - canvasW / 2) / canvasW;
     ctx.strokeStyle = dist < 0.3 ? C.gridBright : C.grid;
@@ -384,25 +596,35 @@ function drawGrid(ctx, time) {
 
 function drawEdges(ctx, time) {
   for (const edge of treeEdges) {
+    // Only draw edges when parent is expanded and target is visible
+    if (!edge.target.visible || !edge.source.visible) continue;
+    if (edge.source.collapsed && edge.source.children.includes(edge.target)) continue;
+
     const sx = edge.source.x, sy = edge.source.y;
     const tx = edge.target.x, ty = edge.target.y;
-
-    // Bezier control points — organic curves
-    const midX = (sx + tx) / 2;
-    const midY = (sy + ty) / 2;
     const dx = tx - sx, dy = ty - sy;
     const dist = Math.sqrt(dx * dx + dy * dy);
-    const curvature = dist * 0.15;
+
+    // Don't draw tiny edges
+    if (dist < 20) continue;
+
+    // Bezier control points
     const cp1x = sx + dx * 0.25 - dy * 0.1;
     const cp1y = sy + dy * 0.25 + Math.abs(dx) * 0.05;
     const cp2x = sx + dx * 0.75 + dy * 0.1;
     const cp2y = sy + dy * 0.75 - Math.abs(dx) * 0.05;
 
-    // Edge glow
     const intensity = 0.15 + edge.tokenFlow * 0.4;
     const pulseIntensity = intensity + Math.sin(time * 0.002 + edge.phase) * 0.08;
 
+    // Fade in based on parent expand animation
+    const parentExpandT = edge.source.expandT || 1;
+    const edgeAlpha = parentExpandT;
+    if (edgeAlpha < 0.01) continue;
+
     // Outer glow
+    ctx.save();
+    ctx.globalAlpha = edgeAlpha;
     ctx.beginPath();
     ctx.moveTo(sx, sy);
     ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, tx, ty);
@@ -421,24 +643,24 @@ function drawEdges(ctx, time) {
     ctx.lineWidth = 1 + edge.tokenFlow * 2;
     ctx.stroke();
 
-    // Particles flowing along the edge
+    // Particles flowing along the edge (token flow direction: parent → child)
     for (const p of edge.particles) {
       p.t += p.speed;
       if (p.t > 1) p.t -= 1;
 
-      // Bezier position at t
       const t = p.t;
       const t2 = t * t, t3 = t2 * t;
       const mt = 1 - t, mt2 = mt * mt, mt3 = mt2 * mt;
       const px = mt3 * sx + 3 * mt2 * t * cp1x + 3 * mt * t2 * cp2x + t3 * tx;
       const py = mt3 * sy + 3 * mt2 * t * cp1y + 3 * mt * t2 * cp2y + t3 * ty;
 
-      // Particle glow
+      // Particle outer glow
       ctx.beginPath();
       ctx.arc(px, py, p.size + 2, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(0, 255, 213, ${p.alpha * 0.2})`;
       ctx.fill();
 
+      // Particle body
       ctx.beginPath();
       ctx.arc(px, py, p.size, 0, Math.PI * 2);
       ctx.fillStyle = `rgba(0, 255, 213, ${p.alpha * 0.7})`;
@@ -450,11 +672,21 @@ function drawEdges(ctx, time) {
       ctx.fillStyle = `rgba(255, 255, 255, ${p.alpha * 0.8})`;
       ctx.fill();
     }
+    ctx.restore();
   }
 }
 
 function drawNodes(ctx, time) {
-  for (const node of treeNodes) {
+  // Draw in order: non-parents first, then parents on top
+  const sorted = [...treeNodes].sort((a, b) => {
+    if (a.hasChildren && !b.hasChildren) return 1;
+    if (!a.hasChildren && b.hasChildren) return -1;
+    return 0;
+  });
+
+  for (const node of sorted) {
+    if (!node.visible) continue;
+
     const isHovered = hoveredNode === node;
     const isSelected = selectedNode === node;
     const baseRadius = node.radius;
@@ -464,17 +696,11 @@ function drawNodes(ctx, time) {
     // Determine color
     let color, colorDim, colorRgb;
     if (node.isRoot) {
-      color = C.amber;
-      colorDim = C.amberDim;
-      colorRgb = '255, 170, 0';
+      color = C.amber; colorDim = C.amberDim; colorRgb = '255, 170, 0';
     } else if (node.name.startsWith('sub-')) {
-      color = C.purple;
-      colorDim = C.purpleDim;
-      colorRgb = '180, 74, 255';
+      color = C.purple; colorDim = C.purpleDim; colorRgb = '180, 74, 255';
     } else {
-      color = C.cyan;
-      colorDim = C.cyanDim;
-      colorRgb = '0, 255, 213';
+      color = C.cyan; colorDim = C.cyanDim; colorRgb = '0, 255, 213';
     }
 
     const glowIntensity = 0.3 + node.recency * 0.7;
@@ -509,8 +735,44 @@ function drawNodes(ctx, time) {
     ctx.stroke();
     ctx.shadowBlur = 0;
 
+    // For collapsed parents with children: draw inner cluster hint
+    if (node.hasChildren && node.collapsed && node.expandT < 0.5) {
+      const childCount = node.children.length;
+      // Draw mini dots orbiting inside to hint at contained children
+      for (let i = 0; i < childCount; i++) {
+        const angle = (time * 0.001 + node.glowPhase) + (i / childCount) * Math.PI * 2;
+        const orbitR = r * 0.4;
+        const cx = node.x + Math.cos(angle) * orbitR;
+        const cy = node.y + Math.sin(angle) * orbitR;
+        const dotR = 3 + (1 - node.expandT) * 2;
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, dotR, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${colorRgb}, ${0.3 + glowIntensity * 0.3})`;
+        ctx.fill();
+
+        // Tiny glow
+        ctx.beginPath();
+        ctx.arc(cx, cy, dotR + 3, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(${colorRgb}, 0.08)`;
+        ctx.fill();
+      }
+
+      // Draw child count badge
+      ctx.font = 'bold 10px "SF Mono", "Cascadia Code", "Fira Code", monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = `rgba(${colorRgb}, 0.5)`;
+      ctx.fillText(`${childCount}×`, node.x, node.y + r * 0.55);
+    }
+
     // Inner detail ring (token fill indicator)
-    const fillAngle = Math.PI * 2 * node.tokenRatio;
+    const displayTokens = node.hasChildren && node.collapsed
+      ? node.rollupTokens : node.ownTokens;
+    const maxForRatio = node.hasChildren && node.collapsed
+      ? node.rollupTokens : Math.max(...treeNodes.map(n => n.ownTokens), 1);
+    const fillRatio = displayTokens / maxForRatio;
+    const fillAngle = Math.PI * 2 * Math.min(fillRatio, 1);
     ctx.beginPath();
     ctx.arc(node.x, node.y, r * 0.65, -Math.PI / 2, -Math.PI / 2 + fillAngle);
     ctx.strokeStyle = `rgba(${colorRgb}, ${0.5 + glowIntensity * 0.3})`;
@@ -522,36 +784,59 @@ function drawNodes(ctx, time) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    // Short name
     let displayName = node.name;
     if (displayName.length > 14) displayName = displayName.slice(0, 12) + '…';
 
     ctx.fillStyle = `rgba(${colorRgb}, ${0.7 + glowIntensity * 0.3})`;
-    ctx.fillText(displayName, node.x, node.y);
+    ctx.fillText(displayName, node.x, node.y - (node.hasChildren && node.collapsed ? 4 : 0));
 
-    // Token count below
-    const tokenStr = formatTokensShort(node.tokens);
+    // Token count below name
+    const tokenStr = formatTokensShort(displayTokens);
     ctx.font = '9px "SF Mono", "Cascadia Code", "Fira Code", monospace';
     ctx.fillStyle = C.textDim;
     ctx.fillText(tokenStr, node.x, node.y + r + 14);
+
+    // Expand/collapse hint for parent nodes
+    if (node.hasChildren && isHovered) {
+      const hint = node.collapsed ? 'click to expand' : 'click to collapse';
+      ctx.font = '8px "SF Mono", "Cascadia Code", "Fira Code", monospace';
+      ctx.fillStyle = `rgba(${colorRgb}, 0.4)`;
+      ctx.fillText(hint, node.x, node.y + r + 26);
+    }
+
+    // Drag indicator
+    if (node === dragNode) {
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.arc(node.x, node.y, r + 6, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(${colorRgb}, 0.3)`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   }
 }
 
 function drawHoverTooltip(ctx) {
-  if (!hoveredNode) return;
+  if (!hoveredNode || isDragging) return;
   const node = hoveredNode;
 
+  const isCollapsed = node.hasChildren && node.collapsed;
   const lines = [
     node.name,
-    `tokens: ${formatNumber(node.tokens)}`,
+    `tokens: ${formatNumber(isCollapsed ? node.rollupTokens : node.ownTokens)}` +
+      (isCollapsed ? ' (rollup)' : ''),
     `cost: $${node.cost.toFixed(2)}`,
     `sessions: ${node.sessions}`,
     `model: ${node.model}`,
   ];
+  if (node.hasChildren) {
+    lines.push(`children: ${node.children.length} ${node.collapsed ? '(collapsed)' : '(expanded)'}`);
+  }
 
   const padding = 12;
   const lineHeight = 18;
-  const width = 220;
+  const width = 240;
   const height = lines.length * lineHeight + padding * 2;
 
   let tx = mouseX + 20;
@@ -560,7 +845,6 @@ function drawHoverTooltip(ctx) {
   if (ty < 10) ty = 10;
   if (ty + height > canvasH - 10) ty = canvasH - height - 10;
 
-  // Tooltip background
   ctx.fillStyle = 'rgba(8, 8, 16, 0.92)';
   ctx.strokeStyle = C.panelBorder;
   ctx.lineWidth = 1;
@@ -573,7 +857,6 @@ function drawHoverTooltip(ctx) {
   roundRect(ctx, tx, ty, width, height, 6);
   ctx.stroke();
 
-  // Text
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
 
@@ -624,7 +907,6 @@ function drawTimeline(time) {
     return;
   }
 
-  // Find time range
   let minTime = Infinity, maxTime = -Infinity;
   for (const s of sessions) {
     const start = new Date(s.startedAt).getTime();
@@ -634,7 +916,6 @@ function drawTimeline(time) {
   }
   const duration = maxTime - minTime || 1;
 
-  // Assign lanes per agent
   const agentNames = [...new Set(sessions.map(s => s.agent))];
   const laneHeight = Math.min(28, (h - 50) / agentNames.length);
   const topPad = 30;
@@ -662,14 +943,12 @@ function drawTimeline(time) {
     ctx.fillText(label, x, topPad - 10);
   }
 
-  // Agent colors
   const agentColors = {};
   const palette = [C.cyan, C.purple, C.amber, '#ff6688', '#66aaff', '#88ff66', '#ff88cc', '#66ffcc'];
   agentNames.forEach((name, i) => {
     agentColors[name] = palette[i % palette.length];
   });
 
-  // Agent labels
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
   ctx.font = '10px "SF Mono", monospace';
@@ -681,7 +960,6 @@ function drawTimeline(time) {
     ctx.fillStyle = agentColors[name];
     ctx.fillText(shortName, leftPad - 8, y);
 
-    // Lane guide line
     ctx.strokeStyle = 'rgba(255,255,255,0.03)';
     ctx.beginPath();
     ctx.moveTo(leftPad, y);
@@ -689,7 +967,6 @@ function drawTimeline(time) {
     ctx.stroke();
   }
 
-  // Session bars
   const maxTokens = Math.max(...sessions.map(s => (s.tokens?.total || 0)), 1);
 
   for (const s of sessions) {
@@ -706,11 +983,8 @@ function drawTimeline(time) {
 
     const tokenIntensity = (s.tokens?.total || 0) / maxTokens;
     const color = agentColors[s.agent];
-
-    // Parse color for rgba
     const rgb = hexToRgb(color);
 
-    // Bar glow
     ctx.shadowColor = color;
     ctx.shadowBlur = 8 + tokenIntensity * 12;
     ctx.fillStyle = `rgba(${rgb}, ${0.3 + tokenIntensity * 0.5})`;
@@ -718,15 +992,13 @@ function drawTimeline(time) {
     ctx.fill();
     ctx.shadowBlur = 0;
 
-    // Bar border
     ctx.strokeStyle = `rgba(${rgb}, ${0.5 + tokenIntensity * 0.3})`;
     ctx.lineWidth = 1;
     roundRect(ctx, x1, y, barW, barH, 3);
     ctx.stroke();
 
-    // Active pulse effect if session is very recent
     const endAge = Date.now() - end;
-    if (endAge < 300000) { // 5 min
+    if (endAge < 300000) {
       const pulseAlpha = Math.sin(time * 0.004) * 0.15 + 0.15;
       ctx.fillStyle = `rgba(${rgb}, ${pulseAlpha})`;
       roundRect(ctx, x1 - 2, y - 2, barW + 4, barH + 4, 5);
@@ -749,7 +1021,6 @@ function hexToRgb(hex) {
 function renderMetricsPanel() {
   if (!summaryData) return;
 
-  // Model breakdown from sessions
   const modelBreakdown = {};
   if (sessionsData?.sessions) {
     for (const s of sessionsData.sessions) {
@@ -761,12 +1032,10 @@ function renderMetricsPanel() {
     }
   }
 
-  // Agent breakdown
   const agents = summaryData.byAgent || {};
   const agentList = Object.entries(agents)
     .sort(([, a], [, b]) => (b.cost || 0) - (a.cost || 0));
 
-  // Build agent breakdown HTML
   let agentHTML = '';
   const maxAgentTokens = Math.max(...agentList.map(([, a]) => a.tokens || 0), 1);
 
@@ -789,7 +1058,6 @@ function renderMetricsPanel() {
       </div>`;
   }
 
-  // Model breakdown HTML
   let modelHTML = '';
   for (const [model, data] of Object.entries(modelBreakdown)) {
     const shortModel = model.replace('claude-', '').replace('-20250514', '');
@@ -818,7 +1086,7 @@ function renderMetricsPanel() {
 
 // ─── Animated Counters ───
 
-function updateCounters(dt) {
+function updateCounters() {
   const speed = 0.05;
   counterValues.tokens += (counterTargets.tokens - counterValues.tokens) * speed;
   counterValues.cost += (counterTargets.cost - counterValues.cost) * speed;
@@ -859,9 +1127,8 @@ function drawSparkline() {
     return;
   }
 
-  // Create token burn over time buckets
   const now = Date.now();
-  const windowMs = 24 * 3600000; // 24h
+  const windowMs = 24 * 3600000;
   const bucketCount = 24;
   const bucketMs = windowMs / bucketCount;
   const buckets = new Array(bucketCount).fill(0);
@@ -885,7 +1152,6 @@ function drawSparkline() {
   const chartW = dw - padding * 2;
   const chartH = dh - padding * 2;
 
-  // Gradient fill
   const grad = ctx.createLinearGradient(0, padding, 0, dh - padding);
   grad.addColorStop(0, 'rgba(0, 255, 213, 0.2)');
   grad.addColorStop(1, 'rgba(0, 255, 213, 0)');
@@ -896,8 +1162,7 @@ function drawSparkline() {
   for (let i = 0; i < bucketCount; i++) {
     const x = padding + (i / (bucketCount - 1)) * chartW;
     const y = dh - padding - (buckets[i] / maxBucket) * chartH;
-    if (i === 0) ctx.lineTo(x, y);
-    else ctx.lineTo(x, y);
+    ctx.lineTo(x, y);
   }
 
   ctx.lineTo(padding + chartW, dh - padding);
@@ -905,7 +1170,6 @@ function drawSparkline() {
   ctx.fillStyle = grad;
   ctx.fill();
 
-  // Line
   ctx.beginPath();
   for (let i = 0; i < bucketCount; i++) {
     const x = padding + (i / (bucketCount - 1)) * chartW;
@@ -920,7 +1184,6 @@ function drawSparkline() {
   ctx.stroke();
   ctx.shadowBlur = 0;
 
-  // Endpoint dot
   const lastX = padding + chartW;
   const lastY = dh - padding - (buckets[bucketCount - 1] / maxBucket) * chartH;
   ctx.beginPath();
@@ -947,6 +1210,119 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// ─── Hit Testing ───
+
+function hitTestNode(mx, my) {
+  // Test in reverse draw order (parents on top)
+  for (let i = treeNodes.length - 1; i >= 0; i--) {
+    const node = treeNodes[i];
+    if (!node.visible) continue;
+    const dx = mx - node.x, dy = my - node.y;
+    const hitR = node.radius + 8;
+    if (dx * dx + dy * dy < hitR * hitR) {
+      return node;
+    }
+  }
+  return null;
+}
+
+// ─── Mouse / Drag Handling ───
+
+function getCanvasCoords(e) {
+  const rect = treeCanvas.getBoundingClientRect();
+  const scaleX = treeCanvas.width / rect.width;
+  const scaleY = treeCanvas.height / rect.height;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top) * scaleY,
+  };
+}
+
+function onMouseDown(e) {
+  const coords = getCanvasCoords(e);
+  const node = hitTestNode(coords.x, coords.y);
+  if (!node) return;
+
+  dragNode = node;
+  dragOffsetX = coords.x - node.x;
+  dragOffsetY = coords.y - node.y;
+  dragPrevX = coords.x;
+  dragPrevY = coords.y;
+  dragVelX = 0;
+  dragVelY = 0;
+  isDragging = false; // becomes true on first move
+
+  // Pin the node — zero out velocity
+  node.vx = 0;
+  node.vy = 0;
+}
+
+function onMouseMove(e) {
+  const coords = getCanvasCoords(e);
+  mouseX = coords.x;
+  mouseY = coords.y;
+
+  if (dragNode) {
+    const newX = coords.x - dragOffsetX;
+    const newY = coords.y - dragOffsetY;
+
+    // Track velocity for momentum on release (EMA)
+    dragVelX = dragVelX * 0.5 + (coords.x - dragPrevX) * 0.5;
+    dragVelY = dragVelY * 0.5 + (coords.y - dragPrevY) * 0.5;
+    dragPrevX = coords.x;
+    dragPrevY = coords.y;
+
+    // If we've moved more than 4px, it's a drag not a click
+    const dx = newX - dragNode.x, dy = newY - dragNode.y;
+    if (!isDragging && (dx * dx + dy * dy > 16)) {
+      isDragging = true;
+    }
+
+    dragNode.x = Math.max(dragNode.radius + 20, Math.min(canvasW - dragNode.radius - 20, newX));
+    dragNode.y = Math.max(dragNode.radius + 20, Math.min(canvasH - dragNode.radius - 20, newY));
+    dragNode.vx = 0;
+    dragNode.vy = 0;
+
+    treeCanvas.style.cursor = 'grabbing';
+    return;
+  }
+
+  // Normal hover
+  hoveredNode = hitTestNode(coords.x, coords.y);
+  treeCanvas.style.cursor = hoveredNode ? 'pointer' : 'default';
+}
+
+function onMouseUp(e) {
+  if (dragNode) {
+    if (!isDragging) {
+      // It was a click, not a drag — toggle expand/collapse
+      if (dragNode.hasChildren) {
+        toggleExpand(dragNode);
+      }
+      selectedNode = dragNode;
+    } else {
+      // Release with momentum
+      dragNode.vx = dragVelX * 0.8;
+      dragNode.vy = dragVelY * 0.8;
+    }
+
+    dragNode = null;
+    isDragging = false;
+    treeCanvas.style.cursor = hoveredNode ? 'pointer' : 'default';
+  }
+}
+
+function onMouseLeave() {
+  if (dragNode) {
+    // Release on leave
+    dragNode.vx = dragVelX * 0.5;
+    dragNode.vy = dragVelY * 0.5;
+    dragNode = null;
+    isDragging = false;
+  }
+  hoveredNode = null;
+}
+
 // ─── Main Loop ───
 
 function animate(timestamp) {
@@ -956,7 +1332,7 @@ function animate(timestamp) {
   tickForces();
   drawTree(animTime);
   drawTimeline(animTime);
-  updateCounters(16);
+  updateCounters();
 
   animFrame = requestAnimationFrame(animate);
 }
@@ -971,33 +1347,29 @@ function setupCanvases() {
   resizeCanvases();
   window.addEventListener('resize', resizeCanvases);
 
-  // Mouse interaction on tree canvas
-  treeCanvas.addEventListener('mousemove', (e) => {
-    const rect = treeCanvas.getBoundingClientRect();
-    const scaleX = treeCanvas.width / rect.width;
-    const scaleY = treeCanvas.height / rect.height;
-    mouseX = (e.clientX - rect.left) * scaleX;
-    mouseY = (e.clientY - rect.top) * scaleY;
+  // Mouse interactions
+  treeCanvas.addEventListener('mousedown', onMouseDown);
+  treeCanvas.addEventListener('mousemove', onMouseMove);
+  treeCanvas.addEventListener('mouseup', onMouseUp);
+  treeCanvas.addEventListener('mouseleave', onMouseLeave);
 
-    // Hit test nodes
-    hoveredNode = null;
-    for (const node of treeNodes) {
-      const dx = mouseX - node.x, dy = mouseY - node.y;
-      if (dx * dx + dy * dy < (node.radius + 8) * (node.radius + 8)) {
-        hoveredNode = node;
-        break;
-      }
-    }
-    treeCanvas.style.cursor = hoveredNode ? 'pointer' : 'default';
-  });
+  // Touch support for mobile
+  treeCanvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    onMouseDown({ clientX: touch.clientX, clientY: touch.clientY });
+  }, { passive: false });
 
-  treeCanvas.addEventListener('mouseleave', () => {
-    hoveredNode = null;
-  });
+  treeCanvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    onMouseMove({ clientX: touch.clientX, clientY: touch.clientY });
+  }, { passive: false });
 
-  treeCanvas.addEventListener('click', () => {
-    selectedNode = hoveredNode;
-  });
+  treeCanvas.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    onMouseUp(e);
+  }, { passive: false });
 }
 
 function resizeCanvases() {
@@ -1006,22 +1378,18 @@ function resizeCanvases() {
   const treeContainer = treeCanvas.parentElement;
   const timeContainer = timelineCanvas.parentElement;
 
-  // Tree canvas — use 1:1 pixel ratio for sharpness
-  const dpr = 1; // keep 1:1 for performance, Canvas blur is intentional aesthetic
   canvasW = treeContainer.clientWidth;
   canvasH = treeContainer.clientHeight;
   treeCanvas.width = canvasW;
   treeCanvas.height = canvasH;
   treeCtx = treeCanvas.getContext('2d');
 
-  // Timeline canvas
   const tw = timeContainer.clientWidth;
   const th = timeContainer.clientHeight;
   timelineCanvas.width = tw;
   timelineCanvas.height = th;
   timelineCtx = timelineCanvas.getContext('2d');
 
-  // Re-layout tree nodes if they exist
   if (treeNodes.length > 0) {
     const roots = treeNodes.filter(n => n.isRoot).map(n => n.name);
     const nodeIndex = {};
@@ -1041,7 +1409,6 @@ window.metricsInit = function() {
   fetchMetricsData();
   animate();
 
-  // Refresh data every 30s
   window._metricsRefresh = setInterval(() => {
     if (metricsActive) fetchMetricsData();
   }, 30000);
@@ -1052,4 +1419,12 @@ window.metricsDestroy = function() {
   if (animFrame) cancelAnimationFrame(animFrame);
   if (window._metricsRefresh) clearInterval(window._metricsRefresh);
   window.removeEventListener('resize', resizeCanvases);
+
+  // Clean up canvas listeners
+  if (treeCanvas) {
+    treeCanvas.removeEventListener('mousedown', onMouseDown);
+    treeCanvas.removeEventListener('mousemove', onMouseMove);
+    treeCanvas.removeEventListener('mouseup', onMouseUp);
+    treeCanvas.removeEventListener('mouseleave', onMouseLeave);
+  }
 };
