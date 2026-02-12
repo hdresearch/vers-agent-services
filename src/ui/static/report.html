@@ -226,20 +226,48 @@
       }
     }
 
-    function shareReport() {
-      const url = window.location.href;
-      navigator.clipboard.writeText(url).then(() => {
-        const btn = document.querySelector('.share-btn');
+    async function shareReport() {
+      const btn = document.querySelector('.share-btn');
+      const parts = window.location.pathname.split('/');
+      const reportId = parts[parts.length - 1];
+
+      if (!reportId) {
+        btn.textContent = '✗ no report ID';
+        setTimeout(() => { btn.textContent = '⎘ share'; }, 2000);
+        return;
+      }
+
+      btn.textContent = '⏳ sharing…';
+
+      try {
+        const res = await fetch(`/ui/api/reports/${reportId}/share`, { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        let shareUrl = data.url || '';
+        // Ensure https
+        shareUrl = shareUrl.replace(/^http:\/\//, 'https://');
+
+        await navigator.clipboard.writeText(shareUrl).catch(() => {
+          prompt('Share this URL:', shareUrl);
+        });
+
         btn.textContent = '✓ copied';
         btn.classList.add('copied');
         setTimeout(() => {
           btn.textContent = '⎘ share';
           btn.classList.remove('copied');
         }, 2000);
-      }).catch(() => {
-        // Fallback
-        prompt('Share this URL:', url);
-      });
+      } catch (e) {
+        btn.textContent = '✗ failed';
+        btn.title = e.message;
+        setTimeout(() => {
+          btn.textContent = '⎘ share';
+          btn.title = 'Copy link';
+        }, 3000);
+      }
     }
 
     loadReport();
