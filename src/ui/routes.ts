@@ -83,7 +83,7 @@ uiRoutes.get("/ui/login", (c) => {
 // Middleware for /ui/* (except /ui/login)
 uiRoutes.use("/ui/*", async (c, next) => {
   const path = new URL(c.req.url).pathname;
-  if (path === "/ui/login") return next();
+  if (path === "/ui/login" || path.startsWith("/ui/static/")) return next();
 
   const sessionId = getSessionId(c);
   if (!validateSession(sessionId)) {
