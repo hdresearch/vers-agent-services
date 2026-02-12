@@ -12,6 +12,24 @@ private let logger = Logger(subsystem: "com.tokenburn", category: "SSE")
 /// Note: server does NOT send an `event:` field — the event type lives
 /// inside the JSON data payload under the `type` key. The `detail` field
 /// is a JSON-encoded string that must be double-parsed.
+///
+/// ## Implementation notes
+///
+/// We use raw byte iteration (`for try await byte in bytes`) instead of
+/// `bytes.lines` (AsyncLineSequence). This is critical because:
+///
+/// 1. `AsyncLineSequence` may not reliably yield empty strings for blank
+///    lines (`\n\n`) on all macOS versions / URLSession configurations.
+///    SSE relies on blank lines as event terminators — if they're swallowed,
+///    `processEvent()` is never called and the needle never moves.
+///
+/// 2. Raw byte iteration gives us full control over line splitting, making
+///    SSE parsing deterministic regardless of platform behavior.
+///
+/// The URLSession is stored as an instance property (not a local variable)
+/// to prevent premature deallocation. A locally-scoped session can be GC'd
+/// while the async byte iterator is suspended, silently canceling the
+/// underlying data task even though `connectionState` stays `.connected`.
 @MainActor
 final class SSEClient: ObservableObject {
     enum ConnectionState: Equatable {
@@ -22,12 +40,21 @@ final class SSEClient: ObservableObject {
     }
 
     @Published var connectionState: ConnectionState = .disconnected
+    /// Diagnostic: total SSE lines received (visible in Console.app)
+    @Published var linesReceived: Int = 0
+    /// Diagnostic: total events processed
+    @Published var eventsProcessed: Int = 0
 
     private var streamTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
     private let tracker: TokenTracker
     private var serverURL: String = ""
     private var authToken: String = ""
+
+    /// Retained to prevent deallocation while stream is active.
+    /// URLSession created as a local variable can be GC'd when the async
+    /// iterator suspends, silently killing the data task underneath.
+    private var activeSession: URLSession?
 
     init(tracker: TokenTracker) {
         self.tracker = tracker
@@ -38,6 +65,8 @@ final class SSEClient: ObservableObject {
         self.authToken = authToken
         disconnect()
         connectionState = .connecting
+        linesReceived = 0
+        eventsProcessed = 0
         streamTask = Task { [weak self] in
             await self?.runStream()
         }
@@ -48,6 +77,8 @@ final class SSEClient: ObservableObject {
         streamTask = nil
         reconnectTask?.cancel()
         reconnectTask = nil
+        activeSession?.invalidateAndCancel()
+        activeSession = nil
         connectionState = .disconnected
     }
 
@@ -67,7 +98,7 @@ final class SSEClient: ObservableObject {
                 tracker.loadSummary(totalTokens: totalTokens, estimatedCost: totalCost)
             }
         } catch {
-            // Non-fatal — summary is supplementary
+            logger.warning("Failed to fetch summary: \(error.localizedDescription)")
         }
     }
 
@@ -94,58 +125,92 @@ final class SSEClient: ObservableObject {
             // Disable caching — SSE streams must never be cached
             config.requestCachePolicy = .reloadIgnoringLocalCacheData
             config.urlCache = nil
-            let session = URLSession(configuration: config)
 
+            let session = URLSession(configuration: config)
+            // CRITICAL: retain session as instance property. Without this,
+            // the session (a local variable) can be deallocated while the
+            // async byte iterator is suspended. URLSession deallocation
+            // cancels all tasks — silently killing the SSE stream while
+            // connectionState still shows .connected.
+            self.activeSession = session
+
+            logger.info("SSE: connecting to \(urlString)")
             let (bytes, response) = try await session.bytes(for: request)
 
-            if let httpResponse = response as? HTTPURLResponse,
-               httpResponse.statusCode != 200 {
-                connectionState = .error("HTTP \(httpResponse.statusCode)")
-                logger.error("SSE stream returned HTTP \(httpResponse.statusCode)")
-                scheduleReconnect()
-                return
+            if let httpResponse = response as? HTTPURLResponse {
+                let status = httpResponse.statusCode
+                logger.info("SSE: HTTP \(status), headers: \(httpResponse.allHeaderFields.keys.map { String(describing: $0) }.joined(separator: ", "))")
+                if status != 200 {
+                    connectionState = .error("HTTP \(status)")
+                    scheduleReconnect()
+                    return
+                }
             }
 
             connectionState = .connected
-            logger.info("SSE stream connected to \(urlString)")
+            logger.info("SSE: stream connected ✓")
 
+            // ─── Manual line-based SSE parser ───
+            // We iterate raw bytes instead of using `bytes.lines` because
+            // AsyncLineSequence may not reliably yield empty strings for
+            // blank lines (\n\n) — which SSE requires as event terminators.
+            // Without empty-line yields, processEvent() is never called.
+
+            var lineBuffer = Data()
             var currentEvent = ""
             var currentData = ""
 
-            for try await line in bytes.lines {
+            for try await byte in bytes {
                 if Task.isCancelled { break }
 
-                if line.isEmpty {
-                    // End of event — process it
-                    if !currentData.isEmpty {
-                        processEvent(type: currentEvent, data: currentData)
-                    }
-                    currentEvent = ""
-                    currentData = ""
-                } else if line.hasPrefix("event:") {
-                    currentEvent = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
-                } else if line.hasPrefix("data:") {
-                    let data = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
-                    if currentData.isEmpty {
-                        currentData = data
+                if byte == UInt8(ascii: "\n") {
+                    // End of line — convert buffer to string
+                    let line = String(data: lineBuffer, encoding: .utf8) ?? ""
+                    lineBuffer.removeAll(keepingCapacity: true)
+
+                    linesReceived += 1
+
+                    if line.isEmpty {
+                        // ── Blank line = end of SSE event ──
+                        if !currentData.isEmpty {
+                            logger.debug("SSE: dispatching event (type='\(currentEvent)', data=\(currentData.prefix(80))...)")
+                            processEvent(type: currentEvent, data: currentData)
+                            eventsProcessed += 1
+                        }
+                        currentEvent = ""
+                        currentData = ""
+                    } else if line.hasPrefix("event:") {
+                        currentEvent = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+                    } else if line.hasPrefix("data:") {
+                        let data = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                        if currentData.isEmpty {
+                            currentData = data
+                        } else {
+                            currentData += "\n" + data
+                        }
+                    } else if line.hasPrefix(":") {
+                        // SSE comment / keepalive — log but ignore
+                        logger.debug("SSE: heartbeat/comment")
                     } else {
-                        currentData += "\n" + data
+                        logger.debug("SSE: unknown line: \(line.prefix(60))")
                     }
-                } else if line.hasPrefix(":") {
-                    // SSE comment/keepalive — ignore
+                } else if byte != UInt8(ascii: "\r") {
+                    // Accumulate non-CR, non-LF bytes into the line buffer.
+                    // (SSE lines are separated by \n, \r\n, or \r — we strip \r)
+                    lineBuffer.append(byte)
                 }
             }
 
             // Stream ended normally
             if !Task.isCancelled {
                 connectionState = .disconnected
-                logger.info("SSE stream ended normally, reconnecting")
+                logger.info("SSE: stream ended normally, scheduling reconnect")
                 scheduleReconnect()
             }
         } catch {
             if !Task.isCancelled {
                 connectionState = .error(error.localizedDescription)
-                logger.error("SSE stream error: \(error.localizedDescription)")
+                logger.error("SSE: stream error: \(error.localizedDescription)")
                 scheduleReconnect()
             }
         }
@@ -155,16 +220,18 @@ final class SSEClient: ObservableObject {
         // Parse the outer event JSON
         guard let jsonData = data.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-            logger.warning("SSE: failed to parse event JSON: \(data.prefix(100))")
+            logger.warning("SSE: failed to parse event JSON: \(data.prefix(200))")
             return
         }
 
         // The event type lives inside the JSON `type` field (NOT in the SSE event: field,
         // which the server doesn't send). Fall back to SSE event type if present.
         let eventType = json["type"] as? String ?? type
+        logger.info("SSE: event type=\(eventType), id=\(json["id"] as? String ?? "?")")
 
         guard eventType == "cost_update" || eventType == "token_update" else {
             // Not a token event — ignore (agent_started, task_completed, etc.)
+            logger.debug("SSE: ignoring non-token event type '\(eventType)'")
             return
         }
 
@@ -180,7 +247,7 @@ final class SSEClient: ObservableObject {
             // Fallback: detail might already be a dictionary (if server changes format)
             detail = detailDict
         } else {
-            logger.warning("SSE: \(eventType) event missing parseable detail")
+            logger.warning("SSE: \(eventType) event missing parseable detail. Raw: \(data.prefix(200))")
             return
         }
 
@@ -198,7 +265,7 @@ final class SSEClient: ObservableObject {
         // resulting in tokensPerSecond permanently stuck at 0.
 
         if tokens > 0 {
-            logger.info("SSE: recording \(tokens) tokens from \(agent) (input=\(inputTokens), output=\(outputTokens))")
+            logger.info("SSE: ✅ recording \(tokens) tokens from \(agent) (in=\(inputTokens), out=\(outputTokens))")
             tracker.recordEvent(
                 tokens: tokens,
                 agent: agent,
@@ -206,7 +273,7 @@ final class SSEClient: ObservableObject {
                 outputTokens: outputTokens
             )
         } else {
-            logger.debug("SSE: \(eventType) event from \(agent) had 0 tokens, skipping")
+            logger.info("SSE: ⚠️ \(eventType) event from \(agent) had 0 tokensThisTurn — detail keys: \(detail.keys.sorted().joined(separator: ", "))")
         }
     }
 
