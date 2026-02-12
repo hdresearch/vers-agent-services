@@ -1,33 +1,51 @@
 import type { MiddlewareHandler } from "hono";
+import { getKeyStore } from "./auth/key-routes.js";
 
 /**
  * Bearer token auth middleware.
  *
- * If VERS_AUTH_TOKEN is set, all requests must include:
- *   Authorization: Bearer <token>
- *
- * If VERS_AUTH_TOKEN is NOT set, all requests pass through (dev mode)
- * but a warning is logged on startup.
+ * Authentication is checked in order:
+ *   1. If VERS_AUTH_TOKEN is set and the bearer token matches → allow (backwards compat)
+ *   2. If the bearer token matches a valid (non-revoked) API key in the database → allow
+ *   3. If VERS_AUTH_TOKEN is NOT set and no API keys exist → open access (dev mode)
+ *   4. Otherwise → 401
  */
 export function bearerAuth(): MiddlewareHandler {
   return async (c, next) => {
-    const token = process.env.VERS_AUTH_TOKEN;
+    const envToken = process.env.VERS_AUTH_TOKEN;
+    const authHeader = c.req.header("Authorization");
+    const match = authHeader?.match(/^Bearer\s+(.+)$/i);
+    const bearerToken = match?.[1];
 
-    // No token configured — open access (dev mode)
-    if (!token) {
+    // 1. Check static env token (backwards compat)
+    if (envToken && bearerToken === envToken) {
       return next();
     }
 
-    const authHeader = c.req.header("Authorization");
+    // 2. Check per-agent API keys in the database
+    if (bearerToken) {
+      try {
+        const store = getKeyStore();
+        const apiKey = store.verify(bearerToken);
+        if (apiKey) {
+          // Attach key info to request context for downstream use
+          c.set("apiKey", apiKey);
+          return next();
+        }
+      } catch {
+        // DB not available — fall through to other checks
+      }
+    }
+
+    // 3. No env token configured — open access (dev mode)
+    if (!envToken) {
+      return next();
+    }
+
+    // 4. Reject
     if (!authHeader) {
       return c.json({ error: "Unauthorized — missing Authorization header" }, 401);
     }
-
-    const match = authHeader.match(/^Bearer\s+(.+)$/i);
-    if (!match || match[1] !== token) {
-      return c.json({ error: "Unauthorized — invalid token" }, 401);
-    }
-
-    return next();
+    return c.json({ error: "Unauthorized — invalid token" }, 401);
   };
 }
