@@ -644,9 +644,37 @@ function switchView(viewName) {
     stopSkillsRefresh();
   }
   if (viewName === 'metrics') {
-    if (typeof window.metricsInit === 'function') window.metricsInit();
+    activateMetricsSubview();
   } else {
     if (typeof window.metricsDestroy === 'function') window.metricsDestroy();
+    if (typeof window.analyticsDestroy === 'function') window.analyticsDestroy();
+  }
+}
+
+// ─── Metrics Sub-tabs ───
+
+function activateMetricsSubview() {
+  const activeTab = document.querySelector('.metrics-subtab.active');
+  const subview = activeTab ? activeTab.dataset.subview : 'tree';
+  switchMetricsSubview(subview);
+}
+
+function switchMetricsSubview(name) {
+  // Update sub-tab buttons
+  document.querySelectorAll('.metrics-subtab').forEach(t => t.classList.remove('active'));
+  document.querySelector(`.metrics-subtab[data-subview="${name}"]`)?.classList.add('active');
+
+  // Update sub-views
+  document.querySelectorAll('.metrics-subview').forEach(v => v.classList.remove('active'));
+  document.getElementById(`metrics-subview-${name}`)?.classList.add('active');
+
+  // Init/destroy the correct view
+  if (name === 'tree') {
+    if (typeof window.analyticsDestroy === 'function') window.analyticsDestroy();
+    if (typeof window.metricsInit === 'function') window.metricsInit();
+  } else if (name === 'analytics') {
+    if (typeof window.metricsDestroy === 'function') window.metricsDestroy();
+    if (typeof window.analyticsInit === 'function') window.analyticsInit();
   }
 }
 
@@ -682,6 +710,11 @@ async function init() {
   document.getElementById('journal-tag-filter').addEventListener('input', () => {
     clearTimeout(window._journalTagTimeout);
     window._journalTagTimeout = setTimeout(loadJournal, 300);
+  });
+
+  // Metrics sub-tab switching
+  document.querySelectorAll('.metrics-subtab').forEach(tab => {
+    tab.addEventListener('click', () => switchMetricsSubview(tab.dataset.subview));
   });
 
   // Skills filter controls
