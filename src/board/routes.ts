@@ -196,6 +196,17 @@ boardRoutes.delete("/tasks/:id", (c) => {
   return c.json({ deleted: true });
 });
 
+// Bump a task's score
+boardRoutes.post("/tasks/:id/bump", (c) => {
+  try {
+    const task = store.bumpTask(c.req.param("id"));
+    return c.json(task);
+  } catch (e) {
+    if (e instanceof NotFoundError) return c.json({ error: e.message }, 404);
+    throw e;
+  }
+});
+
 // Add a note to a task
 boardRoutes.post("/tasks/:id/notes", async (c) => {
   try {

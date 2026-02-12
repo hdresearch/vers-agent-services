@@ -56,8 +56,15 @@ function renderBoard(tasks) {
       const notes = (t.notes || []).map(n =>
         `<div class="note"><span class="note-author">@${esc(n.author)}</span> <span class="note-type">${esc(n.type)}</span> ${esc(n.content)}</div>`
       ).join('');
+      const score = t.score || 0;
+      const scoreBadge = score > 0
+        ? `<span class="score-badge">${score}</span>`
+        : `<span class="score-badge dim">0</span>`;
       html += `<div class="task-card status-${status}" onclick="this.classList.toggle('expanded')" data-id="${t.id}">
-        <div class="title">${esc(t.title)}</div>
+        <div class="task-top">
+          <div class="title">${esc(t.title)}</div>
+          <button class="bump-btn" onclick="event.stopPropagation(); bumpTask('${t.id}')" title="Bump score">👆 ${scoreBadge}</button>
+        </div>
         <div class="meta">
           ${assignee}
           ${tags}
@@ -75,6 +82,15 @@ function renderBoard(tasks) {
   document.getElementById('stat-total').textContent = tasks.length;
   document.getElementById('stat-open').textContent = grouped['open'].length;
   document.getElementById('stat-blocked').textContent = grouped['blocked'].length;
+}
+
+async function bumpTask(taskId) {
+  try {
+    await fetch(`${API}/board/tasks/${taskId}/bump`, { method: 'POST' });
+    loadBoard();
+  } catch (e) {
+    console.error('Bump failed:', e);
+  }
 }
 
 // ─── Feed ───

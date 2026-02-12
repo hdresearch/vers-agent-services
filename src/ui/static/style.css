@@ -101,6 +101,18 @@ html, body {
 .task-card .tag { 
   background: #222; padding: 1px 6px; border-radius: 3px; font-size: 10px; color: var(--blue);
 }
+.task-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.bump-btn {
+  background: none; border: 1px solid var(--border); border-radius: 3px;
+  color: var(--text-dim); cursor: pointer; font-size: 11px; padding: 2px 6px;
+  font-family: inherit; white-space: nowrap; flex-shrink: 0;
+  display: flex; align-items: center; gap: 4px; transition: all 0.15s;
+}
+.bump-btn:hover { border-color: var(--accent); color: var(--accent); background: #1a2a1a; }
+.score-badge {
+  font-weight: 700; color: var(--yellow); font-size: 11px;
+}
+.score-badge.dim { color: var(--text-dim); font-weight: 400; }
 .task-card .assignee { color: var(--purple); }
 .task-card .age { color: var(--text-dim); }
 

@@ -923,6 +923,12 @@ export default function (pi: ExtensionAPI) {
           { description: "Artifacts to attach" },
         ),
       ),
+    name: "board_bump",
+    label: "Board: Bump Task",
+    description:
+      "Bump a task's score by 1. Use to signal priority or upvote an issue.",
+    parameters: Type.Object({
+      taskId: Type.String({ description: "Task ID to bump" }),
     }),
     async execute(_toolCallId, params) {
       if (!getBaseUrl()) return noUrlError();
@@ -969,6 +975,9 @@ export default function (pi: ExtensionAPI) {
           "POST",
           `/board/tasks/${encodeURIComponent(params.taskId)}/artifacts`,
           { artifacts: params.artifacts.map((a) => ({ ...a, addedBy: agentName })) },
+        const task = await api(
+          "POST",
+          `/board/tasks/${encodeURIComponent(params.taskId)}/bump`,
         );
         return ok(JSON.stringify(task, null, 2), { task });
       } catch (e: any) {

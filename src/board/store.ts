@@ -35,6 +35,7 @@ export interface Task {
   updatedAt: string;
   notes: Note[];
   artifacts: Artifact[];
+  score: number;
 }
 
 export interface CreateTaskInput {
@@ -100,6 +101,8 @@ export class BoardStore {
           for (const t of data.tasks) {
             // Backward compat: old tasks may not have artifacts
             if (!t.artifacts) t.artifacts = [];
+            // Backward compat: default score to 0 for older tasks
+            if (t.score === undefined) t.score = 0;
             this.tasks.set(t.id, t);
           }
         }
@@ -157,6 +160,7 @@ export class BoardStore {
       updatedAt: now,
       notes: [],
       artifacts: [],
+      score: 0,
     };
 
     this.tasks.set(task.id, task);
@@ -216,6 +220,17 @@ export class BoardStore {
     const existed = this.tasks.delete(id);
     if (existed) this.scheduleSave();
     return existed;
+  }
+
+  bumpTask(id: string): Task {
+    const task = this.tasks.get(id);
+    if (!task) throw new NotFoundError("task not found");
+
+    task.score = (task.score || 0) + 1;
+    task.updatedAt = new Date().toISOString();
+    this.tasks.set(id, task);
+    this.scheduleSave();
+    return task;
   }
 
   addNote(taskId: string, input: AddNoteInput): Note {
