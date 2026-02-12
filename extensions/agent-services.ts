@@ -923,12 +923,6 @@ export default function (pi: ExtensionAPI) {
           { description: "Artifacts to attach" },
         ),
       ),
-    name: "board_bump",
-    label: "Board: Bump Task",
-    description:
-      "Bump a task's score by 1. Use to signal priority or upvote an issue.",
-    parameters: Type.Object({
-      taskId: Type.String({ description: "Task ID to bump" }),
     }),
     async execute(_toolCallId, params) {
       if (!getBaseUrl()) return noUrlError();
