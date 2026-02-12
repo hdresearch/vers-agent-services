@@ -9,7 +9,8 @@
     "postbuild": "rm -rf dist/ui/static && cp -r src/ui/static dist/ui/static",
     "start": "node dist/server.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepare": "git config core.hooksPath .githooks"
   },
   "dependencies": {
     "@hono/node-server": "^1.8.0",
