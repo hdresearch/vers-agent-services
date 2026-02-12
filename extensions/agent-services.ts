@@ -809,6 +809,84 @@ export default function (pi: ExtensionAPI) {
   // (heartbeatTimer declared above with widgetTimer, started in session_start)
   // ---------------------------------------------------------------------------
 
+  // ---------------------------------------------------------------------------
+  // Lifecycle event listeners — registry writes for vers-swarm & vers-lieutenant
+  //
+  // The swarm/lieutenant extensions emit events via pi.events when agents are
+  // spawned or destroyed. We handle registry registration here so those
+  // extensions don't need to know about the registry service.
+  // ---------------------------------------------------------------------------
+
+  pi.events.on("vers:agent_spawned", async (data: {
+    vmId: string; label: string; role: string; address: string; commitId?: string;
+  }) => {
+    if (!getBaseUrl()) return;
+    try {
+      await api("POST", "/registry/vms", {
+        id: data.vmId,
+        name: data.label,
+        role: data.role || "worker",
+        address: data.address,
+        registeredBy: "agent-services",
+        metadata: {
+          agentId: data.label,
+          commitId: data.commitId,
+          registeredVia: "vers:agent_spawned",
+          createdAt: new Date().toISOString(),
+        },
+      });
+    } catch (err) {
+      console.error(`[agent-services] Registry post failed for ${data.label}: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
+  pi.events.on("vers:agent_destroyed", async (data: {
+    vmId: string; label: string;
+  }) => {
+    if (!getBaseUrl()) return;
+    try {
+      await api("DELETE", `/registry/vms/${encodeURIComponent(data.vmId)}`);
+    } catch (err) {
+      console.error(`[agent-services] Registry delete failed for ${data.label}: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
+  pi.events.on("vers:lt_created", async (data: {
+    vmId: string; name: string; role: string; address: string;
+    ltRole?: string; commitId?: string; createdAt?: string;
+  }) => {
+    if (!getBaseUrl()) return;
+    try {
+      await api("POST", "/registry/vms", {
+        id: data.vmId,
+        name: data.name,
+        role: data.role || "lieutenant",
+        address: data.address,
+        registeredBy: "agent-services",
+        metadata: {
+          agentId: data.name,
+          role: data.ltRole,
+          commitId: data.commitId,
+          createdAt: data.createdAt,
+          registeredVia: "vers:lt_created",
+        },
+      });
+    } catch (err) {
+      console.error(`[agent-services] Registry post failed for LT ${data.name}: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
+  pi.events.on("vers:lt_destroyed", async (data: {
+    vmId: string; name: string;
+  }) => {
+    if (!getBaseUrl()) return;
+    try {
+      await api("DELETE", `/registry/vms/${encodeURIComponent(data.vmId)}`);
+    } catch (err) {
+      console.error(`[agent-services] Registry delete failed for LT ${data.name}: ${err instanceof Error ? err.message : err}`);
+    }
+  });
+
   // ===========================================================================
   // Board Tools
   // ===========================================================================
