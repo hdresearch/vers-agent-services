@@ -1,7 +1,17 @@
 import Foundation
 import Combine
+import os
+
+private let logger = Logger(subsystem: "com.tokenburn", category: "SSE")
 
 /// Server-Sent Events client using URLSession async bytes streaming
+///
+/// The server sends SSE frames as:
+///   data: {"id":"...","type":"token_update","detail":"{...}"}\n\n
+///
+/// Note: server does NOT send an `event:` field — the event type lives
+/// inside the JSON data payload under the `type` key. The `detail` field
+/// is a JSON-encoded string that must be double-parsed.
 @MainActor
 final class SSEClient: ObservableObject {
     enum ConnectionState: Equatable {
@@ -73,6 +83,7 @@ final class SSEClient: ObservableObject {
         var request = URLRequest(url: url)
         request.setValue("Bearer \(authToken)", forHTTPHeaderField: "Authorization")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         // Keep-alive: no timeout
         request.timeoutInterval = .infinity
 
@@ -80,6 +91,9 @@ final class SSEClient: ObservableObject {
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = 300
             config.timeoutIntervalForResource = .infinity
+            // Disable caching — SSE streams must never be cached
+            config.requestCachePolicy = .reloadIgnoringLocalCacheData
+            config.urlCache = nil
             let session = URLSession(configuration: config)
 
             let (bytes, response) = try await session.bytes(for: request)
@@ -87,11 +101,13 @@ final class SSEClient: ObservableObject {
             if let httpResponse = response as? HTTPURLResponse,
                httpResponse.statusCode != 200 {
                 connectionState = .error("HTTP \(httpResponse.statusCode)")
+                logger.error("SSE stream returned HTTP \(httpResponse.statusCode)")
                 scheduleReconnect()
                 return
             }
 
             connectionState = .connected
+            logger.info("SSE stream connected to \(urlString)")
 
             var currentEvent = ""
             var currentData = ""
@@ -123,11 +139,13 @@ final class SSEClient: ObservableObject {
             // Stream ended normally
             if !Task.isCancelled {
                 connectionState = .disconnected
+                logger.info("SSE stream ended normally, reconnecting")
                 scheduleReconnect()
             }
         } catch {
             if !Task.isCancelled {
                 connectionState = .error(error.localizedDescription)
+                logger.error("SSE stream error: \(error.localizedDescription)")
                 scheduleReconnect()
             }
         }
@@ -137,38 +155,53 @@ final class SSEClient: ObservableObject {
         // Parse the outer event JSON
         guard let jsonData = data.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            logger.warning("SSE: failed to parse event JSON: \(data.prefix(100))")
             return
         }
 
-        // We're interested in cost_update events (which carry token data)
-        // and also token_update if the feed uses that type
+        // The event type lives inside the JSON `type` field (NOT in the SSE event: field,
+        // which the server doesn't send). Fall back to SSE event type if present.
         let eventType = json["type"] as? String ?? type
 
-        // Parse the detail field (it's a JSON string inside the event)
-        guard let detailString = json["detail"] as? String,
-              let detailData = detailString.data(using: .utf8),
-              let detail = try? JSONSerialization.jsonObject(with: detailData) as? [String: Any] else {
-            // Some events might not have detail — that's fine
+        guard eventType == "cost_update" || eventType == "token_update" else {
+            // Not a token event — ignore (agent_started, task_completed, etc.)
             return
         }
 
-        if eventType == "cost_update" || eventType == "token_update" {
-            let tokens = detail["tokensThisTurn"] as? Int ?? 0
-            let agent = detail["agent"] as? String ?? json["agent"] as? String ?? "unknown"
-            let inputTokens = detail["inputTokens"] as? Int ?? 0
-            let outputTokens = detail["outputTokens"] as? Int ?? 0
-            let timestampMs = detail["timestamp"] as? Double
-            let ts: Date? = timestampMs.map { Date(timeIntervalSince1970: $0 / 1000.0) }
+        // Parse the detail field — it's a JSON string that needs double-parsing.
+        // The extension sends: detail: JSON.stringify({ tokensThisTurn, ... })
+        // so the outer JSON has detail as a string, not an object.
+        let detail: [String: Any]
+        if let detailString = json["detail"] as? String,
+           let detailData = detailString.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: detailData) as? [String: Any] {
+            detail = parsed
+        } else if let detailDict = json["detail"] as? [String: Any] {
+            // Fallback: detail might already be a dictionary (if server changes format)
+            detail = detailDict
+        } else {
+            logger.warning("SSE: \(eventType) event missing parseable detail")
+            return
+        }
 
-            if tokens > 0 {
-                tracker.recordEvent(
-                    tokens: tokens,
-                    agent: agent,
-                    inputTokens: inputTokens,
-                    outputTokens: outputTokens,
-                    timestamp: ts
-                )
-            }
+        // Use NSNumber bridging for robust numeric extraction — JSONSerialization
+        // returns NSNumber which may be Int64, Double, etc. depending on magnitude
+        let tokens = (detail["tokensThisTurn"] as? NSNumber)?.intValue ?? 0
+        let agent = detail["agent"] as? String ?? json["agent"] as? String ?? "unknown"
+        let inputTokens = (detail["inputTokens"] as? NSNumber)?.intValue ?? 0
+        let outputTokens = (detail["outputTokens"] as? NSNumber)?.intValue ?? 0
+        let timestampMs = (detail["timestamp"] as? NSNumber)?.doubleValue
+        let ts: Date? = timestampMs.map { Date(timeIntervalSince1970: $0 / 1000.0) }
+
+        if tokens > 0 {
+            logger.debug("SSE: recording \(tokens) tokens from \(agent)")
+            tracker.recordEvent(
+                tokens: tokens,
+                agent: agent,
+                inputTokens: inputTokens,
+                outputTokens: outputTokens,
+                timestamp: ts
+            )
         }
     }
 

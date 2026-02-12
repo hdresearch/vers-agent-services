@@ -42,7 +42,7 @@
 
   // Global hook: app.js SSE onmessage will call this if it exists
   window._speedometerOnFeedEvent = function (evt) {
-    if (evt.type !== 'token_update') return;
+    if (evt.type !== 'token_update' && evt.type !== 'cost_update') return;
     if (!evt.detail) return;
 
     try {
