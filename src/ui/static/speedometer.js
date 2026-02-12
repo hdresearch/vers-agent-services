@@ -48,10 +48,15 @@
     try {
       const d = typeof evt.detail === 'string' ? JSON.parse(evt.detail) : evt.detail;
       const tokens = d.tokensThisTurn || 0;
-      const ts = d.timestamp || Date.now();
+      // Always use local time for the sliding window timestamp.
+      // The server's d.timestamp comes from the Vers VM clock which may have
+      // skew relative to this browser. A stale server timestamp causes events
+      // to fall outside the 10-second window and get pruned immediately,
+      // keeping the needle permanently at 0.
+      const ts = Date.now();
       if (tokens > 0) {
         tokenEvents.push({ tokens, timestamp: ts });
-        lastEventTime = Date.now();
+        lastEventTime = ts;
       }
     } catch {
       // malformed detail, ignore

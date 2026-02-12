@@ -156,8 +156,8 @@ struct PopoverContentView: View {
             .padding(.top, 12)
             .padding(.bottom, 4)
 
-            // Speedometer
-            SpeedometerView(tokensPerSecond: tracker.tokensPerSecond)
+            // Speedometer — pass tracker directly for reliable Combine subscription
+            SpeedometerView(tracker: tracker)
                 .padding(.horizontal, 16)
                 .padding(.top, 4)
 
