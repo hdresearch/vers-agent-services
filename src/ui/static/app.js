@@ -457,6 +457,155 @@ function stopReviewRefresh() {
   if (reviewRefreshTimer) {
     clearInterval(reviewRefreshTimer);
     reviewRefreshTimer = null;
+
+// ─── Skills ───
+
+let skillsRefreshTimer = null;
+let allSkills = [];
+let allExtensions = [];
+
+async function loadSkills() {
+  try {
+    const data = await api('/skills/items');
+    allSkills = data.skills || [];
+    renderSkills();
+  } catch (e) {
+    document.getElementById('skills-list').innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderSkills() {
+  const filter = (document.getElementById('skills-filter')?.value || '').toLowerCase();
+  const statusFilter = document.getElementById('skills-status-filter')?.value || '';
+  const container = document.getElementById('skills-list');
+
+  let skills = allSkills;
+  if (filter) {
+    skills = skills.filter(s =>
+      s.name.toLowerCase().includes(filter) ||
+      (s.description || '').toLowerCase().includes(filter) ||
+      (s.tags || []).some(t => t.toLowerCase().includes(filter))
+    );
+  }
+  if (statusFilter === 'enabled') skills = skills.filter(s => s.enabled);
+  if (statusFilter === 'disabled') skills = skills.filter(s => !s.enabled);
+
+  document.getElementById('skills-count').textContent = skills.length;
+
+  if (!skills.length) {
+    container.innerHTML = '<div class="empty">No skills found</div>';
+    return;
+  }
+
+  let html = '';
+  for (const s of skills) {
+    const tags = (s.tags || []).map(t => `<span class="skill-tag">${esc(t)}</span>`).join('');
+    const statusCls = s.enabled ? 'skill-status-enabled' : 'skill-status-disabled';
+    const statusLabel = s.enabled ? 'enabled' : 'disabled';
+    const cardCls = s.enabled ? '' : ' disabled';
+    html += `<div class="skill-card${cardCls}" onclick="this.classList.toggle('expanded')">
+      <div class="skill-name">${esc(s.name)}</div>
+      <div class="skill-desc">${esc(s.description)}</div>
+      <div class="skill-meta">
+        <span class="skill-version">v${s.version}</span>
+        <span class="${statusCls}">${statusLabel}</span>
+        <span class="skill-publisher">@${esc(s.publishedBy)}</span>
+        ${tags}
+        <span>${timeAgo(s.updatedAt)}</span>
+      </div>
+      <div class="skill-content"><pre>${esc(s.content)}</pre></div>
+    </div>`;
+  }
+  container.innerHTML = html;
+}
+
+async function loadExtensions() {
+  try {
+    const data = await api('/skills/extensions');
+    allExtensions = data.extensions || [];
+    renderExtensions();
+  } catch (e) {
+    document.getElementById('extensions-list').innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderExtensions() {
+  const container = document.getElementById('extensions-list');
+  document.getElementById('extensions-count').textContent = allExtensions.length;
+
+  if (!allExtensions.length) {
+    container.innerHTML = '<div class="empty">No extensions registered</div>';
+    return;
+  }
+
+  let html = '';
+  for (const e of allExtensions) {
+    html += `<div class="ext-card" onclick="this.classList.toggle('expanded')">
+      <div class="ext-name">${esc(e.name)}</div>
+      <div class="ext-desc">${esc(e.description)}</div>
+      <div class="ext-meta">
+        <span class="ext-version">v${e.version}</span>
+        <span class="ext-publisher">@${esc(e.publishedBy)}</span>
+        <span>${timeAgo(e.updatedAt)}</span>
+      </div>
+      <div class="ext-content"><pre>${esc(e.content)}</pre></div>
+    </div>`;
+  }
+  container.innerHTML = html;
+}
+
+async function loadAgents() {
+  try {
+    const data = await api('/skills/agents');
+    renderAgents(data.agents || []);
+  } catch (e) {
+    document.getElementById('agents-list').innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderAgents(agents) {
+  const container = document.getElementById('agents-list');
+  document.getElementById('agents-count').textContent = agents.length;
+
+  if (!agents.length) {
+    container.innerHTML = '<div class="empty">No agents have synced yet</div>';
+    return;
+  }
+
+  let html = '<table class="agent-table"><thead><tr>';
+  html += '<th>Agent</th><th>Skills</th><th>Extensions</th><th>Last Sync</th>';
+  html += '</tr></thead><tbody>';
+  for (const a of agents) {
+    const skillsCount = (a.skills || []).length;
+    const extCount = (a.extensions || []).length;
+    const vm = a.vmId ? `<div class="agent-vm">${esc(a.vmId)}</div>` : '';
+    html += `<tr>
+      <td><span class="agent-name">${esc(a.agentId)}</span>${vm}</td>
+      <td><span class="agent-skills-count">${skillsCount}</span></td>
+      <td><span class="agent-ext-count">${extCount}</span></td>
+      <td>${timeAgo(a.lastSync)}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+function startSkillsRefresh() {
+  if (skillsRefreshTimer) return;
+  loadSkills();
+  loadExtensions();
+  loadAgents();
+  skillsRefreshTimer = setInterval(() => {
+    loadSkills();
+    loadExtensions();
+    loadAgents();
+  }, 30000);
+}
+
+function stopSkillsRefresh() {
+  if (skillsRefreshTimer) {
+    clearInterval(skillsRefreshTimer);
+    skillsRefreshTimer = null;
   }
 }
 
@@ -486,6 +635,11 @@ function switchView(viewName) {
     startJournalRefresh();
   } else {
     stopJournalRefresh();
+  }
+  if (viewName === 'skills') {
+    startSkillsRefresh();
+  } else {
+    stopSkillsRefresh();
   }
 }
 
@@ -522,6 +676,13 @@ async function init() {
     clearTimeout(window._journalTagTimeout);
     window._journalTagTimeout = setTimeout(loadJournal, 300);
   });
+
+  // Skills filter controls
+  document.getElementById('skills-filter').addEventListener('input', () => {
+    clearTimeout(window._skillsFilterTimeout);
+    window._skillsFilterTimeout = setTimeout(renderSkills, 300);
+  });
+  document.getElementById('skills-status-filter').addEventListener('change', renderSkills);
 }
 
 init();

@@ -14,6 +14,7 @@
       <button class="tab" data-view="review">Review</button>
       <button class="tab" data-view="log">Log</button>
       <button class="tab" data-view="journal">Journal</button>
+      <button class="tab" data-view="skills">Skills</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -112,6 +113,47 @@
     </div>
     <div class="log-entries" id="journal-entries">
       <div class="empty">Loading journal…</div>
+    </div>
+  </div>
+
+  <!-- Skills view -->
+  <div class="view" id="view-skills">
+    <div class="skills-sections">
+      <div class="skills-section">
+        <div class="skills-section-header">
+          <span class="skills-section-title">Skills</span>
+          <span class="skills-badge" id="skills-count">-</span>
+          <div class="skills-filter-row">
+            <input type="text" id="skills-filter" placeholder="filter skills…">
+            <select id="skills-status-filter">
+              <option value="">all</option>
+              <option value="enabled">enabled</option>
+              <option value="disabled">disabled</option>
+            </select>
+          </div>
+        </div>
+        <div class="skills-list" id="skills-list">
+          <div class="empty">Loading skills…</div>
+        </div>
+      </div>
+      <div class="skills-section">
+        <div class="skills-section-header">
+          <span class="skills-section-title">Extensions</span>
+          <span class="skills-badge" id="extensions-count">-</span>
+        </div>
+        <div class="skills-list" id="extensions-list">
+          <div class="empty">Loading extensions…</div>
+        </div>
+      </div>
+      <div class="skills-section">
+        <div class="skills-section-header">
+          <span class="skills-section-title">Agent Sync</span>
+          <span class="skills-badge" id="agents-count">-</span>
+        </div>
+        <div class="skills-list" id="agents-list">
+          <div class="empty">Loading agents…</div>
+        </div>
+      </div>
     </div>
   </div>
 
