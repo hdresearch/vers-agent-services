@@ -643,6 +643,11 @@ function switchView(viewName) {
   } else {
     stopSkillsRefresh();
   }
+  if (viewName === 'metrics') {
+    if (typeof window.metricsInit === 'function') window.metricsInit();
+  } else {
+    if (typeof window.metricsDestroy === 'function') window.metricsDestroy();
+  }
 }
 
 // ─── Init ───

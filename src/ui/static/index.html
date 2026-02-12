@@ -15,6 +15,7 @@
       <button class="tab" data-view="log">Log</button>
       <button class="tab" data-view="journal">Journal</button>
       <button class="tab" data-view="skills">Skills</button>
+      <button class="tab" data-view="metrics">Metrics</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -157,6 +158,54 @@
     </div>
   </div>
 
+  <!-- Metrics view -->
+  <div class="view" id="view-metrics">
+    <div class="metrics-layout">
+      <!-- Left: Big counters + agent panel -->
+      <div class="metrics-sidebar">
+        <div class="m-counters">
+          <div class="m-counter-group">
+            <div class="m-counter-label">TOTAL TOKENS</div>
+            <div class="m-counter-value" id="m-counter-tokens">—</div>
+          </div>
+          <div class="m-counter-group">
+            <div class="m-counter-label">FLEET COST</div>
+            <div class="m-counter-value m-cost" id="m-counter-cost">—</div>
+          </div>
+          <div class="m-counter-row">
+            <div class="m-counter-group m-small">
+              <div class="m-counter-label">SESSIONS</div>
+              <div class="m-counter-value m-small-val" id="m-counter-sessions">—</div>
+            </div>
+            <div class="m-counter-group m-small">
+              <div class="m-counter-label">AGENTS</div>
+              <div class="m-counter-value m-small-val" id="m-counter-agents">—</div>
+            </div>
+          </div>
+          <div class="m-sparkline-wrap">
+            <div class="m-counter-label">BURN RATE (24H)</div>
+            <canvas id="m-sparkline"></canvas>
+          </div>
+        </div>
+        <div class="m-panel-scroll" id="metrics-panel-content">
+          <div class="m-empty">Loading metrics…</div>
+        </div>
+      </div>
+      <!-- Center: Agent tree canvas -->
+      <div class="metrics-main">
+        <div class="metrics-tree-wrap">
+          <canvas id="metrics-tree-canvas"></canvas>
+          <div class="metrics-tree-label">AGENT TOPOLOGY</div>
+        </div>
+        <div class="metrics-timeline-wrap">
+          <div class="metrics-timeline-label">SESSION TIMELINE</div>
+          <canvas id="metrics-timeline-canvas"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/static/metrics.js"></script>
   <script type="module" src="/ui/static/app.js"></script>
 </body>
 </html>
