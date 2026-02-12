@@ -190,18 +190,23 @@ final class SSEClient: ObservableObject {
         let agent = detail["agent"] as? String ?? json["agent"] as? String ?? "unknown"
         let inputTokens = (detail["inputTokens"] as? NSNumber)?.intValue ?? 0
         let outputTokens = (detail["outputTokens"] as? NSNumber)?.intValue ?? 0
-        let timestampMs = (detail["timestamp"] as? NSNumber)?.doubleValue
-        let ts: Date? = timestampMs.map { Date(timeIntervalSince1970: $0 / 1000.0) }
+
+        // Always use local time (Date()) for the sliding window timestamp.
+        // The server's detail.timestamp comes from the Vers VM clock which may
+        // have skew relative to this Mac. Using a stale server timestamp causes
+        // events to fall outside the 10-second window and get pruned on arrival,
+        // resulting in tokensPerSecond permanently stuck at 0.
 
         if tokens > 0 {
-            logger.debug("SSE: recording \(tokens) tokens from \(agent)")
+            logger.info("SSE: recording \(tokens) tokens from \(agent) (input=\(inputTokens), output=\(outputTokens))")
             tracker.recordEvent(
                 tokens: tokens,
                 agent: agent,
                 inputTokens: inputTokens,
-                outputTokens: outputTokens,
-                timestamp: ts
+                outputTokens: outputTokens
             )
+        } else {
+            logger.debug("SSE: \(eventType) event from \(agent) had 0 tokens, skipping")
         }
     }
 
