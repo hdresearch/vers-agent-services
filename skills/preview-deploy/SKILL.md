@@ -63,13 +63,25 @@ Provide:
 - **Specific page/report link** showing the change
 - **Prime URL** for comparison
 
-#### 6. Include in PR description
+#### 6. Create share links for visible content
 
-When opening the PR, include the preview link in the description:
+PR reviewers won't have auth tokens. Use share links for any report/page you want to show:
+```
+POST https://{previewVmId}.vm.vers.sh:3000/reports/{reportId}/share
+Authorization: Bearer {authToken}
+→ returns { url: "https://...vm.vers.sh:3000/reports/share/{linkId}" }
+```
+
+Share links require NO auth — anyone with the link can view.
+
+#### 7. Include in PR description
+
+When opening the PR, include the **share link** (not the auth-gated URL):
 ```markdown
 ## Demo
 
-**Live preview:** https://{previewVmId}.vm.vers.sh:3000/ui/...
+**Live preview (no auth required):**
+https://{previewVmId}.vm.vers.sh:3000/reports/share/{linkId}
 
 Deployed on a branch clone of infra. Production untouched.
 ```
