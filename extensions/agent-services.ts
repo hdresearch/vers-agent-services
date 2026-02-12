@@ -619,6 +619,26 @@ export default function (pi: ExtensionAPI) {
         usageCost.cacheWrite += u.cost.cacheWrite || 0;
         usageCost.total += u.cost.total || 0;
       }
+
+      // Emit live token metrics to the feed for real-time speedometer
+      const inputTokens = u.input || 0;
+      const outputTokens = u.output || 0;
+      const tokensThisTurn = inputTokens + outputTokens;
+      try {
+        await api("POST", "/feed/events", {
+          type: "token_update",
+          agent: agentName,
+          summary: `${tokensThisTurn} tokens`,
+          detail: JSON.stringify({
+            agent: agentName,
+            tokensThisTurn,
+            totalTokens: usageTokens.total,
+            inputTokens,
+            outputTokens,
+            timestamp: Date.now(),
+          }),
+        });
+      } catch {} // fire and forget
     }
   });
 

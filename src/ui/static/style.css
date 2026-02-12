@@ -474,6 +474,18 @@ html, body {
   margin-top: 4px;
 }
 
+.m-speedometer-wrap {
+  margin-top: 12px;
+  display: flex;
+  justify-content: center;
+}
+
+#m-speedometer {
+  width: 200px;
+  height: 120px;
+  display: block;
+}
+
 /* ─── Agent/Model Panel ─── */
 
 .m-panel-scroll {

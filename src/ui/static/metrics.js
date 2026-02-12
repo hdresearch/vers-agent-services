@@ -1425,6 +1425,9 @@ window.metricsInit = function() {
   fetchMetricsData();
   animate();
 
+  // Start the token burn speedometer
+  if (typeof window._speedometerInit === 'function') window._speedometerInit();
+
   window._metricsRefresh = setInterval(() => {
     if (metricsActive) fetchMetricsData();
   }, 30000);
@@ -1435,6 +1438,9 @@ window.metricsDestroy = function() {
   if (animFrame) cancelAnimationFrame(animFrame);
   if (window._metricsRefresh) clearInterval(window._metricsRefresh);
   window.removeEventListener('resize', resizeCanvases);
+
+  // Stop the token burn speedometer
+  if (typeof window._speedometerDestroy === 'function') window._speedometerDestroy();
 
   // Clean up canvas listeners
   if (treeCanvas) {

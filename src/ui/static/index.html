@@ -194,6 +194,9 @@
               <div class="m-counter-label">BURN RATE (24H)</div>
               <canvas id="m-sparkline"></canvas>
             </div>
+            <div class="m-speedometer-wrap">
+              <canvas id="m-speedometer" width="400" height="240"></canvas>
+            </div>
           </div>
           <div class="m-panel-scroll" id="metrics-panel-content">
             <div class="m-empty">Loading metrics…</div>
@@ -229,6 +232,7 @@
     </div>
   </div>
 
+  <script src="/ui/static/speedometer.js"></script>
   <script src="/ui/static/metrics.js"></script>
   <script src="/ui/static/analytics.js"></script>
   <script type="module" src="/ui/static/app.js"></script>

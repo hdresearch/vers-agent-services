@@ -28,6 +28,7 @@ export const VALID_EVENT_TYPES: Set<string> = new Set([
   "cost_update",
   "agent_started",
   "agent_stopped",
+  "token_update",
   "custom",
 ]);
 

@@ -145,6 +145,10 @@ function startSSE() {
   evtSource.onmessage = (e) => {
     try {
       const evt = JSON.parse(e.data);
+      // Forward to speedometer for live tok/s gauge
+      if (typeof window._speedometerOnFeedEvent === 'function') {
+        window._speedometerOnFeedEvent(evt);
+      }
       const feed = feedEl();
       feed.prepend(renderEvent(evt));
       eventCount++;
