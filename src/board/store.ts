@@ -10,6 +10,16 @@ export interface Note {
   createdAt: string;
 }
 
+export type ArtifactType = "branch" | "report" | "deploy" | "diff" | "file" | "url";
+
+export interface Artifact {
+  type: ArtifactType;
+  url: string;
+  label: string;
+  addedAt: string;
+  addedBy?: string;
+}
+
 export type TaskStatus = "open" | "in_progress" | "in_review" | "blocked" | "done";
 
 export interface Task {
@@ -24,6 +34,7 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   notes: Note[];
+  artifacts: Artifact[];
 }
 
 export interface CreateTaskInput {
@@ -51,6 +62,13 @@ export interface AddNoteInput {
   type: Note["type"];
 }
 
+export interface AddArtifactInput {
+  type: ArtifactType;
+  url: string;
+  label: string;
+  addedBy?: string;
+}
+
 export interface TaskFilters {
   status?: TaskStatus;
   assignee?: string;
@@ -59,6 +77,7 @@ export interface TaskFilters {
 
 const VALID_STATUSES: Set<string> = new Set(["open", "in_progress", "in_review", "blocked", "done"]);
 const VALID_NOTE_TYPES: Set<string> = new Set(["finding", "blocker", "question", "update"]);
+const VALID_ARTIFACT_TYPES: Set<string> = new Set(["branch", "report", "deploy", "diff", "file", "url"]);
 
 export class BoardStore {
   private tasks: Map<string, Task> = new Map();
@@ -79,6 +98,8 @@ export class BoardStore {
         const data = JSON.parse(raw);
         if (Array.isArray(data.tasks)) {
           for (const t of data.tasks) {
+            // Backward compat: old tasks may not have artifacts
+            if (!t.artifacts) t.artifacts = [];
             this.tasks.set(t.id, t);
           }
         }
@@ -135,6 +156,7 @@ export class BoardStore {
       createdAt: now,
       updatedAt: now,
       notes: [],
+      artifacts: [],
     };
 
     this.tasks.set(task.id, task);
@@ -223,6 +245,41 @@ export class BoardStore {
     const task = this.tasks.get(taskId);
     if (!task) throw new NotFoundError("task not found");
     return task.notes;
+  }
+
+  addArtifacts(taskId: string, artifacts: AddArtifactInput[]): Artifact[] {
+    const task = this.tasks.get(taskId);
+    if (!task) throw new NotFoundError("task not found");
+
+    if (!Array.isArray(artifacts) || artifacts.length === 0) {
+      throw new ValidationError("artifacts array is required and must not be empty");
+    }
+
+    const now = new Date().toISOString();
+    const added: Artifact[] = [];
+
+    for (const a of artifacts) {
+      if (!a.type || !VALID_ARTIFACT_TYPES.has(a.type)) {
+        throw new ValidationError(`invalid artifact type: ${a.type}`);
+      }
+      if (!a.url?.trim()) throw new ValidationError("artifact url is required");
+      if (!a.label?.trim()) throw new ValidationError("artifact label is required");
+
+      const artifact: Artifact = {
+        type: a.type,
+        url: a.url.trim(),
+        label: a.label.trim(),
+        addedAt: now,
+        addedBy: a.addedBy?.trim(),
+      };
+      task.artifacts.push(artifact);
+      added.push(artifact);
+    }
+
+    task.updatedAt = now;
+    this.tasks.set(taskId, task);
+    this.scheduleSave();
+    return added;
   }
 }
 

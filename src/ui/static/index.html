@@ -11,6 +11,7 @@
     <h1>▸ Agent Services</h1>
     <nav class="tabs">
       <button class="tab active" data-view="dashboard">Dashboard</button>
+      <button class="tab" data-view="review">Review</button>
       <button class="tab" data-view="log">Log</button>
       <button class="tab" data-view="journal">Journal</button>
     </nav>
@@ -50,6 +51,22 @@
           <div class="panel-body" id="registry"></div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Review view -->
+  <div class="view" id="view-review">
+    <div class="log-toolbar">
+      <div class="log-filters">
+        <span style="color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:1px;">Tasks Awaiting Review</span>
+      </div>
+      <div class="log-meta">
+        <span id="review-count">-</span> tasks
+        <span class="log-refresh-hint">auto-refresh 30s</span>
+      </div>
+    </div>
+    <div class="review-list" id="review-list">
+      <div class="empty">Loading review queue…</div>
     </div>
   </div>
 

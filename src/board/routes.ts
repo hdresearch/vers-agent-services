@@ -5,6 +5,7 @@ import {
   ValidationError,
   type TaskFilters,
   type TaskStatus,
+  type AddArtifactInput,
 } from "./store.js";
 
 const store = new BoardStore();
@@ -43,6 +44,129 @@ boardRoutes.get("/tasks/:id", (c) => {
   const task = store.getTask(c.req.param("id"));
   if (!task) return c.json({ error: "task not found" }, 404);
   return c.json(task);
+});
+
+// List tasks in review
+boardRoutes.get("/review", (c) => {
+  const tasks = store.listTasks({ status: "in_review" });
+  // Sort by updatedAt desc (newest first)
+  tasks.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  return c.json({ tasks, count: tasks.length });
+});
+
+// Add artifact(s) to a task
+boardRoutes.post("/tasks/:id/artifacts", async (c) => {
+  try {
+    const body = await c.req.json();
+    const artifacts = store.addArtifacts(c.req.param("id"), body.artifacts);
+    const task = store.getTask(c.req.param("id"));
+    return c.json(task, 201);
+  } catch (e) {
+    if (e instanceof NotFoundError) return c.json({ error: e.message }, 404);
+    if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
+    throw e;
+  }
+});
+
+// Submit a task for review
+boardRoutes.post("/tasks/:id/review", async (c) => {
+  try {
+    const body = await c.req.json();
+    const id = c.req.param("id");
+
+    if (!body.summary?.trim()) {
+      return c.json({ error: "summary is required" }, 400);
+    }
+
+    // Set status to in_review
+    store.updateTask(id, { status: "in_review" });
+
+    // Add summary note
+    const author = body.reviewedBy?.trim() || "unknown";
+    store.addNote(id, {
+      author,
+      content: body.summary.trim(),
+      type: "update",
+    });
+
+    // Attach artifacts if provided
+    if (body.artifacts && Array.isArray(body.artifacts) && body.artifacts.length > 0) {
+      const artifactsWithAuthor = body.artifacts.map((a: AddArtifactInput) => ({
+        ...a,
+        addedBy: a.addedBy || author,
+      }));
+      store.addArtifacts(id, artifactsWithAuthor);
+    }
+
+    const task = store.getTask(id);
+    return c.json(task);
+  } catch (e) {
+    if (e instanceof NotFoundError) return c.json({ error: e.message }, 404);
+    if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
+    throw e;
+  }
+});
+
+// Approve a reviewed task
+boardRoutes.post("/tasks/:id/approve", async (c) => {
+  try {
+    const body = await c.req.json();
+    const id = c.req.param("id");
+
+    const approvedBy = body.approvedBy?.trim() || "unknown";
+    const comment = body.comment?.trim() || "";
+
+    // Set status to done
+    store.updateTask(id, { status: "done" });
+
+    // Add approval note
+    const noteContent = comment
+      ? `Approved by ${approvedBy}: ${comment}`
+      : `Approved by ${approvedBy}`;
+    store.addNote(id, {
+      author: approvedBy,
+      content: noteContent,
+      type: "update",
+    });
+
+    const task = store.getTask(id);
+    return c.json(task);
+  } catch (e) {
+    if (e instanceof NotFoundError) return c.json({ error: e.message }, 404);
+    if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
+    throw e;
+  }
+});
+
+// Reject a reviewed task
+boardRoutes.post("/tasks/:id/reject", async (c) => {
+  try {
+    const body = await c.req.json();
+    const id = c.req.param("id");
+
+    if (!body.reason?.trim()) {
+      return c.json({ error: "reason is required" }, 400);
+    }
+
+    const rejectedBy = body.rejectedBy?.trim() || "unknown";
+
+    // Set status to open
+    store.updateTask(id, { status: "open" });
+
+    // Add rejection note
+    store.addNote(id, {
+      author: rejectedBy,
+      content: `Rejected by ${rejectedBy}: ${body.reason.trim()}`,
+      type: "update",
+    });
+
+    const task = store.getTask(id);
+    return c.json(task);
+  } catch (e) {
+    if (e instanceof NotFoundError) return c.json({ error: e.message }, 404);
+    if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
+    throw e;
+  }
 });
 
 // Get a single task (convenience alias — /board/:id)

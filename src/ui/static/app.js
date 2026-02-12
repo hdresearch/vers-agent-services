@@ -336,6 +336,114 @@ function stopJournalRefresh() {
   }
 }
 
+// ─── Review Queue ───
+
+let reviewRefreshTimer = null;
+
+async function loadReview() {
+  const container = document.getElementById('review-list');
+  try {
+    const data = await api('/board/review');
+    const tasks = data.tasks || [];
+    document.getElementById('review-count').textContent = tasks.length;
+
+    if (!tasks.length) {
+      container.innerHTML = '<div class="empty">No tasks awaiting review</div>';
+      return;
+    }
+
+    let html = '';
+    for (const t of tasks) {
+      // Find the latest note (review summary)
+      const latestNote = t.notes && t.notes.length > 0 ? t.notes[t.notes.length - 1] : null;
+      const artifacts = t.artifacts || [];
+
+      let artifactsHtml = '';
+      if (artifacts.length > 0) {
+        artifactsHtml = '<div class="review-artifacts">';
+        for (const a of artifacts) {
+          let href = esc(a.url);
+          let icon = '🔗';
+          if (a.type === 'branch') { icon = '🌿'; }
+          else if (a.type === 'report') { icon = '📄'; href = a.url.startsWith('/') ? a.url : `/ui/report/${a.url}`; }
+          else if (a.type === 'deploy') { icon = '🚀'; }
+          else if (a.type === 'diff') { icon = '📝'; }
+          else if (a.type === 'file') { icon = '📁'; }
+          artifactsHtml += `<a class="review-artifact" href="${href}" target="_blank" onclick="event.stopPropagation()">${icon} ${esc(a.label)}</a>`;
+        }
+        artifactsHtml += '</div>';
+      }
+
+      const submittedBy = latestNote ? latestNote.author : t.createdBy;
+      const submittedAt = t.updatedAt;
+
+      html += `<div class="review-card" data-id="${t.id}">
+        <div class="review-card-header">
+          <div class="review-title">${esc(t.title)}</div>
+          <div class="review-meta">
+            submitted by <span class="review-author">@${esc(submittedBy)}</span>
+            <span class="review-time">${timeAgo(submittedAt)}</span>
+          </div>
+        </div>
+        ${latestNote ? `<div class="review-summary">${esc(latestNote.content)}</div>` : ''}
+        ${artifactsHtml}
+        <div class="review-actions">
+          <button class="btn btn-approve" onclick="approveTask('${t.id}')">✓ Approve</button>
+          <button class="btn btn-reject" onclick="rejectTask('${t.id}')">✗ Reject</button>
+        </div>
+      </div>`;
+    }
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = `<div class="empty">Failed to load review queue: ${esc(e.message)}</div>`;
+  }
+}
+
+async function approveTask(taskId) {
+  const comment = prompt('Approval comment (optional):');
+  if (comment === null) return; // cancelled
+  try {
+    await fetch(`${API}/board/tasks/${taskId}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comment: comment || '', approvedBy: 'dashboard-user' }),
+    });
+    loadReview();
+    loadBoard();
+  } catch (e) {
+    alert('Failed to approve: ' + e.message);
+  }
+}
+
+async function rejectTask(taskId) {
+  const reason = prompt('Rejection reason (required):');
+  if (!reason) return; // cancelled or empty
+  try {
+    await fetch(`${API}/board/tasks/${taskId}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason, rejectedBy: 'dashboard-user' }),
+    });
+    loadReview();
+    loadBoard();
+  } catch (e) {
+    alert('Failed to reject: ' + e.message);
+  }
+}
+
+function startReviewRefresh() {
+  if (reviewRefreshTimer) return;
+  loadReview();
+  reviewRefreshTimer = setInterval(loadReview, 30000);
+}
+
+function stopReviewRefresh() {
+  if (reviewRefreshTimer) {
+    clearInterval(reviewRefreshTimer);
+    reviewRefreshTimer = null;
+  }
+}
+
 // ─── Tabs ───
 
 function switchView(viewName) {
@@ -348,6 +456,11 @@ function switchView(viewName) {
   document.getElementById(`view-${viewName}`)?.classList.add('active');
 
   // Start/stop polling based on view
+  if (viewName === 'review') {
+    startReviewRefresh();
+  } else {
+    stopReviewRefresh();
+  }
   if (viewName === 'log') {
     startLogRefresh();
   } else {
