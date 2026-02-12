@@ -139,6 +139,22 @@ function buildTree() {
     modelMap[s.agent] = s.model;
   }
 
+  // Infer hierarchy from naming when parentAgent isn't in the data
+  // lt-* and worker-* are children of orchestrator (or the first non-lt agent)
+  const allNames = Object.keys(agents);
+  const hasAnyParent = Object.keys(parentMap).length > 0;
+  if (!hasAnyParent && allNames.length > 1) {
+    // Find the root — prefer "orchestrator", else the agent with most tokens, else first non-lt
+    const root = allNames.find(a => a === 'orchestrator')
+      || allNames.find(a => !a.startsWith('lt-') && !a.startsWith('worker-') && !a.startsWith('sub-'))
+      || allNames.reduce((best, a) => (agents[a]?.tokens || 0) > (agents[best]?.tokens || 0) ? a : best, allNames[0]);
+    for (const name of allNames) {
+      if (name !== root && (name.startsWith('lt-') || name.startsWith('worker-') || name.startsWith('sub-'))) {
+        parentMap[name] = root;
+      }
+    }
+  }
+
   // Determine max tokens for sizing
   const maxTokens = Math.max(...Object.values(agents).map(a => a.tokens || 0), 1);
   treeNodes = [];
