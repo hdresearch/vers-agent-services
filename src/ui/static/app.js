@@ -457,6 +457,8 @@ function stopReviewRefresh() {
   if (reviewRefreshTimer) {
     clearInterval(reviewRefreshTimer);
     reviewRefreshTimer = null;
+  }
+}
 
 // ─── Skills ───
 
