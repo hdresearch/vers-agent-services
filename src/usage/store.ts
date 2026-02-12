@@ -145,12 +145,8 @@ function validateCostBreakdown(cost: any): cost is CostBreakdown {
 
 // --- Errors ---
 
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ValidationError";
-  }
-}
+export { ValidationError } from "../errors.js";
+import { ValidationError } from "../errors.js";
 
 // --- Promisified DuckDB helpers ---
 
