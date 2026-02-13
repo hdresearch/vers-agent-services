@@ -92,19 +92,8 @@ export interface SkillFilters {
 
 // ─── Errors ──────────────────────────────────────────────────
 
-export class NotFoundError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NotFoundError";
-  }
-}
-
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ValidationError";
-  }
-}
+export { NotFoundError, ValidationError } from "../errors.js";
+import { NotFoundError, ValidationError } from "../errors.js";
 
 // ─── Change Subscriber ──────────────────────────────────────
 
