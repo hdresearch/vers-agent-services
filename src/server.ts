@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { bearerAuth } from "./auth.js";
+import { rateLimit } from "./middleware/rate-limit.js";
 import { boardRoutes } from "./board/routes.js";
 import { feedRoutes } from "./feed/routes.js";
 import { logRoutes } from "./log/routes.js";
@@ -33,6 +34,11 @@ app.use("/reports/*", bearerAuth());
 app.use("/usage/*", bearerAuth());
 app.use("/commits/*", bearerAuth());
 app.use("/journal/*", bearerAuth());
+
+// Rate limiting for write endpoints (applied after auth)
+app.post("/feed/events", rateLimit({ windowMs: 60_000, maxRequests: 60 }));
+app.post("/log", rateLimit({ windowMs: 60_000, maxRequests: 30 }));
+app.post("/board/tasks", rateLimit({ windowMs: 60_000, maxRequests: 30 }));
 
 // Mount service routes
 app.route("/board", boardRoutes);
