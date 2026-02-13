@@ -40,7 +40,7 @@ export function createShareAdminRoutes(shareStore: ShareStore, reportsStore: Rep
     });
 
     const host = c.req.header("host") || "localhost:3000";
-    const proto = c.req.header("x-forwarded-proto") || "http";
+    const proto = c.req.header("x-forwarded-proto") || (host.includes("vers.sh") ? "https" : "http");
     const url = `${proto}://${host}/reports/share/${link.linkId}`;
 
     return c.json({ linkId: link.linkId, url }, 201);
@@ -152,7 +152,7 @@ export function createSharePublicRoutes(shareStore: ShareStore, reportsStore: Re
 
     // Build OG meta tags for link unfurling
     const host = c.req.header("host") || "localhost:3000";
-    const proto = c.req.header("x-forwarded-proto") || "http";
+    const proto = c.req.header("x-forwarded-proto") || (host.includes("vers.sh") ? "https" : "http");
     const ogImageUrl = `${proto}://${host}/reports/share/${linkId}/og-image.svg`;
     const ogTitle = report.title.replace(/"/g, "&quot;");
     const ogDescription = `Report by @${report.author}`.replace(/"/g, "&quot;");
@@ -173,7 +173,7 @@ export function createSharePublicRoutes(shareStore: ShareStore, reportsStore: Re
     // We inject the report data directly so no additional API call is needed
     const template = getReportHtml();
     const html = template.replace("</head>", `    ${ogMetaTags}\n</head>`).replace(
-      "loadReport();",
+      /loadReport\(\)(?:\.then\(renderMermaidBlocks\))?;/,
       `
       // Injected report data — no API call needed for shared reports
       (function() {
@@ -196,6 +196,7 @@ export function createSharePublicRoutes(shareStore: ShareStore, reportsStore: Re
             tags +
           '</div>' +
           '<div class="report-content">' + renderMarkdown(report.content) + '</div>';
+        if (typeof renderMermaidBlocks === 'function') renderMermaidBlocks();
       })();
       `
     );

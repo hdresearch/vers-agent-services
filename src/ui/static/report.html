@@ -258,9 +258,8 @@
           throw new Error(err.error || `HTTP ${res.status}`);
         }
         const data = await res.json();
-        let shareUrl = data.url || '';
+        const shareUrl = `${window.location.origin}/reports/share/${data.linkId}`;
         // Ensure https
-        shareUrl = shareUrl.replace(/^http:\/\//, 'https://');
 
         await navigator.clipboard.writeText(shareUrl).catch(() => {
           prompt('Share this URL:', shareUrl);
