@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
 export type VMStatus = "running" | "paused" | "stopped";
@@ -100,7 +100,9 @@ export class RegistryStore {
       mkdirSync(dir, { recursive: true });
     }
     const data = JSON.stringify({ vms: Array.from(this.vms.values()) }, null, 2);
-    writeFileSync(this.filePath, data, "utf-8");
+    const tmpPath = this.filePath + ".tmp";
+    writeFileSync(tmpPath, data, "utf-8");
+    renameSync(tmpPath, this.filePath);
   }
 
   private isStale(vm: RegisteredVM): boolean {

@@ -1,5 +1,5 @@
 import { ulid } from "ulid";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
 export interface Note {
@@ -132,7 +132,9 @@ export class BoardStore {
       mkdirSync(dir, { recursive: true });
     }
     const data = JSON.stringify({ tasks: Array.from(this.tasks.values()) }, null, 2);
-    writeFileSync(this.filePath, data, "utf-8");
+    const tmpPath = this.filePath + ".tmp";
+    writeFileSync(tmpPath, data, "utf-8");
+    renameSync(tmpPath, this.filePath);
   }
 
   createTask(input: CreateTaskInput): Task {
