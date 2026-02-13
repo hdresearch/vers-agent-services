@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { ShareStore } from "./share-store.js";
 import { ReportsStore } from "./store.js";
+import { generateOgImage } from "./og-image.js";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,6 +93,28 @@ export function createShareAdminRoutes(shareStore: ShareStore, reportsStore: Rep
 export function createSharePublicRoutes(shareStore: ShareStore, reportsStore: ReportsStore): Hono {
   const routes = new Hono();
 
+  // GET /reports/share/:linkId/og-image.svg — dynamic OG preview image
+  routes.get("/share/:linkId/og-image.svg", (c) => {
+    const linkId = c.req.param("linkId");
+    const link = shareStore.validateLink(linkId);
+    if (!link) {
+      return c.text("Not found", 404);
+    }
+
+    const report = reportsStore.get(link.reportId);
+    if (!report) {
+      return c.text("Not found", 404);
+    }
+
+    const svg = generateOgImage(report.title, report.author);
+    return new Response(svg, {
+      headers: {
+        "Content-Type": "image/svg+xml",
+        "Cache-Control": "public, max-age=3600",
+      },
+    });
+  });
+
   // GET /reports/share/:linkId — public report access via share link
   routes.get("/share/:linkId", (c) => {
     const linkId = c.req.param("linkId");
@@ -127,10 +150,29 @@ export function createSharePublicRoutes(shareStore: ShareStore, reportsStore: Re
       referrer: c.req.header("referer") || undefined,
     });
 
+    // Build OG meta tags for link unfurling
+    const host = c.req.header("host") || "localhost:3000";
+    const proto = c.req.header("x-forwarded-proto") || "http";
+    const ogImageUrl = `${proto}://${host}/reports/share/${linkId}/og-image.svg`;
+    const ogTitle = report.title.replace(/"/g, "&quot;");
+    const ogDescription = `Report by @${report.author}`.replace(/"/g, "&quot;");
+    const ogMetaTags = [
+      `<meta property="og:type" content="article">`,
+      `<meta property="og:title" content="${ogTitle}">`,
+      `<meta property="og:description" content="${ogDescription}">`,
+      `<meta property="og:image" content="${ogImageUrl}">`,
+      `<meta property="og:image:width" content="1200">`,
+      `<meta property="og:image:height" content="630">`,
+      `<meta name="twitter:card" content="summary_large_image">`,
+      `<meta name="twitter:title" content="${ogTitle}">`,
+      `<meta name="twitter:description" content="${ogDescription}">`,
+      `<meta name="twitter:image" content="${ogImageUrl}">`,
+    ].join("\n    ");
+
     // Render the report inline using the report.html template
     // We inject the report data directly so no additional API call is needed
     const template = getReportHtml();
-    const html = template.replace(
+    const html = template.replace("</head>", `    ${ogMetaTags}\n</head>`).replace(
       "loadReport();",
       `
       // Injected report data — no API call needed for shared reports
