@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { atomicWriteFileSync, recoverTmpFile } from "../utils/atomic-write.js";
 
 export interface Note {
   id: string;
@@ -93,6 +93,7 @@ export class BoardStore {
   }
 
   private load(): void {
+    recoverTmpFile(this.filePath);
     try {
       if (existsSync(this.filePath)) {
         const raw = readFileSync(this.filePath, "utf-8");
@@ -127,12 +128,8 @@ export class BoardStore {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;
     }
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
     const data = JSON.stringify({ tasks: Array.from(this.tasks.values()) }, null, 2);
-    writeFileSync(this.filePath, data, "utf-8");
+    atomicWriteFileSync(this.filePath, data);
   }
 
   createTask(input: CreateTaskInput): Task {
