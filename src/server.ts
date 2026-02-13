@@ -11,6 +11,7 @@ import { usageRoutes } from "./usage/routes.js";
 import { commitRoutes } from "./commits/routes.js";
 import { journalRoutes } from "./journal/routes.js";
 import { uiRoutes } from "./ui/routes.js";
+import { twilioRoutes } from "./twilio/routes.js";
 
 const app = new Hono();
 
@@ -22,6 +23,9 @@ app.route("/", uiRoutes);
 
 // Public share link route — NO auth required (must be before bearer auth)
 app.route("/reports", sharePublicRoutes);
+
+// Twilio webhook — NO bearer auth (uses X-Twilio-Signature validation)
+app.route("/twilio", twilioRoutes);
 
 // Bearer auth — applied per-route to API endpoints
 app.use("/board/*", bearerAuth());
