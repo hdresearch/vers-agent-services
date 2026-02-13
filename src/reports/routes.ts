@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { ReportsStore, ValidationError, type ReportFilters } from "./store.js";
+import { ReportsStore, ValidationError, NotFoundError, type ReportFilters } from "./store.js";
 import { ShareStore } from "./share-store.js";
 import { createShareAdminRoutes, createSharePublicRoutes } from "./share-routes.js";
 
@@ -40,6 +40,19 @@ reportsRoutes.get("/:id", (c) => {
   const report = reportsStore.get(c.req.param("id"));
   if (!report) return c.json({ error: "report not found" }, 404);
   return c.json(report);
+});
+
+// Update a report (partial)
+reportsRoutes.patch("/:id", async (c) => {
+  try {
+    const body = await c.req.json();
+    const report = reportsStore.update(c.req.param("id"), body);
+    return c.json(report);
+  } catch (e) {
+    if (e instanceof NotFoundError) return c.json({ error: e.message }, 404);
+    if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
+    throw e;
+  }
 });
 
 // Delete a report
