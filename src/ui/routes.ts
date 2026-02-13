@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { createMagicLink, consumeMagicLink, createSession, validateSession } from "./auth.js";
+import { processAnalyticsQuery } from "./analytics.js";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -125,6 +126,25 @@ uiRoutes.get("/ui/static/:file", (c) => {
     return c.body(content, 200, { "Content-Type": contentType });
   } catch {
     return c.text("Not found", 404);
+  }
+});
+
+// ─── Analytics Query Endpoint ───
+
+uiRoutes.post("/ui/api/analytics/query", async (c) => {
+  // Session auth check
+  const sessionId = getSessionId(c);
+  if (!validateSession(sessionId)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  try {
+    const body = await c.req.json();
+    const question = body.question || body.q || "";
+    const result = await processAnalyticsQuery(question);
+    return c.json(result);
+  } catch (e: any) {
+    return c.json({ answer: `Error: ${e.message}` }, 500);
   }
 });
 

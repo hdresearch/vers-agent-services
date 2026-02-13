@@ -437,33 +437,70 @@ function layoutTree(roots, nodeIndex) {
     if (levels[node.name] === undefined) levels[node.name] = 1;
   }
 
-  // Group by level
-  const byLevel = {};
-  for (const node of treeNodes) {
-    const lv = levels[node.name];
-    if (!byLevel[lv]) byLevel[lv] = [];
-    byLevel[lv].push(node);
+  // Use a tree-aware layout: position children centered under their parent
+  // First, count subtree widths for proper spacing
+  function subtreeWidth(name) {
+    const node = nodeIndex[name];
+    if (!node) return 1;
+    const children = treeNodes.filter(n => n.parent === name);
+    if (children.length === 0) return 1;
+    let w = 0;
+    for (const c of children) w += subtreeWidth(c.name);
+    return Math.max(w, 1);
   }
 
-  const levelKeys = Object.keys(byLevel).map(Number).sort((a, b) => a - b);
   const cx = canvasW / 2;
-  const cy = canvasH * 0.18;
-  const levelSpacing = Math.min(canvasH * 0.28, 180);
+  const cy = canvasH * 0.12;
+  const levelSpacing = Math.min(canvasH * 0.25, 160);
+  // Min horizontal spacing between leaf nodes
+  const minLeafSpacing = Math.max(90, canvasW / (treeNodes.length + 4));
 
-  for (const lv of levelKeys) {
-    const nodes = byLevel[lv];
-    const count = nodes.length;
-    const totalWidth = canvasW * 0.7;
-    const spacing = count > 1 ? totalWidth / (count - 1) : 0;
-    const startX = cx - totalWidth / 2;
+  function positionSubtree(name, xCenter, level) {
+    const node = nodeIndex[name];
+    if (!node) return;
+    node.x = xCenter + (Math.random() - 0.5) * 8;
+    node.y = cy + level * levelSpacing + (Math.random() - 0.5) * 6;
+    node.homeX = node.x;
+    node.homeY = node.y;
 
-    for (let i = 0; i < count; i++) {
-      const nx = count === 1 ? cx : startX + i * spacing;
-      const ny = cy + lv * levelSpacing;
-      nodes[i].x = nx + (Math.random() - 0.5) * 20;
-      nodes[i].y = ny + (Math.random() - 0.5) * 10;
-      nodes[i].homeX = nodes[i].x;
-      nodes[i].homeY = nodes[i].y;
+    const children = treeNodes.filter(n => n.parent === name);
+    if (children.length === 0) return;
+
+    const childWidths = children.map(c => subtreeWidth(c.name));
+    const totalWidth = childWidths.reduce((s, w) => s + w, 0);
+    const actualWidth = totalWidth * minLeafSpacing;
+    let xStart = xCenter - actualWidth / 2;
+
+    for (let i = 0; i < children.length; i++) {
+      const childWidth = childWidths[i] * minLeafSpacing;
+      const childCenter = xStart + childWidth / 2;
+      positionSubtree(children[i].name, childCenter, level + 1);
+      xStart += childWidth;
+    }
+  }
+
+  // Position each root
+  const rootNodes = roots.filter(r => nodeIndex[r]);
+  if (rootNodes.length === 1) {
+    positionSubtree(rootNodes[0], cx, 0);
+  } else {
+    const totalRootWidth = rootNodes.reduce((s, r) => s + subtreeWidth(r), 0);
+    const rootSpacing = Math.max(minLeafSpacing, canvasW * 0.8 / totalRootWidth);
+    let xStart = cx - (totalRootWidth * rootSpacing) / 2;
+    for (const r of rootNodes) {
+      const w = subtreeWidth(r) * rootSpacing;
+      positionSubtree(r, xStart + w / 2, 0);
+      xStart += w;
+    }
+  }
+
+  // Orphan nodes (no parent, not a root) — position them at the bottom
+  for (const node of treeNodes) {
+    if (levels[node.name] === undefined || (node.x === 0 && node.y === 0)) {
+      node.x = cx + (Math.random() - 0.5) * canvasW * 0.4;
+      node.y = canvasH * 0.7 + (Math.random() - 0.5) * 40;
+      node.homeX = node.x;
+      node.homeY = node.y;
     }
   }
 
@@ -541,10 +578,10 @@ function collapseRecursive(node) {
 function tickForces() {
   const centerX = canvasW / 2;
   const centerY = canvasH * 0.4;
-  const damping = 0.92;
-  const repulsion = 2000;
-  const edgeAttraction = 0.003;
-  const centerGravity = 0.0002;
+  const damping = 0.90;
+  const repulsion = 3500;
+  const edgeAttraction = 0.002;
+  const centerGravity = 0.0003;
 
   // Animate expandT toward expandTarget
   for (const node of treeNodes) {
@@ -905,29 +942,37 @@ function drawNodes(ctx, time) {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // Agent name label
-    ctx.font = '11px "SF Mono", "Cascadia Code", "Fira Code", monospace';
+    // Agent name label — scale font with node size for readability
+    const fontSize = Math.max(9, Math.min(12, r * 0.35));
+    ctx.font = `${isHovered ? 'bold ' : ''}${fontSize}px "SF Mono", "Cascadia Code", "Fira Code", monospace`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
     let displayName = node.name;
-    if (displayName.length > 14) displayName = displayName.slice(0, 12) + '…';
+    // Truncate based on available radius
+    const maxChars = Math.max(6, Math.floor(r * 0.45));
+    if (displayName.length > maxChars) displayName = displayName.slice(0, maxChars - 1) + '…';
 
     ctx.fillStyle = `rgba(${colorRgb}, ${0.7 + glowIntensity * 0.3})`;
     ctx.fillText(displayName, node.x, node.y - (node.hasChildren && node.collapsed ? 4 : 0));
 
-    // Token count below name
+    // Token count below name — outside the bubble for clarity
     const tokenStr = formatTokensShort(displayTokens);
     ctx.font = '9px "SF Mono", "Cascadia Code", "Fira Code", monospace';
     ctx.fillStyle = C.textDim;
     ctx.fillText(tokenStr, node.x, node.y + r + 14);
 
+    // Cost below tokens
+    ctx.font = '8px "SF Mono", "Cascadia Code", "Fira Code", monospace';
+    ctx.fillStyle = 'rgba(255, 170, 0, 0.5)';
+    ctx.fillText('$' + node.cost.toFixed(2), node.x, node.y + r + 25);
+
     // Expand/collapse hint for parent nodes
     if (node.hasChildren && isHovered) {
-      const hint = node.collapsed ? 'click to expand' : 'click to collapse';
-      ctx.font = '8px "SF Mono", "Cascadia Code", "Fira Code", monospace';
-      ctx.fillStyle = `rgba(${colorRgb}, 0.4)`;
-      ctx.fillText(hint, node.x, node.y + r + 26);
+      const hint = node.collapsed ? '▶ expand' : '▼ collapse';
+      ctx.font = 'bold 8px "SF Mono", "Cascadia Code", "Fira Code", monospace';
+      ctx.fillStyle = `rgba(${colorRgb}, 0.6)`;
+      ctx.fillText(hint, node.x, node.y + r + 37);
     }
 
     // Drag indicator
@@ -949,20 +994,22 @@ function drawHoverTooltip(ctx) {
 
   const isCollapsed = node.hasChildren && node.collapsed;
   const lines = [
-    node.name,
-    `tokens: ${formatNumber(isCollapsed ? node.rollupTokens : node.ownTokens)}` +
-      (isCollapsed ? ' (rollup)' : ''),
-    `cost: $${node.cost.toFixed(2)}`,
-    `sessions: ${node.sessions}`,
-    `model: ${node.model}`,
+    { text: node.name, bold: true, color: C.textBright },
+    { text: `tokens: ${formatNumber(isCollapsed ? node.rollupTokens : node.ownTokens)}${isCollapsed ? ' (subtree)' : ''}`, color: C.cyan },
+    { text: `cost: $${node.cost.toFixed(2)}`, color: '#ffaa00' },
+    { text: `sessions: ${node.sessions}`, color: C.text },
+    { text: `model: ${node.model}`, color: C.textDim },
   ];
   if (node.hasChildren) {
-    lines.push(`children: ${node.children.length} ${node.collapsed ? '(collapsed)' : '(expanded)'}`);
+    lines.push({ text: `children: ${node.children.length} ${node.collapsed ? '(collapsed)' : '(expanded)'}`, color: C.textDim });
+  }
+  if (node.recency > 0.5) {
+    lines.push({ text: '● recently active', color: '#44ff88' });
   }
 
   const padding = 12;
   const lineHeight = 18;
-  const width = 240;
+  const width = 260;
   const height = lines.length * lineHeight + padding * 2;
 
   let tx = mouseX + 20;
@@ -987,14 +1034,10 @@ function drawHoverTooltip(ctx) {
   ctx.textBaseline = 'top';
 
   for (let i = 0; i < lines.length; i++) {
-    if (i === 0) {
-      ctx.font = 'bold 12px "SF Mono", "Cascadia Code", "Fira Code", monospace';
-      ctx.fillStyle = C.textBright;
-    } else {
-      ctx.font = '11px "SF Mono", "Cascadia Code", "Fira Code", monospace';
-      ctx.fillStyle = C.text;
-    }
-    ctx.fillText(lines[i], tx + padding, ty + padding + i * lineHeight);
+    const line = lines[i];
+    ctx.font = (line.bold ? 'bold ' : '') + '11px "SF Mono", "Cascadia Code", "Fira Code", monospace';
+    ctx.fillStyle = line.color || C.text;
+    ctx.fillText(line.text, tx + padding, ty + padding + i * lineHeight);
   }
 }
 
@@ -1144,6 +1187,9 @@ function hexToRgb(hex) {
 
 // ─── Metrics Panel ───
 
+// Track last panel data hash to avoid unnecessary DOM rebuilds
+let lastPanelHash = '';
+
 function renderMetricsPanel() {
   if (!summaryData) return;
 
@@ -1162,9 +1208,20 @@ function renderMetricsPanel() {
   const agentList = Object.entries(agents)
     .sort(([, a], [, b]) => (b.cost || 0) - (a.cost || 0));
 
-  let agentHTML = '';
+  // Compute hash to skip DOM rebuild if data unchanged
+  const panelHash = JSON.stringify({ agents, modelBreakdown });
+  if (panelHash === lastPanelHash) return;
+  lastPanelHash = panelHash;
+
+  const panelEl = document.getElementById('metrics-panel-content');
+  if (!panelEl) return;
+
+  // Save scroll position
+  const scrollTop = panelEl.scrollTop;
+
   const maxAgentTokens = Math.max(...agentList.map(([, a]) => a.tokens || 0), 1);
 
+  let agentHTML = '';
   for (const [name, data] of agentList) {
     const pct = ((data.tokens || 0) / maxAgentTokens * 100).toFixed(0);
     const isRoot = name === 'orchestrator';
@@ -1195,19 +1252,19 @@ function renderMetricsPanel() {
       </div>`;
   }
 
-  const panelEl = document.getElementById('metrics-panel-content');
-  if (panelEl) {
-    panelEl.innerHTML = `
-      <div class="m-section">
-        <div class="m-section-label">BY AGENT</div>
-        ${agentHTML}
-      </div>
-      <div class="m-section">
-        <div class="m-section-label">BY MODEL</div>
-        ${modelHTML || '<div class="m-empty">No model data</div>'}
-      </div>
-    `;
-  }
+  panelEl.innerHTML = `
+    <div class="m-section">
+      <div class="m-section-label">BY AGENT</div>
+      ${agentHTML}
+    </div>
+    <div class="m-section">
+      <div class="m-section-label">BY MODEL</div>
+      ${modelHTML || '<div class="m-empty">No model data</div>'}
+    </div>
+  `;
+
+  // Restore scroll position
+  panelEl.scrollTop = scrollTop;
 }
 
 // ─── Animated Counters ───
@@ -1516,12 +1573,8 @@ function resizeCanvases() {
   timelineCanvas.height = th;
   timelineCtx = timelineCanvas.getContext('2d');
 
-  if (treeNodes.length > 0) {
-    const roots = treeNodes.filter(n => n.isRoot).map(n => n.name);
-    const nodeIndex = {};
-    treeNodes.forEach(n => nodeIndex[n.name] = n);
-    layoutTree(roots, nodeIndex);
-  }
+  // DON'T re-layout on resize — just let force simulation adapt.
+  // Re-layouting resets all node positions which is jarring.
 
   drawSparkline();
 }
@@ -1531,9 +1584,20 @@ function resizeCanvases() {
 window.metricsInit = function() {
   if (metricsActive) return;
   metricsActive = true;
-  setupCanvases();
+
+  // Only setup canvases once — preserve state across tab switches
+  if (!treeCanvas) {
+    setupCanvases();
+  } else {
+    // Canvas already exists — just resize in case container changed
+    resizeCanvases();
+  }
+
+  // Fetch data (will update in-place if tree already built)
   fetchMetricsData();
-  animate();
+
+  // Resume animation
+  if (!animFrame) animate();
 
   // Start the token burn speedometer
   if (typeof window._speedometerInit === 'function') window._speedometerInit();
@@ -1545,19 +1609,13 @@ window.metricsInit = function() {
 
 window.metricsDestroy = function() {
   metricsActive = false;
-  treeBuiltOnce = false;
+  // NOTE: intentionally do NOT reset treeBuiltOnce — preserve tree state across tab switches
   if (animFrame) cancelAnimationFrame(animFrame);
+  animFrame = null;
   if (window._metricsRefresh) clearInterval(window._metricsRefresh);
-  window.removeEventListener('resize', resizeCanvases);
 
   // Stop the token burn speedometer
   if (typeof window._speedometerDestroy === 'function') window._speedometerDestroy();
 
-  // Clean up canvas listeners
-  if (treeCanvas) {
-    treeCanvas.removeEventListener('mousedown', onMouseDown);
-    treeCanvas.removeEventListener('mousemove', onMouseMove);
-    treeCanvas.removeEventListener('mouseup', onMouseUp);
-    treeCanvas.removeEventListener('mouseleave', onMouseLeave);
-  }
+  // Don't remove listeners — canvas persists, we just pause animation
 };
