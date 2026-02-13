@@ -12,6 +12,7 @@ import { commitRoutes } from "./commits/routes.js";
 import { journalRoutes } from "./journal/routes.js";
 import { uiRoutes } from "./ui/routes.js";
 import { twilioRoutes } from "./twilio/routes.js";
+import { webhookRoutes } from "./webhooks/routes.js";
 
 const app = new Hono();
 
@@ -26,6 +27,9 @@ app.route("/reports", sharePublicRoutes);
 
 // Twilio webhook — NO bearer auth (uses X-Twilio-Signature validation)
 app.route("/twilio", twilioRoutes);
+
+// Gitea webhook — NO bearer auth (uses HMAC signature validation)
+app.route("/webhooks", webhookRoutes);
 
 // Bearer auth — applied per-route to API endpoints
 app.use("/board/*", bearerAuth());
