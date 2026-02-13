@@ -37,6 +37,8 @@ async function loadBoard() {
   }
 }
 
+let lastBoardHash = '';
+
 function renderBoard(tasks) {
   const board = document.getElementById('board');
   const grouped = {};
@@ -44,6 +46,22 @@ function renderBoard(tasks) {
   for (const t of tasks) {
     (grouped[t.status] || grouped['open']).push(t);
   }
+
+  // Update stats (always safe — these are just text nodes)
+  document.getElementById('stat-total').textContent = tasks.length;
+  document.getElementById('stat-open').textContent = grouped['open'].length;
+  document.getElementById('stat-blocked').textContent = grouped['blocked'].length;
+
+  // Compute a hash to detect actual data changes — skip DOM rebuild if unchanged
+  const boardHash = JSON.stringify(tasks.map(t => t.id + ':' + t.status + ':' + (t.score || 0) + ':' + (t.notes || []).length));
+  if (boardHash === lastBoardHash) return;
+  lastBoardHash = boardHash;
+
+  // Preserve expanded state of task cards across re-render
+  const expandedIds = new Set();
+  board.querySelectorAll('.task-card.expanded').forEach(el => {
+    if (el.dataset.id) expandedIds.add(el.dataset.id);
+  });
 
   let html = '';
   for (const status of STATUS_ORDER) {
@@ -60,7 +78,8 @@ function renderBoard(tasks) {
       const scoreBadge = score > 0
         ? `<span class="score-badge">${score}</span>`
         : `<span class="score-badge dim">0</span>`;
-      html += `<div class="task-card status-${status}" onclick="this.classList.toggle('expanded')" data-id="${t.id}">
+      const isExpanded = expandedIds.has(t.id) ? ' expanded' : '';
+      html += `<div class="task-card status-${status}${isExpanded}" onclick="this.classList.toggle('expanded')" data-id="${t.id}">
         <div class="task-top">
           <div class="title">${esc(t.title)}</div>
           <button class="bump-btn" onclick="event.stopPropagation(); bumpTask('${t.id}')" title="Bump score">👆 ${scoreBadge}</button>
@@ -77,11 +96,6 @@ function renderBoard(tasks) {
   }
 
   board.innerHTML = html || '<div class="empty">No tasks</div>';
-
-  // Update stats
-  document.getElementById('stat-total').textContent = tasks.length;
-  document.getElementById('stat-open').textContent = grouped['open'].length;
-  document.getElementById('stat-blocked').textContent = grouped['blocked'].length;
 }
 
 async function bumpTask(taskId) {
@@ -177,13 +191,21 @@ async function loadRegistry() {
   }
 }
 
+let lastRegistryHash = '';
+
 function renderRegistry(vms) {
   const reg = document.getElementById('registry');
+  document.getElementById('stat-vms').textContent = vms.length || '0';
+
   if (!vms.length) {
     reg.innerHTML = '<div class="empty">No VMs registered</div>';
-    document.getElementById('stat-vms').textContent = '0';
     return;
   }
+
+  // Skip DOM rebuild if data unchanged
+  const regHash = JSON.stringify(vms.map(v => v.id + ':' + (v.status || '') + ':' + (v.lastSeen || v.registeredAt)));
+  if (regHash === lastRegistryHash) return;
+  lastRegistryHash = regHash;
 
   let html = '';
   for (const vm of vms) {
@@ -200,7 +222,6 @@ function renderRegistry(vms) {
     </div>`;
   }
   reg.innerHTML = html;
-  document.getElementById('stat-vms').textContent = vms.length;
 }
 
 // ─── Reports ───
@@ -214,13 +235,21 @@ async function loadReports() {
   }
 }
 
+let lastReportsHash = '';
+
 function renderReports(reports) {
   const el = document.getElementById('reports');
+  document.getElementById('stat-reports').textContent = reports.length || '0';
+
   if (!reports.length) {
     el.innerHTML = '<div class="empty">No reports</div>';
-    document.getElementById('stat-reports').textContent = '0';
     return;
   }
+
+  // Skip DOM rebuild if data unchanged
+  const repHash = JSON.stringify(reports.map(r => r.id + ':' + r.title));
+  if (repHash === lastReportsHash) return;
+  lastReportsHash = repHash;
 
   let html = '';
   for (const r of reports) {
@@ -235,7 +264,6 @@ function renderReports(reports) {
     </a>`;
   }
   el.innerHTML = html;
-  document.getElementById('stat-reports').textContent = reports.length;
 }
 
 // ─── Log ───
@@ -618,6 +646,8 @@ function stopSkillsRefresh() {
 // ─── Tabs ───
 
 function switchView(viewName) {
+  activeView = viewName;
+
   // Update tab buttons
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelector(`.tab[data-view="${viewName}"]`)?.classList.add('active');
@@ -625,6 +655,13 @@ function switchView(viewName) {
   // Update views
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(`view-${viewName}`)?.classList.add('active');
+
+  // Refresh board data when switching back to it
+  if (viewName === 'board') {
+    loadBoard();
+    loadRegistry();
+    loadReports();
+  }
 
   // Start/stop polling based on view
   if (viewName === 'review') {
@@ -682,16 +719,26 @@ function switchMetricsSubview(name) {
   }
 }
 
+// ─── Active View Tracking ───
+
+let activeView = 'board';
+
 // ─── Init ───
 
 async function init() {
   await Promise.all([loadBoard(), loadFeed(), loadRegistry(), loadReports()]);
   startSSE();
 
-  // Poll board, registry, reports every 10s
-  setInterval(loadBoard, 10000);
-  setInterval(loadRegistry, 10000);
-  setInterval(loadReports, 10000);
+  // Poll board, registry, reports every 10s — but only refresh visible views
+  setInterval(() => {
+    if (activeView === 'board') loadBoard();
+  }, 10000);
+  setInterval(() => {
+    if (activeView === 'board') loadRegistry();
+  }, 10000);
+  setInterval(() => {
+    if (activeView === 'board') loadReports();
+  }, 10000);
 
   // Tab switching
   document.querySelectorAll('.tab').forEach(tab => {

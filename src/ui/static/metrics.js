@@ -55,6 +55,8 @@ let counterValues = { tokens: 0, cost: 0, sessions: 0, agents: 0 };
 
 // ─── Data Fetching ───
 
+let treeBuiltOnce = false;
+
 async function fetchMetricsData() {
   try {
     const [summaryRes, sessionsRes] = await Promise.all([
@@ -72,11 +74,21 @@ async function fetchMetricsData() {
       counterTargets.agents = summaryData.byAgent ? Object.keys(summaryData.byAgent).length : 0;
     }
 
-    buildTree();
+    if (!treeBuiltOnce) {
+      buildTree();
+      // Bug fix: warm up physics so bubbles don't start overlapping
+      for (let i = 0; i < 120; i++) tickForces();
+      treeBuiltOnce = true;
+    } else {
+      // Data refresh: update existing nodes in-place, don't rebuild
+      updateTreeData();
+    }
     renderMetricsPanel();
   } catch (e) {
     console.error('Metrics fetch error:', e);
-    useDemoData();
+    if (!treeBuiltOnce) {
+      useDemoData();
+    }
   }
 }
 
@@ -117,7 +129,105 @@ function useDemoData() {
   counterTargets.agents = Object.keys(summaryData.byAgent).length;
 
   buildTree();
+  // Bug fix: warm up physics so bubbles don't start overlapping
+  for (let i = 0; i < 120; i++) tickForces();
+  treeBuiltOnce = true;
   renderMetricsPanel();
+}
+
+// ─── Tree Data Update (in-place, preserves positions & state) ───
+
+function updateTreeData() {
+  if (!summaryData || !sessionsData) return;
+
+  const agents = summaryData.byAgent || {};
+  const sessions = sessionsData.sessions || [];
+  const maxTokens = Math.max(...Object.values(agents).map(a => a.tokens || 0), 1);
+
+  // Build model map from sessions
+  const modelMap = {};
+  for (const s of sessions) {
+    modelMap[s.agent] = s.model;
+  }
+
+  // Check if agent list changed — if so, full rebuild is needed
+  const currentNames = new Set(treeNodes.map(n => n.name));
+  const newNames = new Set(Object.keys(agents));
+  const added = [...newNames].filter(n => !currentNames.has(n));
+  const removed = [...currentNames].filter(n => !newNames.has(n));
+
+  if (added.length > 0 || removed.length > 0) {
+    // Agent list changed, need full rebuild but preserve what we can
+    const oldPositions = {};
+    const oldState = {};
+    for (const node of treeNodes) {
+      oldPositions[node.name] = { x: node.x, y: node.y, vx: node.vx, vy: node.vy };
+      oldState[node.name] = { collapsed: node.collapsed, expandT: node.expandT, expandTarget: node.expandTarget };
+    }
+    buildTree();
+    // Restore positions and state for nodes that still exist
+    for (const node of treeNodes) {
+      if (oldPositions[node.name]) {
+        node.x = oldPositions[node.name].x;
+        node.y = oldPositions[node.name].y;
+        node.vx = oldPositions[node.name].vx;
+        node.vy = oldPositions[node.name].vy;
+        node.collapsed = oldState[node.name].collapsed;
+        node.expandT = oldState[node.name].expandT;
+        node.expandTarget = oldState[node.name].expandTarget;
+      }
+    }
+    return;
+  }
+
+  // Same agents — update data in place
+  for (const node of treeNodes) {
+    const a = agents[node.name];
+    if (!a) continue;
+    node.ownTokens = a.tokens || 0;
+    node.tokens = a.tokens || 0;
+    node.cost = a.cost || 0;
+    node.sessions = a.sessions || 0;
+    node.model = modelMap[node.name] || node.model;
+    node.tokenRatio = (a.tokens || 0) / maxTokens;
+
+    // Recalculate recency
+    const agentSessions = sessions.filter(s => s.agent === node.name);
+    const latestEnd = agentSessions.reduce((max, s) => {
+      const t = new Date(s.endedAt).getTime();
+      return t > max ? t : max;
+    }, 0);
+    node.recency = Math.max(0, 1 - (Date.now() - latestEnd) / (24 * 3600000));
+  }
+
+  // Recompute rollup tokens
+  const nodeIndex = {};
+  treeNodes.forEach(n => nodeIndex[n.name] = n);
+  function computeRollup(node) {
+    let sum = node.ownTokens;
+    for (const child of node.children) sum += computeRollup(child);
+    node.rollupTokens = sum;
+    return sum;
+  }
+  const roots = treeNodes.filter(n => n.isRoot);
+  for (const r of roots) computeRollup(r);
+
+  // Recompute radii
+  const maxRollup = Math.max(...treeNodes.map(n => n.rollupTokens), 1);
+  for (const node of treeNodes) {
+    const ownRatio = node.ownTokens / maxTokens;
+    const rollupRatio = node.rollupTokens / maxRollup;
+    node.baseRadius = 18 + ownRatio * 32;
+    node.collapsedRadius = node.hasChildren
+      ? Math.max(40, 30 + rollupRatio * 50)
+      : node.baseRadius;
+    node.tokenRatio = ownRatio;
+  }
+
+  // Update edge token flow
+  for (const edge of treeEdges) {
+    edge.tokenFlow = edge.target.ownTokens / maxTokens;
+  }
 }
 
 // ─── Tree Building ───
@@ -1435,6 +1545,7 @@ window.metricsInit = function() {
 
 window.metricsDestroy = function() {
   metricsActive = false;
+  treeBuiltOnce = false;
   if (animFrame) cancelAnimationFrame(animFrame);
   if (window._metricsRefresh) clearInterval(window._metricsRefresh);
   window.removeEventListener('resize', resizeCanvases);
