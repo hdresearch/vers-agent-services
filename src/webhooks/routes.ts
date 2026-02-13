@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { runCI, type CIRequest } from "./ci-runner.js";
+import { runCI, isRepoAllowed, canAcceptBuild, type CIRequest } from "./ci-runner.js";
 
 export const webhookRoutes = new Hono();
 
@@ -70,15 +70,19 @@ export function parsePullRequestEvent(body: any): CIRequest | null {
 const activeRuns = new Map<string, { startedAt: number; owner: string; repo: string; sha: string }>();
 
 webhookRoutes.post("/gitea", async (c) => {
+  // S1: HMAC validation is required — reject if secret not configured
   const secret = process.env.GITEA_WEBHOOK_SECRET;
+  if (!secret) {
+    console.error("GITEA_WEBHOOK_SECRET is not set — rejecting all webhooks");
+    return c.json({ error: "Webhook secret not configured" }, 500);
+  }
+
   const rawBody = await c.req.text();
 
-  // Validate webhook secret if configured
-  if (secret) {
-    const signature = c.req.header("X-Gitea-Signature");
-    if (!validateSignature(rawBody, signature, secret)) {
-      return c.json({ error: "Invalid webhook signature" }, 401);
-    }
+  // Validate webhook signature (always required)
+  const signature = c.req.header("X-Gitea-Signature");
+  if (!validateSignature(rawBody, signature, secret)) {
+    return c.json({ error: "Invalid webhook signature" }, 401);
   }
 
   let body: any;
@@ -104,6 +108,16 @@ webhookRoutes.post("/gitea", async (c) => {
     return c.json({ status: "ignored", reason: "Could not extract CI request from payload" }, 200);
   }
 
+  // S2: Check repo allowlist
+  if (!isRepoAllowed(ciReq.owner, ciReq.repo)) {
+    return c.json({ status: "rejected", reason: `Repo ${ciReq.owner}/${ciReq.repo} is not in the CI allowlist` }, 403);
+  }
+
+  // S3: Check concurrency limit
+  if (!canAcceptBuild()) {
+    return c.json({ status: "rejected", reason: "Too many concurrent builds — try again later" }, 429);
+  }
+
   // Deduplicate: don't run the same SHA twice concurrently
   const runKey = `${ciReq.owner}/${ciReq.repo}/${ciReq.sha}`;
   if (activeRuns.has(runKey)) {
@@ -116,7 +130,7 @@ webhookRoutes.post("/gitea", async (c) => {
   const req = ciReq;
   runCI(req)
     .then((result) => {
-      console.log(`CI ${result.success ? "passed" : "failed"}: ${runKey} (${(result.durationMs / 1000).toFixed(1)}s)`);
+      console.log(`CI ${result.status}: ${runKey} (${(result.durationMs / 1000).toFixed(1)}s)`);
     })
     .catch((err) => {
       console.error(`CI error for ${runKey}:`, err);

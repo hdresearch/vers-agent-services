@@ -6,8 +6,18 @@ import { join } from "node:path";
 const GITEA_BASE =
   process.env.GITEA_URL ||
   "https://b6f1cc18-713a-4e3f-bb8d-a0064646f963.vm.vers.sh:3000";
-const GITEA_TOKEN = process.env.GITEA_TOKEN || "9fe8f6e54a36e255ad56da2aac63616e3fc3a3bd";
+
+// B1: Token must come from environment — never hardcoded
+const GITEA_TOKEN = process.env.GITEA_API_TOKEN || "";
 const CI_TIMEOUT_MS = parseInt(process.env.CI_TIMEOUT_MS || "300000", 10); // 5 min
+
+// S3: Concurrency semaphore — max concurrent builds
+const MAX_CONCURRENT_BUILDS = parseInt(process.env.CI_MAX_CONCURRENT || "3", 10);
+let activeBuildCount = 0;
+
+export function getActiveBuildCount(): number {
+  return activeBuildCount;
+}
 
 export interface CIRequest {
   owner: string;
@@ -18,8 +28,11 @@ export interface CIRequest {
   cloneUrl: string;
 }
 
+export type CIResultStatus = "success" | "failure" | "timeout" | "error";
+
 export interface CIResult {
   success: boolean;
+  status: CIResultStatus; // S4: distinguish timeout from failure
   testOutput: string;
   tscOutput: string;
   testPassed: boolean;
@@ -28,17 +41,26 @@ export interface CIResult {
   error?: string;
 }
 
-/** Run a shell command in a given cwd, with timeout. */
+/** Run a command in a given cwd, with timeout. No shell interpretation (B2). */
 function exec(
   cmd: string,
   args: string[],
   cwd: string,
   timeoutMs: number,
-): Promise<{ code: number; stdout: string; stderr: string }> {
+): Promise<{ code: number; stdout: string; stderr: string; timedOut: boolean }> {
   return new Promise((resolve) => {
-    const child = execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024, shell: true }, (err, stdout, stderr) => {
-      const code = err ? (err as any).code ?? 1 : 0;
-      resolve({ code: typeof code === "number" ? code : 1, stdout, stderr });
+    // B2: No shell: true — execFile with array args, no shell interpretation
+    const child = execFile(cmd, args, { cwd, timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      let timedOut = false;
+      let code = 0;
+      if (err) {
+        // S4: Detect timeout — node sets err.killed and err.signal when timeout fires
+        if ((err as any).killed || (err as any).signal === "SIGTERM") {
+          timedOut = true;
+        }
+        code = typeof (err as any).code === "number" ? (err as any).code : 1;
+      }
+      resolve({ code, stdout, stderr, timedOut });
     });
   });
 }
@@ -52,7 +74,11 @@ export async function postCommitStatus(
   description: string,
   targetUrl?: string,
 ): Promise<void> {
-  const url = `${GITEA_BASE}/api/v1/repos/${owner}/${repo}/statuses/${sha}`;
+  if (!GITEA_TOKEN) {
+    console.error("GITEA_API_TOKEN not set — skipping commit status post");
+    return;
+  }
+  const url = `${GITEA_BASE}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/statuses/${encodeURIComponent(sha)}`;
   const resp = await fetch(url, {
     method: "POST",
     headers: {
@@ -78,7 +104,11 @@ export async function postPRComment(
   prNumber: number,
   body: string,
 ): Promise<void> {
-  const url = `${GITEA_BASE}/api/v1/repos/${owner}/${repo}/issues/${prNumber}/comments`;
+  if (!GITEA_TOKEN) {
+    console.error("GITEA_API_TOKEN not set — skipping PR comment");
+    return;
+  }
+  const url = `${GITEA_BASE}/api/v1/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${prNumber}/comments`;
   const resp = await fetch(url, {
     method: "POST",
     headers: {
@@ -129,6 +159,10 @@ export function formatPRComment(result: CIResult): string {
   body += `- ${testStatus}\n`;
   body += `- ${tscStatus}\n`;
 
+  if (result.status === "timeout") {
+    body += `\n⏱️ **Build timed out** after ${(result.durationMs / 1000).toFixed(1)}s\n`;
+  }
+
   if (!result.testPassed && result.testOutput) {
     const trimmed = result.testOutput.slice(-2000);
     body += `\n<details><summary>Test output</summary>\n\n\`\`\`\n${trimmed}\n\`\`\`\n\n</details>\n`;
@@ -143,10 +177,48 @@ export function formatPRComment(result: CIResult): string {
   return body;
 }
 
+// S2: Repo allowlist
+export function isRepoAllowed(owner: string, repo: string): boolean {
+  const allowlist = process.env.CI_ALLOWED_REPOS;
+  if (!allowlist) return true; // If not configured, allow all (backward compat)
+  const allowed = allowlist.split(",").map((s) => s.trim().toLowerCase());
+  return allowed.includes(`${owner}/${repo}`.toLowerCase());
+}
+
+// S3: Semaphore check
+export function canAcceptBuild(): boolean {
+  return activeBuildCount < MAX_CONCURRENT_BUILDS;
+}
+
 /** Run CI for a given request. Returns the result. */
 export async function runCI(req: CIRequest): Promise<CIResult> {
   const start = Date.now();
 
+  // S2: Check repo allowlist
+  if (!isRepoAllowed(req.owner, req.repo)) {
+    return {
+      success: false,
+      status: "error",
+      testOutput: "",
+      tscOutput: "",
+      testPassed: false,
+      tscPassed: false,
+      durationMs: Date.now() - start,
+      error: `Repo ${req.owner}/${req.repo} is not in CI_ALLOWED_REPOS allowlist`,
+    };
+  }
+
+  // S3: Concurrency limit
+  activeBuildCount++;
+
+  try {
+    return await _runCIInner(req, start);
+  } finally {
+    activeBuildCount--;
+  }
+}
+
+async function _runCIInner(req: CIRequest, start: number): Promise<CIResult> {
   await postFeedEvent(
     "ci_started",
     `CI started: ${req.owner}/${req.repo}@${req.sha.slice(0, 8)} (${req.branch})`,
@@ -162,13 +234,14 @@ export async function runCI(req: CIRequest): Promise<CIResult> {
     tmpDir = await mkdtemp(join(tmpdir(), "ci-"));
     const cloneResult = await exec(
       "git",
-      ["clone", "--depth", "1", "--branch", req.branch, req.cloneUrl, tmpDir + "/repo"],
+      ["clone", "--depth", "1", "--branch", req.branch, req.cloneUrl, join(tmpDir, "repo")],
       tmpDir,
       60_000,
     );
     if (cloneResult.code !== 0) {
       const result: CIResult = {
         success: false,
+        status: cloneResult.timedOut ? "timeout" : "error",
         testOutput: "",
         tscOutput: "",
         testPassed: false,
@@ -183,43 +256,56 @@ export async function runCI(req: CIRequest): Promise<CIResult> {
 
     const repoDir = join(tmpDir, "repo");
 
-    // npm install
-    const installResult = await exec("npm", ["install"], repoDir, 120_000);
+    // B3 + B4: Use bun install --ignore-scripts to prevent arbitrary code execution
+    const installResult = await exec("bun", ["install", "--ignore-scripts"], repoDir, 120_000);
     if (installResult.code !== 0) {
       const result: CIResult = {
         success: false,
+        status: installResult.timedOut ? "timeout" : "error",
         testOutput: "",
         tscOutput: "",
         testPassed: false,
         tscPassed: false,
         durationMs: Date.now() - start,
-        error: `npm install failed: ${installResult.stderr.slice(-500)}`,
+        error: `bun install failed: ${installResult.stderr.slice(-500)}`,
       };
-      await postCommitStatus(req.owner, req.repo, req.sha, "error", "npm install failed");
+      await postCommitStatus(req.owner, req.repo, req.sha, "error", "bun install failed");
       await postFeedEvent("ci_completed", `CI failed: ${req.owner}/${req.repo}@${req.sha.slice(0, 8)} — install failed`);
       return result;
     }
 
-    // npm test
-    const testResult = await exec("npm", ["test"], repoDir, CI_TIMEOUT_MS);
+    // B4: Use bun test
+    const testResult = await exec("bun", ["test"], repoDir, CI_TIMEOUT_MS);
     const testPassed = testResult.code === 0;
+    const testTimedOut = testResult.timedOut;
     const testOutput = (testResult.stdout + "\n" + testResult.stderr).trim();
 
-    // tsc --noEmit
-    const tscResult = await exec("npx", ["tsc", "--noEmit"], repoDir, CI_TIMEOUT_MS);
+    // B4: Use bun for tsc — via bunx or direct tsc path
+    const tscResult = await exec("bunx", ["tsc", "--noEmit"], repoDir, CI_TIMEOUT_MS);
     const tscPassed = tscResult.code === 0;
+    const tscTimedOut = tscResult.timedOut;
     const tscOutput = (tscResult.stdout + "\n" + tscResult.stderr).trim();
 
     const success = testPassed && tscPassed;
+    const timedOut = testTimedOut || tscTimedOut;
     const durationMs = Date.now() - start;
-    const result: CIResult = { success, testOutput, tscOutput, testPassed, tscPassed, durationMs };
+
+    // S4: Set status correctly
+    let status: CIResultStatus;
+    if (timedOut) status = "timeout";
+    else if (success) status = "success";
+    else status = "failure";
+
+    const result: CIResult = { success, status, testOutput, tscOutput, testPassed, tscPassed, durationMs };
 
     // Post commit status
-    const state = success ? "success" : "failure";
-    const desc = success
-      ? `All checks passed (${(durationMs / 1000).toFixed(1)}s)`
-      : `Checks failed: ${!testPassed ? "tests" : ""}${!testPassed && !tscPassed ? " + " : ""}${!tscPassed ? "tsc" : ""}`;
-    await postCommitStatus(req.owner, req.repo, req.sha, state, desc);
+    const commitState = timedOut ? "error" : success ? "success" : "failure";
+    const desc = timedOut
+      ? `Build timed out after ${(durationMs / 1000).toFixed(1)}s`
+      : success
+        ? `All checks passed (${(durationMs / 1000).toFixed(1)}s)`
+        : `Checks failed: ${!testPassed ? "tests" : ""}${!testPassed && !tscPassed ? " + " : ""}${!tscPassed ? "tsc" : ""}`;
+    await postCommitStatus(req.owner, req.repo, req.sha, commitState, desc);
 
     // Post PR comment if applicable
     if (req.prNumber) {
@@ -227,10 +313,13 @@ export async function runCI(req: CIRequest): Promise<CIResult> {
     }
 
     // Feed event
+    const feedSummary = timedOut
+      ? `CI timeout: ${req.owner}/${req.repo}@${req.sha.slice(0, 8)} (${(durationMs / 1000).toFixed(1)}s)`
+      : `CI ${success ? "passed" : "failed"}: ${req.owner}/${req.repo}@${req.sha.slice(0, 8)} (${(durationMs / 1000).toFixed(1)}s)`;
     await postFeedEvent(
       "ci_completed",
-      `CI ${success ? "passed" : "failed"}: ${req.owner}/${req.repo}@${req.sha.slice(0, 8)} (${(durationMs / 1000).toFixed(1)}s)`,
-      JSON.stringify({ success, testPassed, tscPassed, durationMs }),
+      feedSummary,
+      JSON.stringify({ success, status, testPassed, tscPassed, durationMs }),
     );
 
     return result;
@@ -238,6 +327,7 @@ export async function runCI(req: CIRequest): Promise<CIResult> {
     const durationMs = Date.now() - start;
     const result: CIResult = {
       success: false,
+      status: "error",
       testOutput: "",
       tscOutput: "",
       testPassed: false,
