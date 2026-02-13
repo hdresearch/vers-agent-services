@@ -19,6 +19,7 @@ export interface RegisteredVM {
   address: string;
   services?: ServiceInfo[];
   metadata?: Record<string, unknown>;
+  pinned?: boolean;
   registeredBy: string;
   registeredAt: string;
   lastSeen: string;
@@ -32,6 +33,7 @@ export interface RegisterVMInput {
   address: string;
   services?: ServiceInfo[];
   metadata?: Record<string, unknown>;
+  pinned?: boolean;
   registeredBy: string;
 }
 
@@ -119,6 +121,7 @@ export class RegistryStore {
   }
 
   private isStale(vm: RegisteredVM): boolean {
+    if (vm.pinned) return false;
     const lastSeen = new Date(vm.lastSeen).getTime();
     return Date.now() - lastSeen > this.staleThresholdMs;
   }
@@ -155,6 +158,7 @@ export class RegistryStore {
       address: input.address.trim(),
       services: input.services,
       metadata: input.metadata,
+      pinned: input.pinned || false,
       registeredBy: input.registeredBy.trim(),
       registeredAt: now,
       lastSeen: now,
@@ -238,6 +242,51 @@ export class RegistryStore {
     return vm;
   }
 
+  /**
+   * Register or update a VM — idempotent. If it exists, updates fields and refreshes lastSeen.
+   * Used by persistent VM auto-registration on startup.
+   */
+  upsert(input: RegisterVMInput): RegisteredVM {
+    const existing = this.vms.get(input.id?.trim());
+    if (existing) {
+      // Update fields but preserve registeredAt
+      existing.name = input.name?.trim() || existing.name;
+      existing.role = input.role || existing.role;
+      existing.status = input.status || existing.status;
+      existing.address = input.address?.trim() || existing.address;
+      if (input.services !== undefined) existing.services = input.services;
+      if (input.metadata !== undefined) existing.metadata = input.metadata;
+      if (input.pinned !== undefined) existing.pinned = input.pinned;
+      existing.lastSeen = new Date().toISOString();
+      this.vms.set(existing.id, existing);
+      this.scheduleSave();
+      return existing;
+    }
+    return this.register(input);
+  }
+
+  /** List VMs that are stale (lastSeen older than threshold, excluding pinned) */
+  listStale(): RegisteredVM[] {
+    return Array.from(this.vms.values()).filter(
+      (vm) => vm.status === "running" && !vm.pinned && this.isStaleRaw(vm)
+    );
+  }
+
+  /** List ALL VMs regardless of stale status */
+  listAll(filters?: VMFilters): RegisteredVM[] {
+    let results = Array.from(this.vms.values());
+    if (filters?.role) results = results.filter((vm) => vm.role === filters.role);
+    if (filters?.status) results = results.filter((vm) => vm.status === filters.status);
+    results.sort((a, b) => b.registeredAt.localeCompare(a.registeredAt));
+    return results;
+  }
+
+  /** Raw stale check ignoring pinned flag — for internal use */
+  private isStaleRaw(vm: RegisteredVM): boolean {
+    const lastSeen = new Date(vm.lastSeen).getTime();
+    return Date.now() - lastSeen > this.staleThresholdMs;
+  }
+
   deregister(id: string): boolean {
     const existed = this.vms.delete(id);
     if (existed) this.scheduleSave();
@@ -247,11 +296,6 @@ export class RegistryStore {
   clear(): void {
     this.vms.clear();
     this.scheduleSave();
-  }
-
-  /** Return only stale (expired) entries */
-  listStale(): RegisteredVM[] {
-    return Array.from(this.vms.values()).filter((vm) => this.isStale(vm));
   }
 
   /** Purge all entries past the hard TTL. Returns count of purged entries. */
