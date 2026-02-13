@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { JournalStore, ValidationError } from "./store.js";
+import { emit } from "../events/emit.js";
 
 const store = new JournalStore();
 
@@ -10,6 +11,7 @@ journalRoutes.post("/", async (c) => {
   try {
     const body = await c.req.json();
     const entry = store.append(body);
+    emit('journal', 'journal.entry.created', { entryId: entry.id, mood: entry.mood, tags: entry.tags });
     return c.json(entry, 201);
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);

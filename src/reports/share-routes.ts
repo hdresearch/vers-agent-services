@@ -5,6 +5,7 @@ import { generateOgImage } from "./og-image.js";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { emit } from "../events/emit.js";
 
 function getReportHtml(): string {
   try {
@@ -43,6 +44,7 @@ export function createShareAdminRoutes(shareStore: ShareStore, reportsStore: Rep
     const proto = c.req.header("x-forwarded-proto") || (host.includes("vers.sh") ? "https" : "http");
     const url = `${proto}://${host}/reports/share/${link.linkId}`;
 
+    emit('reports', 'reports.share.created', { linkId: link.linkId, reportId, url }, body.createdBy || 'admin');
     return c.json({ linkId: link.linkId, url }, 201);
   });
 

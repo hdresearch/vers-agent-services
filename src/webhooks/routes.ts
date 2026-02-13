@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { runCI, isRepoAllowed, canAcceptBuild, type CIRequest } from "./ci-runner.js";
+import { emit } from "../events/emit.js";
 
 export const webhookRoutes = new Hono();
 
@@ -125,6 +126,10 @@ webhookRoutes.post("/gitea", async (c) => {
   }
 
   activeRuns.set(runKey, { startedAt: Date.now(), owner: ciReq.owner, repo: ciReq.repo, sha: ciReq.sha });
+
+  // Emit webhook event to durable log
+  const eventType = event === "push" ? "webhook.gitea.push" : "webhook.gitea.pr";
+  emit('webhook', eventType, { owner: ciReq.owner, repo: ciReq.repo, sha: ciReq.sha, branch: ciReq.branch, prNumber: ciReq.prNumber });
 
   // Fire and forget — webhook should respond quickly
   const req = ciReq;

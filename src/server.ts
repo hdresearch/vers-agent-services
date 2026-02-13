@@ -22,6 +22,7 @@ import { registryStore } from "./registry/routes.js";
 import { store as boardStore } from "./board/routes.js";
 import { webhookRoutes } from "./webhooks/routes.js";
 import { reviewRoutes } from "./review/routes.js";
+import { eventRoutes } from "./events/routes.js";
 
 const app = new Hono();
 
@@ -53,11 +54,13 @@ app.use("/commits/*", bearerAuth());
 app.use("/journal/*", bearerAuth());
 app.use("/config/*", bearerAuth());
 app.use("/review/*", bearerAuth());
+app.use("/events/*", bearerAuth());
 
 // Rate limiting for write endpoints (applied after auth)
 app.post("/feed/events", rateLimit({ windowMs: 60_000, maxRequests: 60 }));
 app.post("/log", rateLimit({ windowMs: 60_000, maxRequests: 30 }));
 app.post("/board/tasks", rateLimit({ windowMs: 60_000, maxRequests: 30 }));
+app.post("/events", rateLimit({ windowMs: 60_000, maxRequests: 60 }));
 
 // Mount service routes
 app.route("/auth", keyRoutes);
@@ -72,6 +75,7 @@ app.route("/commits", commitRoutes);
 app.route("/journal", journalRoutes);
 app.route("/config", configRoutes);
 app.route("/review", reviewRoutes);
+app.route("/events", eventRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
