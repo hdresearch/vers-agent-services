@@ -800,6 +800,151 @@ html, body {
   height: 100%;
 }
 
+/* ─── Analytics Chat Tables ─── */
+
+.achat-table-wrap {
+  margin-top: 8px;
+  overflow-x: auto;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.achat-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+}
+
+.achat-table thead th {
+  text-align: left;
+  padding: 4px 8px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: rgba(0, 255, 213, 0.5);
+  border-bottom: 1px solid rgba(0, 255, 213, 0.12);
+  font-weight: 600;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: rgba(12, 12, 20, 0.95);
+}
+
+.achat-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  color: #aaa;
+  white-space: nowrap;
+}
+
+.achat-table td.num {
+  text-align: right;
+  color: #00ffd5;
+  font-weight: 500;
+}
+
+.achat-table tr:hover td {
+  background: rgba(0, 255, 213, 0.03);
+}
+
+.achat-table-more {
+  font-size: 10px;
+  color: #556;
+  padding: 4px 8px;
+  font-style: italic;
+}
+
+.achat-sql {
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 3px;
+  font-size: 9px;
+  color: #445;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.achat-sql-label {
+  color: #556;
+  font-weight: 600;
+}
+
+.achat-sql code {
+  color: #667;
+  font-family: inherit;
+}
+
+/* ─── Loading Animation ─── */
+
+.achat-loading {
+  opacity: 0.6;
+}
+
+.achat-dots {
+  display: inline-block;
+  animation: achatPulse 1.2s infinite;
+  color: #00ffd5;
+}
+
+@keyframes achatPulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+/* ─── Loading States ─── */
+
+.view-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.view-loading::before {
+  content: '⟳';
+  display: inline-block;
+  margin-right: 8px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Error States ─── */
+
+.view-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: var(--red);
+  font-size: 12px;
+  gap: 8px;
+}
+
+.view-error .error-retry {
+  background: none;
+  border: 1px solid var(--red);
+  color: var(--red);
+  padding: 4px 12px;
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.view-error .error-retry:hover {
+  background: rgba(255, 85, 85, 0.1);
+}
+
 /* Responsive */
 @media (max-width: 900px) {
   .main { grid-template-columns: 1fr; height: auto; }

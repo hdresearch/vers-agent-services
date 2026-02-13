@@ -146,37 +146,55 @@ async function loadFeed() {
   }
 }
 
+let sseSource = null;
+let sseRetryCount = 0;
+
 function startSSE() {
+  if (sseSource) {
+    try { sseSource.close(); } catch {}
+  }
+
   const evtSource = new EventSource(`${API}/feed/stream`);
+  sseSource = evtSource;
   const dot = document.getElementById('conn-dot');
   const label = document.getElementById('conn-label');
 
   evtSource.onopen = () => {
     dot.classList.add('connected');
     label.textContent = 'connected';
+    sseRetryCount = 0;
   };
 
   evtSource.onmessage = (e) => {
     try {
       const evt = JSON.parse(e.data);
-      // Forward to speedometer for live tok/s gauge
+      // Forward ALL events to speedometer — it decides which to consume
       if (typeof window._speedometerOnFeedEvent === 'function') {
         window._speedometerOnFeedEvent(evt);
       }
       const feed = feedEl();
-      feed.prepend(renderEvent(evt));
-      eventCount++;
-      document.getElementById('stat-events').textContent = eventCount;
-      // Auto-scroll if near top
-      if (feed.scrollTop < 100) {
-        feed.scrollTop = 0;
+      if (feed) {
+        feed.prepend(renderEvent(evt));
+        eventCount++;
+        const statEl = document.getElementById('stat-events');
+        if (statEl) statEl.textContent = eventCount;
+        // Auto-scroll if near top
+        if (feed.scrollTop < 100) {
+          feed.scrollTop = 0;
+        }
       }
     } catch {}
   };
 
   evtSource.onerror = () => {
     dot.classList.remove('connected');
-    label.textContent = 'reconnecting';
+    sseRetryCount++;
+    label.textContent = sseRetryCount > 3 ? 'disconnected' : 'reconnecting';
+    // EventSource auto-reconnects, but if it's been too many retries, force a new connection
+    if (sseRetryCount > 10) {
+      evtSource.close();
+      setTimeout(startSSE, 5000);
+    }
   };
 }
 
@@ -646,6 +664,7 @@ function stopSkillsRefresh() {
 // ─── Tabs ───
 
 function switchView(viewName) {
+  const prevView = activeView;
   activeView = viewName;
 
   // Update tab buttons
@@ -657,7 +676,7 @@ function switchView(viewName) {
   document.getElementById(`view-${viewName}`)?.classList.add('active');
 
   // Refresh board data when switching back to it
-  if (viewName === 'board') {
+  if (viewName === 'dashboard') {
     loadBoard();
     loadRegistry();
     loadReports();
@@ -684,9 +703,13 @@ function switchView(viewName) {
   } else {
     stopSkillsRefresh();
   }
+
+  // Metrics: pause animation when leaving, resume when returning
+  // But DON'T destroy state — that's what causes the re-render bug
   if (viewName === 'metrics') {
     activateMetricsSubview();
-  } else {
+  } else if (prevView === 'metrics') {
+    // Pause but preserve state
     if (typeof window.metricsDestroy === 'function') window.metricsDestroy();
     if (typeof window.analyticsDestroy === 'function') window.analyticsDestroy();
   }
@@ -721,7 +744,7 @@ function switchMetricsSubview(name) {
 
 // ─── Active View Tracking ───
 
-let activeView = 'board';
+let activeView = 'dashboard';
 
 // ─── Init ───
 
@@ -731,13 +754,13 @@ async function init() {
 
   // Poll board, registry, reports every 10s — but only refresh visible views
   setInterval(() => {
-    if (activeView === 'board') loadBoard();
+    if (activeView === 'dashboard') loadBoard();
   }, 10000);
   setInterval(() => {
-    if (activeView === 'board') loadRegistry();
+    if (activeView === 'dashboard') loadRegistry();
   }, 10000);
   setInterval(() => {
-    if (activeView === 'board') loadReports();
+    if (activeView === 'dashboard') loadReports();
   }, 10000);
 
   // Tab switching

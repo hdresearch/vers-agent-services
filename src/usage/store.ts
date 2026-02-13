@@ -513,6 +513,12 @@ export class UsageStore {
     return Number(rows[0].cnt);
   }
 
+  /** Run a read-only analytics SQL query against the sessions table */
+  async analyticsQuery(sql: string, params: any[] = []): Promise<duckdb.TableData> {
+    await this.ready;
+    return dbAll(this.conn, sql, ...params);
+  }
+
   async close(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.db.close((err: any) => {
