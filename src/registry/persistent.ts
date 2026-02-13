@@ -29,7 +29,7 @@ interface PersistentVMsFile {
   vms: PersistentVMConfig[];
 }
 
-const CONFIG_PATH = "data/persistent-vms.json";
+const CONFIG_PATH = process.env.PERSISTENT_VMS_CONFIG || "config/persistent-vms.json";
 const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000; // 2 minutes
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
