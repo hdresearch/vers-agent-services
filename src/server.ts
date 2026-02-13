@@ -20,6 +20,7 @@ import { feedStore } from "./feed/routes.js";
 import { registryStore } from "./registry/routes.js";
 import { store as boardStore } from "./board/routes.js";
 import { webhookRoutes } from "./webhooks/routes.js";
+import { reviewRoutes } from "./review/routes.js";
 
 const app = new Hono();
 
@@ -50,6 +51,7 @@ app.use("/usage/*", bearerAuth());
 app.use("/commits/*", bearerAuth());
 app.use("/journal/*", bearerAuth());
 app.use("/config/*", bearerAuth());
+app.use("/review/*", bearerAuth());
 
 // Rate limiting for write endpoints (applied after auth)
 app.post("/feed/events", rateLimit({ windowMs: 60_000, maxRequests: 60 }));
@@ -68,6 +70,7 @@ app.route("/usage", usageRoutes);
 app.route("/commits", commitRoutes);
 app.route("/journal", journalRoutes);
 app.route("/config", configRoutes);
+app.route("/review", reviewRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
