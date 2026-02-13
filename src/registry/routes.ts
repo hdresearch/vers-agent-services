@@ -77,6 +77,15 @@ registryRoutes.post("/vms/:id/heartbeat", (c) => {
   }
 });
 
+// Resolve a VM by name (poor man's DNS)
+registryRoutes.get("/resolve/:name", (c) => {
+  const name = c.req.param("name");
+  const vms = registryStore.list();
+  const vm = vms.find((v) => v.name === name);
+  if (!vm) return c.json({ error: `No VM registered with name: ${name}` }, 404);
+  return c.json({ name: vm.name, address: vm.address, vmId: vm.id, role: vm.role });
+});
+
 // Discover VMs by role
 registryRoutes.get("/discover/:role", (c) => {
   const role = c.req.param("role") as VMRole;
