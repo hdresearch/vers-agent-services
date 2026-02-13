@@ -19,6 +19,13 @@ export interface CreateReportInput {
   tags?: string[];
 }
 
+export interface UpdateReportInput {
+  title?: string;
+  author?: string;
+  content?: string;
+  tags?: string[];
+}
+
 export interface ReportFilters {
   tag?: string;
   author?: string;
@@ -112,6 +119,38 @@ export class ReportsStore {
     // Newest first
     results.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     return results;
+  }
+
+  update(id: string, input: UpdateReportInput): Report {
+    const report = this.reports.get(id);
+    if (!report) throw new NotFoundError("report not found");
+
+    if (input.title !== undefined) {
+      if (typeof input.title !== "string" || !input.title.trim()) {
+        throw new ValidationError("title cannot be empty");
+      }
+      report.title = input.title.trim();
+    }
+    if (input.author !== undefined) {
+      if (typeof input.author !== "string" || !input.author.trim()) {
+        throw new ValidationError("author cannot be empty");
+      }
+      report.author = input.author.trim();
+    }
+    if (input.content !== undefined) {
+      if (typeof input.content !== "string") {
+        throw new ValidationError("content must be a string");
+      }
+      report.content = input.content;
+    }
+    if (input.tags !== undefined) {
+      report.tags = input.tags;
+    }
+
+    report.updatedAt = new Date().toISOString();
+    this.reports.set(id, report);
+    this.scheduleSave();
+    return report;
   }
 
   delete(id: string): boolean {
