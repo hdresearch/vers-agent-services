@@ -9,7 +9,7 @@ import {
   type AddArtifactInput,
 } from "./store.js";
 
-const store = new BoardStore();
+export const store = new BoardStore();
 
 export const boardRoutes = new Hono();
 
