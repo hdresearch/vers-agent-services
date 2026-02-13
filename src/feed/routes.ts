@@ -49,7 +49,7 @@ feedRoutes.get("/events", (c) => {
   const limit = limitStr ? parseInt(limitStr, 10) : 50;
 
   const events = feedStore.list({ agent, type, since, limit });
-  return c.json(events);
+  return c.json({ events, count: events.length });
 });
 
 // GET /events/:id — Get single event
