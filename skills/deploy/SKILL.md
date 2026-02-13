@@ -56,7 +56,58 @@ curl -X POST "http://{INFRA_VM_ID}.vm.vers.sh:3000/commits" \
 ssh -o StrictHostKeyChecking=no root@{INFRA_VM_ID}.vm.vers.sh
 ```
 
-## Step 3: Pull Latest Code
+## Zero-Downtime Deploy (Preferred)
+
+If the zero-downtime setup has been configured (Caddy + systemd), use the automated script:
+
+```bash
+cd /root/workspace/vers-agent-services
+./scripts/deploy-zero-downtime.sh [branch]
+```
+
+This script:
+1. Pulls latest code from the specified branch
+2. Installs dependencies and builds
+3. Gracefully restarts the app (SIGTERM → drain → start new)
+4. Caddy holds all connections during the restart gap
+5. Health checks the new process
+6. Zero dropped requests
+
+### First-time setup
+
+If zero-downtime has not been set up yet on the infra VM:
+
+```bash
+cd /root/workspace/vers-agent-services
+./scripts/setup-zero-downtime.sh
+```
+
+This installs Caddy, creates systemd services, and configures the proxy.
+
+### Architecture
+
+```
+Clients → :3000 (Caddy reverse proxy) → :3001 (Node.js app)
+```
+
+- **Caddy** runs on port 3000 (the public port). It never restarts during deploys.
+- **App** runs on port 3001 (configurable via `APP_PORT`). It restarts during deploys.
+- During the restart gap (~2-3s), Caddy retries connections to the upstream.
+- The app handles SIGTERM gracefully (drains in-flight requests before exiting).
+
+### Testing
+
+```bash
+./scripts/test-zero-downtime.sh
+```
+
+Runs continuous requests through Caddy while restarting the app, verifying zero dropped requests.
+
+## Legacy Deploy (Manual)
+
+If zero-downtime is not set up, fall back to the manual process:
+
+### Step 3: Pull Latest Code
 
 ```bash
 cd /root/workspace/vers-agent-services
@@ -67,7 +118,7 @@ git reset --hard origin/main
 
 Using `reset --hard` ensures a clean state — no merge conflicts, no stale local changes.
 
-## Step 4: Install and Build
+### Step 4: Install and Build
 
 ```bash
 npm install
@@ -76,14 +127,13 @@ npm run build
 
 Watch for errors. If `npm run build` (TypeScript compilation) fails, **do not proceed** — the deploy will serve stale code from the old `dist/`.
 
-## Step 5: Restart the Server
+### Step 5: Restart the Server
 
 Kill the old process and start a new one with the required env vars:
 
 ```bash
 # Stop the running server
-pkill -f 'node dist/server.js' || true
-sleep 1
+kill -9 $(ss -tlnp | grep 3000 | grep -oP 'pid=\K\d+') 2>/dev/null; sleep 2
 
 # Start with required env vars
 export VERS_AUTH_TOKEN=<token>
@@ -95,6 +145,8 @@ cat /tmp/agent-services.log
 ```
 
 You should see: `vers-agent-services running on :3000`
+
+⚠️ **Note:** This method causes brief downtime during the restart. Prefer the zero-downtime deploy above.
 
 ## Step 6: Smoke Test
 
@@ -126,6 +178,8 @@ Each should return JSON with the expected structure. If any returns `401`, the a
 
 ```bash
 tail -50 /tmp/agent-services.log
+# or with systemd:
+journalctl -u agent-services-app -n 50
 ```
 
 ### Verify from outside the VM
@@ -166,8 +220,12 @@ cd /root/workspace/vers-agent-services
 git log --oneline -5  # find the last known good commit
 git reset --hard {GOOD_COMMIT_SHA}
 npm install && npm run build
-pkill -f 'node dist/server.js' || true
-sleep 1
+
+# With zero-downtime setup:
+./scripts/deploy-zero-downtime.sh
+
+# Without:
+kill -9 $(ss -tlnp | grep 3000 | grep -oP 'pid=\K\d+') 2>/dev/null; sleep 2
 nohup env VERS_AUTH_TOKEN=$VERS_AUTH_TOKEN node dist/server.js > /tmp/agent-services.log 2>&1 &
 ```
 
@@ -181,7 +239,7 @@ nohup env VERS_AUTH_TOKEN=$VERS_AUTH_TOKEN node dist/server.js > /tmp/agent-serv
 ⚠️  VERS_AUTH_TOKEN is not set — all endpoints are unauthenticated.
 ```
 
-**Fix:** Kill the server, set the env var, restart.
+**Fix:** Kill the server, set the env var, restart. Or set it in `/etc/agent-services.env`.
 
 ### ❌ Forgetting to Snapshot First
 
@@ -193,20 +251,19 @@ nohup env VERS_AUTH_TOKEN=$VERS_AUTH_TOKEN node dist/server.js > /tmp/agent-serv
 
 **What happens:** `npm run build` fails but you restart anyway. The server runs old compiled code from `dist/`, which may not match the new source. Subtle bugs ensue.
 
-**Fix:** Never restart after a failed build. Fix the build error first, or roll back.
+**Fix:** Never restart after a failed build. Fix the build error first, or roll back. The zero-downtime deploy script aborts on build failure automatically.
 
 ### ❌ Port Already in Use
 
-**What happens:** `pkill` didn't fully kill the old process. The new server fails to bind to port 3000.
+**What happens:** `pkill` didn't fully kill the old process. The new server fails to bind.
 
 **Fix:**
 ```bash
-# Find what's using port 3000
-lsof -i :3000
+# Find what's using the port
+ss -tlnp | grep :3001
 # Force kill
-kill -9 $(lsof -t -i :3000)
+kill -9 $(ss -tlnp | grep :3001 | grep -oP 'pid=\K\d+')
 sleep 1
-# Restart
 ```
 
 ### ❌ Deploying Without Testing
