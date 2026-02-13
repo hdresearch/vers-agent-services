@@ -1,6 +1,7 @@
 import { ulid } from "ulid";
-import { readFileSync, appendFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
+import { atomicWriteFileSync, recoverTmpFile } from "../utils/atomic-write.js";
 
 export type FeedEventType =
   | "task_started"
@@ -72,6 +73,11 @@ export class FeedStore {
   }
 
   private load(): void {
+    recoverTmpFile(this.filePath, (content) => {
+      for (const line of content.split("\n")) {
+        if (line.trim()) JSON.parse(line);
+      }
+    });
     if (!existsSync(this.filePath)) return;
     const content = readFileSync(this.filePath, "utf-8").trim();
     if (!content) return;
@@ -203,9 +209,7 @@ export class FeedStore {
 
   clear(): void {
     this.events = [];
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(this.filePath, "");
+    atomicWriteFileSync(this.filePath, "");
   }
 
   get size(): number {
