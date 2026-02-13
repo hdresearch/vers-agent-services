@@ -12,6 +12,10 @@ import { commitRoutes } from "./commits/routes.js";
 import { journalRoutes } from "./journal/routes.js";
 import { uiRoutes } from "./ui/routes.js";
 import { twilioRoutes } from "./twilio/routes.js";
+import { createWatchdogRoutes } from "./watchdog/routes.js";
+import { feedStore } from "./feed/routes.js";
+import { registryStore } from "./registry/routes.js";
+import { store as boardStore } from "./board/routes.js";
 
 const app = new Hono();
 
@@ -49,6 +53,15 @@ app.route("/usage", usageRoutes);
 app.route("/commits", commitRoutes);
 app.route("/journal", journalRoutes);
 
+// Watchdog — zombie agent detection
+const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
+  feedStore,
+  registryStore,
+  boardStore,
+);
+app.use("/watchdog/*", bearerAuth());
+app.route("/watchdog", watchdogRoutes);
+
 // TODO: mount these as they're built
 // app.route("/context", contextRoutes);
 // app.route("/cost", costRoutes);
@@ -64,6 +77,9 @@ if (!process.env.VERS_AUTH_TOKEN) {
 
 serve({ fetch: app.fetch, port, hostname: "::" }, () => {
   console.log(`vers-agent-services running on :${port}`);
+  // Auto-start zombie watchdog
+  watchdogStore.start();
+  console.log(`watchdog started — checking every 2min for zombie agents`);
 });
 
 export { app };
