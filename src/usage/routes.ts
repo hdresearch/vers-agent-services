@@ -17,6 +17,19 @@ usageRoutes.post("/sessions", async (c) => {
   }
 });
 
+// PATCH /sessions/:id — upsert session with latest partial data (periodic flush)
+usageRoutes.patch("/sessions/:id", async (c) => {
+  try {
+    const sessionId = c.req.param("id");
+    const body = await c.req.json();
+    const record = await store.upsertSession(sessionId, { ...body, sessionId });
+    return c.json(record, 200);
+  } catch (e) {
+    if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
+    throw e;
+  }
+});
+
 // POST /vms — record a VM lifecycle event
 usageRoutes.post("/vms", async (c) => {
   try {

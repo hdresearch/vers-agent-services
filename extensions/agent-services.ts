@@ -561,6 +561,10 @@ export default function (pi: ExtensionAPI) {
       clearInterval(widgetTimer);
       widgetTimer = null;
     }
+    if (flushTimer) {
+      clearInterval(flushTimer);
+      flushTimer = null;
+    }
 
     // Stop SkillHub SSE stream
     stopSkillStream();
@@ -582,12 +586,62 @@ export default function (pi: ExtensionAPI) {
   let usageCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
   let usageToolCalls: Record<string, number> = {};
 
+  // --- Periodic flush state ---
+  const FLUSH_TURN_INTERVAL = 5;
+  const FLUSH_TIME_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+  let lastFlushTurn = 0;
+  let lastFlushTime = 0;
+  let flushTimer: ReturnType<typeof setInterval> | null = null;
+  let flushInProgress = false;
+
+  function buildUsagePayload() {
+    const now = new Date().toISOString();
+    return {
+      sessionId: usageSessionId || `session-${Date.now()}`,
+      agent: agentName,
+      parentAgent: process.env.VERS_PARENT_AGENT || null,
+      model: usageModel,
+      tokens: { ...usageTokens },
+      cost: {
+        input: Math.round(usageCost.input * 1e6) / 1e6,
+        output: Math.round(usageCost.output * 1e6) / 1e6,
+        cacheRead: Math.round(usageCost.cacheRead * 1e6) / 1e6,
+        cacheWrite: Math.round(usageCost.cacheWrite * 1e6) / 1e6,
+        total: Math.round(usageCost.total * 1e6) / 1e6,
+      },
+      turns: usageTurns,
+      toolCalls: { ...usageToolCalls },
+      startedAt: usageStartedAt || now,
+      endedAt: now,
+    };
+  }
+
+  async function flushUsageData() {
+    if (!getBaseUrl()) return;
+    if (flushInProgress) return;
+    if (usageTurns === 0) return; // nothing to flush yet
+
+    const sid = usageSessionId || `session-${Date.now()}`;
+    flushInProgress = true;
+    try {
+      await api("PATCH", `/usage/sessions/${encodeURIComponent(sid)}`, buildUsagePayload());
+      lastFlushTurn = usageTurns;
+      lastFlushTime = Date.now();
+    } catch {
+      // best-effort — don't block the agent
+    } finally {
+      flushInProgress = false;
+    }
+  }
+
   function resetUsageAccumulators() {
     usageStartedAt = new Date().toISOString();
     usageTurns = 0;
     usageTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
     usageCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
     usageToolCalls = {};
+    lastFlushTurn = 0;
+    lastFlushTime = 0;
   }
 
   // Reset accumulators and capture session metadata on agent start
@@ -595,6 +649,13 @@ export default function (pi: ExtensionAPI) {
     resetUsageAccumulators();
     usageSessionId = ctx.sessionManager.getSessionId();
     usageModel = ctx.model?.id || "unknown";
+
+    // Start time-based periodic flush (every 3 minutes)
+    if (flushTimer) clearInterval(flushTimer);
+    flushTimer = setInterval(() => {
+      flushUsageData().catch(() => {});
+    }, FLUSH_TIME_INTERVAL_MS);
+    lastFlushTime = Date.now();
   });
 
   // Accumulate token usage from each turn's assistant message
@@ -618,6 +679,11 @@ export default function (pi: ExtensionAPI) {
         usageCost.cacheRead += u.cost.cacheRead || 0;
         usageCost.cacheWrite += u.cost.cacheWrite || 0;
         usageCost.total += u.cost.total || 0;
+      }
+
+      // Periodic flush: every 5 turns since last flush
+      if (usageTurns - lastFlushTurn >= FLUSH_TURN_INTERVAL) {
+        flushUsageData().catch(() => {}); // fire-and-forget
       }
 
       // Emit live token metrics to the feed for real-time speedometer
@@ -757,28 +823,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_end", async () => {
     if (!getBaseUrl()) return;
 
-    // POST session usage summary
-    const endedAt = new Date().toISOString();
+    // Stop the periodic flush timer — we're about to do the final write
+    if (flushTimer) {
+      clearInterval(flushTimer);
+      flushTimer = null;
+    }
+
+    // Final session upsert — uses PATCH so it merges with any partial flushes
     try {
-      const roundedCost = {
-        input: Math.round(usageCost.input * 1e6) / 1e6,
-        output: Math.round(usageCost.output * 1e6) / 1e6,
-        cacheRead: Math.round(usageCost.cacheRead * 1e6) / 1e6,
-        cacheWrite: Math.round(usageCost.cacheWrite * 1e6) / 1e6,
-        total: Math.round(usageCost.total * 1e6) / 1e6,
-      };
-      await api("POST", "/usage/sessions", {
-        sessionId: usageSessionId || `session-${Date.now()}`,
-        agent: agentName,
-        parentAgent: process.env.VERS_PARENT_AGENT || null,
-        model: usageModel,
-        tokens: { ...usageTokens },
-        cost: roundedCost,
-        turns: usageTurns,
-        toolCalls: { ...usageToolCalls },
-        startedAt: usageStartedAt || endedAt,
-        endedAt,
-      });
+      const sid = usageSessionId || `session-${Date.now()}`;
+      await api("PATCH", `/usage/sessions/${encodeURIComponent(sid)}`, buildUsagePayload());
     } catch {
       // best-effort — don't block agent shutdown
     }

@@ -499,6 +499,149 @@ export class UsageStore {
     };
   }
 
+  // --- Upsert (for periodic flush) ---
+
+  async upsertSession(sessionId: string, input: SessionInput): Promise<SessionRecord> {
+    await this.ready;
+
+    if (!sessionId || typeof sessionId !== "string" || !sessionId.trim()) {
+      throw new ValidationError("sessionId path parameter is required");
+    }
+    if (!input.agent || typeof input.agent !== "string" || !input.agent.trim()) {
+      throw new ValidationError("agent is required");
+    }
+    if (!input.model || typeof input.model !== "string" || !input.model.trim()) {
+      throw new ValidationError("model is required");
+    }
+    if (!validateTokenCounts(input.tokens)) {
+      throw new ValidationError("tokens must include input, output, cacheRead, cacheWrite, total as numbers");
+    }
+    if (!validateCostBreakdown(input.cost)) {
+      throw new ValidationError("cost must include input, output, cacheRead, cacheWrite, total as numbers");
+    }
+    if (typeof input.turns !== "number" || input.turns < 0) {
+      throw new ValidationError("turns must be a non-negative number");
+    }
+    if (!input.startedAt || typeof input.startedAt !== "string") {
+      throw new ValidationError("startedAt is required");
+    }
+    if (!input.endedAt || typeof input.endedAt !== "string") {
+      throw new ValidationError("endedAt is required");
+    }
+
+    const trimmedId = sessionId.trim();
+    const toolCalls = input.toolCalls || {};
+    const now = new Date().toISOString();
+
+    // Check if a row with this session_id already exists
+    const existing = await dbAll(
+      this.conn,
+      `SELECT id FROM sessions WHERE session_id = $1 LIMIT 1`,
+      trimmedId
+    );
+
+    if (existing.length > 0) {
+      // Update in place
+      await dbRun(
+        this.conn,
+        `UPDATE sessions SET
+          agent = $1,
+          parent_agent = $2,
+          model = $3,
+          tokens_input = $4,
+          tokens_output = $5,
+          tokens_cache_read = $6,
+          tokens_cache_write = $7,
+          tokens_total = $8,
+          cost_input = $9,
+          cost_output = $10,
+          cost_cache_read = $11,
+          cost_cache_write = $12,
+          cost_total = $13,
+          turns = $14,
+          tool_calls = $15,
+          ended_at = $16,
+          recorded_at = $17
+        WHERE session_id = $18`,
+        input.agent.trim(),
+        input.parentAgent?.trim() || null,
+        input.model.trim(),
+        input.tokens.input,
+        input.tokens.output,
+        input.tokens.cacheRead,
+        input.tokens.cacheWrite,
+        input.tokens.total,
+        input.cost.input,
+        input.cost.output,
+        input.cost.cacheRead,
+        input.cost.cacheWrite,
+        input.cost.total,
+        input.turns,
+        JSON.stringify(toolCalls),
+        input.endedAt,
+        now,
+        trimmedId
+      );
+
+      return {
+        id: existing[0].id,
+        sessionId: trimmedId,
+        agent: input.agent.trim(),
+        parentAgent: input.parentAgent?.trim() || null,
+        model: input.model.trim(),
+        tokens: input.tokens,
+        cost: input.cost,
+        turns: input.turns,
+        toolCalls,
+        startedAt: input.startedAt,
+        endedAt: input.endedAt,
+        recordedAt: now,
+      };
+    } else {
+      // Insert new row
+      const id = ulid();
+      await dbRun(
+        this.conn,
+        `INSERT INTO sessions VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+        id,
+        trimmedId,
+        input.agent.trim(),
+        input.parentAgent?.trim() || null,
+        input.model.trim(),
+        input.tokens.input,
+        input.tokens.output,
+        input.tokens.cacheRead,
+        input.tokens.cacheWrite,
+        input.tokens.total,
+        input.cost.input,
+        input.cost.output,
+        input.cost.cacheRead,
+        input.cost.cacheWrite,
+        input.cost.total,
+        input.turns,
+        JSON.stringify(toolCalls),
+        input.startedAt,
+        input.endedAt,
+        now
+      );
+
+      return {
+        id,
+        sessionId: trimmedId,
+        agent: input.agent.trim(),
+        parentAgent: input.parentAgent?.trim() || null,
+        model: input.model.trim(),
+        tokens: input.tokens,
+        cost: input.cost,
+        turns: input.turns,
+        toolCalls,
+        startedAt: input.startedAt,
+        endedAt: input.endedAt,
+        recordedAt: now,
+      };
+    }
+  }
+
   // --- Accessors for testing ---
 
   async sessionCount(): Promise<number> {
