@@ -5,6 +5,7 @@ import {
   ValidationError,
   type TaskFilters,
   type TaskStatus,
+  type TaskEffort,
   type AddArtifactInput,
 } from "./store.js";
 
@@ -31,9 +32,14 @@ boardRoutes.get("/tasks", (c) => {
   const assignee = c.req.query("assignee");
   const tag = c.req.query("tag");
 
+  const effort = c.req.query("effort");
+  const unsupervisedGte = c.req.query("unsupervised_gte");
+
   if (status) filters.status = status as TaskStatus;
   if (assignee) filters.assignee = assignee;
   if (tag) filters.tag = tag;
+  if (effort) filters.effort = effort as TaskEffort;
+  if (unsupervisedGte) filters.unsupervised_gte = Number(unsupervisedGte);
 
   const tasks = store.listTasks(filters);
   return c.json({ tasks, count: tasks.length });
