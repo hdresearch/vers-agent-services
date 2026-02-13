@@ -92,16 +92,17 @@ describe("Feed Service", () => {
     it("returns empty array when no events", async () => {
       const res = await req("/events");
       expect(res.status).toBe(200);
-      const events = await res.json();
-      expect(events).toEqual([]);
+      const body = await res.json();
+      expect(body).toEqual({ events: [], count: 0 });
     });
 
     it("returns published events", async () => {
       await publishEvent({ agent: "a1", summary: "first" });
       await publishEvent({ agent: "a2", summary: "second" });
       const res = await req("/events");
-      const events = await res.json();
-      expect(events).toHaveLength(2);
+      const body = await res.json();
+      expect(body.events).toHaveLength(2);
+      expect(body.count).toBe(2);
     });
 
     it("filters by agent", async () => {
@@ -109,8 +110,9 @@ describe("Feed Service", () => {
       await publishEvent({ agent: "a2" });
       await publishEvent({ agent: "a1" });
       const res = await req("/events?agent=a1");
-      const events = await res.json();
+      const { events, count } = await res.json();
       expect(events).toHaveLength(2);
+      expect(count).toBe(2);
       expect(events.every((e: any) => e.agent === "a1")).toBe(true);
     });
 
@@ -119,8 +121,9 @@ describe("Feed Service", () => {
       await publishEvent({ type: "task_completed" });
       await publishEvent({ type: "task_started" });
       const res = await req("/events?type=task_started");
-      const events = await res.json();
+      const { events, count } = await res.json();
       expect(events).toHaveLength(2);
+      expect(count).toBe(2);
       expect(events.every((e: any) => e.type === "task_started")).toBe(true);
     });
 
@@ -131,8 +134,9 @@ describe("Feed Service", () => {
       await new Promise((r) => setTimeout(r, 10));
       await publishEvent({ summary: "new" });
       const res = await req(`/events?since=${cutoff}`);
-      const events = await res.json();
+      const { events, count } = await res.json();
       expect(events).toHaveLength(1);
+      expect(count).toBe(1);
       expect(events[0].summary).toBe("new");
     });
 
@@ -141,8 +145,9 @@ describe("Feed Service", () => {
         await publishEvent({ summary: `event-${i}` });
       }
       const res = await req("/events?limit=3");
-      const events = await res.json();
+      const { events, count } = await res.json();
       expect(events).toHaveLength(3);
+      expect(count).toBe(3);
       // Should return last 3
       expect(events[2].summary).toBe("event-9");
     });
@@ -172,8 +177,8 @@ describe("Feed Service", () => {
       const delRes = await req("/events", { method: "DELETE" });
       expect(delRes.status).toBe(200);
       const listRes = await req("/events");
-      const events = await listRes.json();
-      expect(events).toEqual([]);
+      const body = await listRes.json();
+      expect(body).toEqual({ events: [], count: 0 });
     });
   });
 
