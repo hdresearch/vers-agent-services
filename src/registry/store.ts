@@ -54,16 +54,34 @@ const VALID_STATUSES: Set<string> = new Set(["running", "paused", "stopped"]);
 /** Default stale threshold in milliseconds (5 minutes) */
 const DEFAULT_STALE_MS = 5 * 60 * 1000;
 
+/** Hard TTL — entries older than this are auto-purged (1 hour) */
+const HARD_TTL_MS = 60 * 60 * 1000;
+
+/** Auto-purge interval (10 minutes) */
+const AUTO_PURGE_INTERVAL_MS = 10 * 60 * 1000;
+
 export class RegistryStore {
   private vms: Map<string, RegisteredVM> = new Map();
   private filePath: string;
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
   private staleThresholdMs: number;
+  private hardTtlMs: number;
+  private autoPurgeTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(filePath = "data/registry.json", staleThresholdMs = DEFAULT_STALE_MS) {
+  constructor(
+    filePath = "data/registry.json",
+    staleThresholdMs = DEFAULT_STALE_MS,
+    options?: { hardTtlMs?: number; autoPurge?: boolean },
+  ) {
     this.filePath = filePath;
     this.staleThresholdMs = staleThresholdMs;
+    this.hardTtlMs = options?.hardTtlMs ?? HARD_TTL_MS;
     this.load();
+
+    // Start auto-purge unless explicitly disabled
+    if (options?.autoPurge !== false) {
+      this.startAutoPurge();
+    }
   }
 
   private load(): void {
@@ -151,23 +169,22 @@ export class RegistryStore {
     return this.vms.get(id);
   }
 
-  list(filters?: VMFilters, excludeStale = false): RegisteredVM[] {
+  list(filters?: VMFilters, includeStale = false): RegisteredVM[] {
     let results = Array.from(this.vms.values());
 
     if (filters?.role) {
       results = results.filter((vm) => vm.role === filters.role);
     }
     if (filters?.status) {
-      if (filters.status === "running" || excludeStale) {
-        // When filtering for running, exclude stale VMs
-        results = results.filter((vm) => {
-          if (filters.status && vm.status !== filters.status) return false;
-          if (vm.status === "running" && this.isStale(vm)) return false;
-          return true;
-        });
-      } else {
-        results = results.filter((vm) => vm.status === filters.status);
-      }
+      results = results.filter((vm) => vm.status === filters.status);
+    }
+
+    // Exclude stale "running" VMs unless caller opts in
+    if (!includeStale) {
+      results = results.filter((vm) => {
+        if (vm.status === "running" && this.isStale(vm)) return false;
+        return true;
+      });
     }
 
     // Sort by registeredAt descending
@@ -230,6 +247,45 @@ export class RegistryStore {
   clear(): void {
     this.vms.clear();
     this.scheduleSave();
+  }
+
+  /** Return only stale (expired) entries */
+  listStale(): RegisteredVM[] {
+    return Array.from(this.vms.values()).filter((vm) => this.isStale(vm));
+  }
+
+  /** Purge all entries past the hard TTL. Returns count of purged entries. */
+  purgeStale(ttlMs?: number): number {
+    const threshold = ttlMs ?? this.hardTtlMs;
+    let purged = 0;
+    const now = Date.now();
+    for (const [id, vm] of this.vms) {
+      if (now - new Date(vm.lastSeen).getTime() > threshold) {
+        this.vms.delete(id);
+        purged++;
+      }
+    }
+    if (purged > 0) this.scheduleSave();
+    return purged;
+  }
+
+  /** Start the auto-purge interval (removes entries past hard TTL every 10 min) */
+  private startAutoPurge(): void {
+    this.autoPurgeTimer = setInterval(() => {
+      this.purgeStale();
+    }, AUTO_PURGE_INTERVAL_MS);
+    // Don't keep the process alive just for this timer
+    if (this.autoPurgeTimer && typeof this.autoPurgeTimer === "object" && "unref" in this.autoPurgeTimer) {
+      this.autoPurgeTimer.unref();
+    }
+  }
+
+  /** Stop the auto-purge interval */
+  stopAutoPurge(): void {
+    if (this.autoPurgeTimer) {
+      clearInterval(this.autoPurgeTimer);
+      this.autoPurgeTimer = null;
+    }
   }
 }
 

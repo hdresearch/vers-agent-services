@@ -26,17 +26,33 @@ registryRoutes.post("/vms", async (c) => {
   }
 });
 
-// List all registered VMs
+// List all registered VMs (excludes stale by default)
 registryRoutes.get("/vms", (c) => {
   const filters: VMFilters = {};
   const role = c.req.query("role");
   const status = c.req.query("status");
+  const includeStale = c.req.query("include_stale") === "true";
 
   if (role) filters.role = role as VMRole;
   if (status) filters.status = status as VMStatus;
 
-  const vms = registryStore.list(filters);
+  const vms = registryStore.list(filters, includeStale);
   return c.json({ vms, count: vms.length });
+});
+
+// List only stale (expired) VMs
+registryRoutes.get("/stale", (c) => {
+  const vms = registryStore.listStale();
+  return c.json({ vms, count: vms.length });
+});
+
+// Purge all stale VMs (past the soft TTL threshold)
+registryRoutes.delete("/stale", (c) => {
+  const staleVms = registryStore.listStale();
+  for (const vm of staleVms) {
+    registryStore.deregister(vm.id);
+  }
+  return c.json({ purged: staleVms.length });
 });
 
 // Get a single VM
