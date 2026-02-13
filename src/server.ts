@@ -1,54 +1,53 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
-import { bearerAuth } from "./auth.js";
-import { boardRoutes } from "./board/routes.js";
-import { feedRoutes } from "./feed/routes.js";
-import { logRoutes } from "./log/routes.js";
-import { registryRoutes } from "./registry/routes.js";
-import { skillsRoutes } from "./skills/routes.js";
-import { reportsRoutes, sharePublicRoutes } from "./reports/routes.js";
-import { usageRoutes } from "./usage/routes.js";
-import { commitRoutes } from "./commits/routes.js";
-import { journalRoutes } from "./journal/routes.js";
+import { ServiceLoader } from "./service-loader.js";
 import { uiRoutes } from "./ui/routes.js";
+import { sharePublicRoutes } from "./reports/manifest.js";
+
+// Import all service manifests
+import { manifest as boardManifest } from "./board/manifest.js";
+import { manifest as feedManifest } from "./feed/manifest.js";
+import { manifest as logManifest } from "./log/manifest.js";
+import { manifest as registryManifest } from "./registry/manifest.js";
+import { manifest as skillsManifest } from "./skills/manifest.js";
+import { manifest as reportsManifest } from "./reports/manifest.js";
+import { manifest as usageManifest } from "./usage/manifest.js";
+import { manifest as commitManifest } from "./commits/manifest.js";
+import { manifest as journalManifest } from "./journal/manifest.js";
 
 const app = new Hono();
+const loader = new ServiceLoader();
 
-// Health check — unauthenticated (used for liveness probes)
+// ─── Register all services ───
+console.log("Loading services…");
+loader.register(boardManifest);
+loader.register(feedManifest);
+loader.register(logManifest);
+loader.register(registryManifest);
+loader.register(skillsManifest);
+loader.register(reportsManifest);
+loader.register(usageManifest);
+loader.register(commitManifest);
+loader.register(journalManifest);
+
+// ─── Health check — unauthenticated ───
 app.get("/health", (c) => c.json({ status: "ok", uptime: process.uptime() }));
 
-// Mount UI and auth routes (session auth, not bearer)
+// ─── UI routes (session auth, not bearer) ───
 app.route("/", uiRoutes);
 
-// Public share link route — NO auth required (must be before bearer auth)
+// ─── Public share link route — NO auth ───
 app.route("/reports", sharePublicRoutes);
 
-// Bearer auth — applied per-route to API endpoints
-app.use("/board/*", bearerAuth());
-app.use("/feed/*", bearerAuth());
-app.use("/log/*", bearerAuth());
-app.use("/registry/*", bearerAuth());
-app.use("/skills/*", bearerAuth());
-app.use("/reports/*", bearerAuth());
-app.use("/usage/*", bearerAuth());
-app.use("/commits/*", bearerAuth());
-app.use("/journal/*", bearerAuth());
+// ─── Mount all service routes (with auth) ───
+await loader.mount(app);
 
-// Mount service routes
-app.route("/board", boardRoutes);
-app.route("/feed", feedRoutes);
-app.route("/log", logRoutes);
-app.route("/registry", registryRoutes);
-app.route("/skills", skillsRoutes);
-app.route("/reports", reportsRoutes);
-app.route("/usage", usageRoutes);
-app.route("/commits", commitRoutes);
-app.route("/journal", journalRoutes);
+// ─── UI manifest endpoint (served via session-auth proxy at /ui/api/manifest) ───
+app.get("/manifest", (c) => {
+  return c.json(loader.getUIManifest());
+});
 
-// TODO: mount these as they're built
-// app.route("/context", contextRoutes);
-// app.route("/cost", costRoutes);
-
+// ─── Start ───
 const port = parseInt(process.env.PORT || "3000", 10);
 
 if (!process.env.VERS_AUTH_TOKEN) {
@@ -62,4 +61,4 @@ serve({ fetch: app.fetch, port, hostname: "::" }, () => {
   console.log(`vers-agent-services running on :${port}`);
 });
 
-export { app };
+export { app, loader };
