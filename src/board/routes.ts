@@ -1,14 +1,12 @@
 import { Hono } from "hono";
 import {
-  BoardStore,
   NotFoundError,
   ValidationError,
   type TaskFilters,
   type TaskStatus,
   type AddArtifactInput,
 } from "./store.js";
-
-const store = new BoardStore();
+import { boardStore as store } from "./shared-store.js";
 
 export const boardRoutes = new Hono();
 

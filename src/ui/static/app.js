@@ -391,22 +391,28 @@ let reviewRefreshTimer = null;
 async function loadReview() {
   const container = document.getElementById('review-list');
   try {
-    const data = await api('/board/review');
+    const data = await api('/review/queue');
     const tasks = data.tasks || [];
     document.getElementById('review-count').textContent = tasks.length;
 
     if (!tasks.length) {
-      container.innerHTML = '<div class="empty">No tasks awaiting review</div>';
+      container.innerHTML = '<div class="empty">No tasks awaiting review — all clear ✓</div>';
       return;
     }
 
     let html = '';
     for (const t of tasks) {
-      // Find the latest note (review summary)
-      const latestNote = t.notes && t.notes.length > 0 ? t.notes[t.notes.length - 1] : null;
-      const artifacts = t.artifacts || [];
+      // Test results badge
+      let testBadgeHtml = '';
+      if (t.testResults) {
+        const tr = t.testResults;
+        const cls = tr.status === 'PASS' ? 'test-pass' : 'test-fail';
+        testBadgeHtml = `<span class="review-test-badge ${cls}">${tr.status === 'PASS' ? '✓' : '✗'} ${tr.passed}/${tr.total} passed</span>`;
+      }
 
+      // Artifacts
       let artifactsHtml = '';
+      const artifacts = t.artifacts || [];
       if (artifacts.length > 0) {
         artifactsHtml = '<div class="review-artifacts">';
         for (const a of artifacts) {
@@ -422,22 +428,48 @@ async function loadReview() {
         artifactsHtml += '</div>';
       }
 
-      const submittedBy = latestNote ? latestNote.author : t.createdBy;
-      const submittedAt = t.updatedAt;
+      // Concerns
+      let concernsHtml = '';
+      if (t.concerns) {
+        concernsHtml = `<div class="review-concerns">⚠️ ${esc(t.concerns)}</div>`;
+      }
 
-      html += `<div class="review-card" data-id="${t.id}">
+      // Tags
+      const tagsHtml = (t.tags || []).map(tag => `<span class="tag">${esc(tag)}</span>`).join('');
+
+      // Previous review notes (skip the last one which is the submission summary)
+      let historyHtml = '';
+      const reviewNotes = (t.notes || []).filter(n =>
+        n.content.startsWith('✅') || n.content.startsWith('❌') || n.content.startsWith('🔄')
+      );
+      if (reviewNotes.length > 0) {
+        historyHtml = '<div class="review-history">';
+        for (const n of reviewNotes) {
+          historyHtml += `<div class="review-history-item">${esc(n.content)} <span class="review-time">${timeAgo(n.createdAt)}</span></div>`;
+        }
+        historyHtml += '</div>';
+      }
+
+      html += `<div class="review-card" data-id="${t.id}" onclick="toggleReviewExpand(this)">
         <div class="review-card-header">
-          <div class="review-title">${esc(t.title)}</div>
+          <div class="review-card-top">
+            <div class="review-title">${esc(t.title)}</div>
+            ${testBadgeHtml}
+          </div>
           <div class="review-meta">
-            submitted by <span class="review-author">@${esc(submittedBy)}</span>
-            <span class="review-time">${timeAgo(submittedAt)}</span>
+            submitted by <span class="review-author">@${esc(t.submittedBy)}</span>
+            <span class="review-time">${timeAgo(t.submittedAt)}</span>
+            ${tagsHtml}
           </div>
         </div>
-        ${latestNote ? `<div class="review-summary">${esc(latestNote.content)}</div>` : ''}
+        <div class="review-summary">${esc(t.summary)}</div>
+        ${concernsHtml}
         ${artifactsHtml}
+        ${historyHtml}
         <div class="review-actions">
-          <button class="btn btn-approve" onclick="approveTask('${t.id}')">✓ Approve</button>
-          <button class="btn btn-reject" onclick="rejectTask('${t.id}')">✗ Reject</button>
+          <button class="btn btn-approve" onclick="event.stopPropagation(); reviewAction('${t.id}', 'approve')">✅ Approve</button>
+          <button class="btn btn-changes" onclick="event.stopPropagation(); reviewAction('${t.id}', 'changes')">🔄 Request Changes</button>
+          <button class="btn btn-reject" onclick="event.stopPropagation(); reviewAction('${t.id}', 'reject')">❌ Reject</button>
         </div>
       </div>`;
     }
@@ -447,36 +479,98 @@ async function loadReview() {
   }
 }
 
-async function approveTask(taskId) {
-  const comment = prompt('Approval comment (optional):');
-  if (comment === null) return; // cancelled
-  try {
-    await fetch(`${API}/board/tasks/${taskId}/approve`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ comment: comment || '', approvedBy: 'dashboard-user' }),
-    });
-    loadReview();
-    loadBoard();
-  } catch (e) {
-    alert('Failed to approve: ' + e.message);
-  }
+function toggleReviewExpand(el) {
+  el.classList.toggle('expanded');
 }
 
-async function rejectTask(taskId) {
-  const reason = prompt('Rejection reason (required):');
-  if (!reason) return; // cancelled or empty
-  try {
-    await fetch(`${API}/board/tasks/${taskId}/reject`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason, rejectedBy: 'dashboard-user' }),
-    });
-    loadReview();
-    loadBoard();
-  } catch (e) {
-    alert('Failed to reject: ' + e.message);
-  }
+function reviewAction(taskId, action) {
+  const titles = { approve: 'Approve Task', reject: 'Reject Task', changes: 'Request Changes' };
+  const required = action !== 'approve';
+  const placeholder = action === 'approve'
+    ? 'Optional note (e.g. "looks good, ship it")'
+    : action === 'reject'
+    ? 'Why is this being rejected? (required)'
+    : 'What needs to change? (required)';
+
+  showReviewModal(titles[action], placeholder, required, async (note) => {
+    try {
+      const body = { note: note || '' };
+      if (action === 'approve') body.approvedBy = 'dashboard-user';
+      if (action === 'reject') body.rejectedBy = 'dashboard-user';
+      if (action === 'changes') body.requestedBy = 'dashboard-user';
+
+      const res = await fetch(`${API}/review/${taskId}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Request failed');
+      }
+
+      loadReview();
+      loadBoard();
+    } catch (e) {
+      alert('Action failed: ' + e.message);
+    }
+  });
+}
+
+function showReviewModal(title, placeholder, required, onSubmit) {
+  // Remove any existing modal
+  const existing = document.getElementById('review-modal-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'review-modal-overlay';
+  overlay.className = 'review-modal-overlay';
+  overlay.innerHTML = `
+    <div class="review-modal">
+      <div class="review-modal-title">${esc(title)}</div>
+      <textarea class="review-modal-input" placeholder="${esc(placeholder)}" rows="4"></textarea>
+      ${required ? '<div class="review-modal-hint">Note is required</div>' : ''}
+      <div class="review-modal-buttons">
+        <button class="btn review-modal-cancel">Cancel</button>
+        <button class="btn review-modal-submit">${esc(title)}</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const textarea = overlay.querySelector('.review-modal-input');
+  const submitBtn = overlay.querySelector('.review-modal-submit');
+  const cancelBtn = overlay.querySelector('.review-modal-cancel');
+
+  // Style submit button based on action
+  if (title.includes('Approve')) submitBtn.classList.add('btn-approve');
+  else if (title.includes('Reject')) submitBtn.classList.add('btn-reject');
+  else submitBtn.classList.add('btn-changes');
+
+  textarea.focus();
+
+  function close() { overlay.remove(); }
+
+  cancelBtn.onclick = close;
+  overlay.onclick = (e) => { if (e.target === overlay) close(); };
+
+  submitBtn.onclick = () => {
+    const note = textarea.value.trim();
+    if (required && !note) {
+      textarea.style.borderColor = 'var(--red)';
+      textarea.focus();
+      return;
+    }
+    close();
+    onSubmit(note);
+  };
+
+  textarea.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') close();
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitBtn.click();
+  });
 }
 
 function startReviewRefresh() {
@@ -656,8 +750,8 @@ function switchView(viewName) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(`view-${viewName}`)?.classList.add('active');
 
-  // Refresh board data when switching back to it
-  if (viewName === 'board') {
+  // Refresh board data when switching back to dashboard
+  if (viewName === 'dashboard') {
     loadBoard();
     loadRegistry();
     loadReports();
@@ -731,13 +825,13 @@ async function init() {
 
   // Poll board, registry, reports every 10s — but only refresh visible views
   setInterval(() => {
-    if (activeView === 'board') loadBoard();
+    if (activeView === 'dashboard') loadBoard();
   }, 10000);
   setInterval(() => {
-    if (activeView === 'board') loadRegistry();
+    if (activeView === 'dashboard') loadRegistry();
   }, 10000);
   setInterval(() => {
-    if (activeView === 'board') loadReports();
+    if (activeView === 'dashboard') loadReports();
   }, 10000);
 
   // Tab switching

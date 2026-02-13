@@ -180,22 +180,33 @@ html, body {
 /* Review Queue */
 .review-list {
   overflow-y: auto; height: calc(100vh - 130px); padding: 12px 20px;
+  max-width: 900px; margin: 0 auto;
 }
 .review-card {
   background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px;
-  padding: 16px; margin-bottom: 12px; border-left: 3px solid var(--yellow);
+  padding: 16px 20px; margin-bottom: 12px; border-left: 3px solid var(--yellow);
+  cursor: pointer; transition: border-color 0.15s;
 }
-.review-card-header { margin-bottom: 8px; }
-.review-title { color: var(--text-bright); font-weight: 600; font-size: 13px; margin-bottom: 4px; }
-.review-meta { font-size: 11px; color: var(--text-dim); }
+.review-card:hover { border-color: #444; }
+.review-card-header { margin-bottom: 0; }
+.review-card-top { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.review-title { color: var(--text-bright); font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+.review-meta { font-size: 11px; color: var(--text-dim); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .review-author { color: var(--purple); font-weight: 500; }
-.review-time { margin-left: 8px; }
+.review-time { color: var(--text-dim); }
 .review-summary {
-  padding: 8px 0; font-size: 12px; color: var(--text); line-height: 1.6;
-  border-top: 1px solid var(--border); margin-top: 8px;
+  padding: 10px 0 0; font-size: 12px; color: var(--text); line-height: 1.7;
+  margin-top: 10px; white-space: pre-wrap;
+  max-height: 3.4em; overflow: hidden; transition: max-height 0.2s;
+}
+.review-card.expanded .review-summary { max-height: none; }
+.review-concerns {
+  margin-top: 8px; padding: 8px 12px; font-size: 11px; line-height: 1.5;
+  background: rgba(255, 153, 51, 0.08); border: 1px solid rgba(255, 153, 51, 0.2);
+  border-radius: 3px; color: var(--orange);
 }
 .review-artifacts {
-  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; padding-top: 8px;
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; padding-top: 10px;
   border-top: 1px solid var(--border);
 }
 .review-artifact {
@@ -205,6 +216,26 @@ html, body {
   border: 1px solid #2a2a3a; transition: border-color 0.15s;
 }
 .review-artifact:hover { border-color: var(--blue); }
+.review-test-badge {
+  font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 3px;
+  white-space: nowrap; flex-shrink: 0; letter-spacing: 0.3px;
+}
+.review-test-badge.test-pass {
+  background: rgba(68, 255, 153, 0.1); border: 1px solid rgba(68, 255, 153, 0.3);
+  color: var(--accent);
+}
+.review-test-badge.test-fail {
+  background: rgba(255, 85, 85, 0.1); border: 1px solid rgba(255, 85, 85, 0.3);
+  color: var(--red);
+}
+.review-history {
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border);
+  display: none;
+}
+.review-card.expanded .review-history { display: block; }
+.review-history-item {
+  font-size: 11px; color: var(--text-dim); padding: 3px 0; line-height: 1.5;
+}
 .review-actions {
   display: flex; gap: 8px; margin-top: 12px; padding-top: 12px;
   border-top: 1px solid var(--border);
@@ -219,6 +250,41 @@ html, body {
 .btn-approve:hover { background: #0a2a0a; }
 .btn-reject { color: var(--red); border-color: var(--red); }
 .btn-reject:hover { background: #2a0a0a; }
+.btn-changes { color: var(--yellow); border-color: var(--yellow); }
+.btn-changes:hover { background: #2a2a0a; }
+
+/* Review Modal */
+.review-modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.7); z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+  animation: modalFadeIn 0.15s;
+}
+@keyframes modalFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.review-modal {
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px;
+  padding: 20px 24px; width: 480px; max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+.review-modal-title {
+  font-size: 14px; font-weight: 600; color: var(--text-bright);
+  margin-bottom: 12px;
+}
+.review-modal-input {
+  width: 100%; background: var(--bg); border: 1px solid var(--border);
+  color: var(--text); padding: 10px 12px; border-radius: 4px;
+  font-family: inherit; font-size: 12px; line-height: 1.6; resize: vertical;
+  transition: border-color 0.15s;
+}
+.review-modal-input:focus { outline: none; border-color: #555; }
+.review-modal-hint {
+  font-size: 10px; color: var(--text-dim); margin-top: 4px;
+}
+.review-modal-buttons {
+  display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px;
+}
+.review-modal-cancel { color: var(--text-dim); border-color: var(--border); }
+.review-modal-cancel:hover { color: var(--text); }
 
 .empty { color: var(--text-dim); font-style: italic; padding: 20px; text-align: center; }
 
