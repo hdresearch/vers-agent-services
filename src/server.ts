@@ -19,6 +19,7 @@ import { createWatchdogRoutes } from "./watchdog/routes.js";
 import { feedStore } from "./feed/routes.js";
 import { registryStore } from "./registry/routes.js";
 import { store as boardStore } from "./board/routes.js";
+import { webhookRoutes } from "./webhooks/routes.js";
 
 const app = new Hono();
 
@@ -33,6 +34,9 @@ app.route("/reports", sharePublicRoutes);
 
 // Twilio webhook — NO bearer auth (uses X-Twilio-Signature validation)
 app.route("/twilio", twilioRoutes);
+
+// Gitea webhook — NO bearer auth (uses HMAC signature validation)
+app.route("/webhooks", webhookRoutes);
 
 // Bearer auth — applied per-route to API endpoints
 app.use("/auth/*", bearerAuth());
