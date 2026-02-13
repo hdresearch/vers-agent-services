@@ -197,6 +197,15 @@ curl -X PATCH "$VERS_INFRA_URL/board/tasks/$TASK_ID" \
 
 The orchestrator moves tasks from `in_review` to `done` after verification. LTs don't mark their own tasks `done`.
 
+## Subsuming Tasks
+
+When a new task replaces or absorbs multiple older tasks, link them bidirectionally:
+
+1. **On the old tasks**: add a note saying "Subsumed by `<new-task-id>` (<title>)" and close them as `done`.
+2. **On the new task**: add a note listing all subsumed task IDs with their titles and what design context they contain.
+
+This ensures future visitors can trace the lineage in both directions — from the old tasks forward to where the work moved, and from the new task back to the prior thinking.
+
 ## Self-Management
 
 **Orchestrators are responsible for keeping the board current.** Don't wait to be asked. The board is the persistence layer — a new session reads it to understand what's happening. If it's stale, recovery fails.

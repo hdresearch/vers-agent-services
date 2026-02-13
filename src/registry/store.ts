@@ -1,5 +1,5 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { atomicWriteFileSync, recoverTmpFile } from "../utils/atomic-write.js";
 
 export type VMStatus = "running" | "paused" | "stopped";
 
@@ -67,6 +67,7 @@ export class RegistryStore {
   }
 
   private load(): void {
+    recoverTmpFile(this.filePath);
     try {
       if (existsSync(this.filePath)) {
         const raw = readFileSync(this.filePath, "utf-8");
@@ -95,12 +96,8 @@ export class RegistryStore {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;
     }
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
     const data = JSON.stringify({ vms: Array.from(this.vms.values()) }, null, 2);
-    writeFileSync(this.filePath, data, "utf-8");
+    atomicWriteFileSync(this.filePath, data);
   }
 
   private isStale(vm: RegisteredVM): boolean {
@@ -236,23 +233,5 @@ export class RegistryStore {
   }
 }
 
-export class NotFoundError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NotFoundError";
-  }
-}
-
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ValidationError";
-  }
-}
-
-export class ConflictError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ConflictError";
-  }
-}
+export { NotFoundError, ValidationError, ConflictError } from "../errors.js";
+import { NotFoundError, ValidationError, ConflictError } from "../errors.js";

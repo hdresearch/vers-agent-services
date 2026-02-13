@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { ulid } from "ulid";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -77,7 +78,7 @@ export class ShareStore {
 
   createLink(input: CreateShareLinkInput): ShareLink {
     const link: ShareLink = {
-      linkId: ulid(),
+      linkId: randomUUID(),
       reportId: input.reportId,
       createdAt: new Date().toISOString(),
       createdBy: input.createdBy,

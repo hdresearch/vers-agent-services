@@ -40,6 +40,13 @@ npm run build    # TypeScript compile → dist/
 
 Build must pass cleanly before committing. No `any` type workarounds — fix the types.
 
+## Git Hooks
+
+This repo uses a **pre-push hook** (`.githooks/pre-push`) that blocks direct pushes to `main`. All changes should go through a PR.
+
+- The hook is activated automatically via the `prepare` script when you run `npm install`.
+- To bypass in an emergency: `git push --no-verify`
+
 ## Branch and PR Conventions
 
 1. Branch from `main`: `feat/my-feature`, `fix/the-bug`, `docs/the-thing`

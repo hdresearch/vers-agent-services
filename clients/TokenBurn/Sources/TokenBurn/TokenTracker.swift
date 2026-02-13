@@ -1,11 +1,14 @@
 import Foundation
 import Combine
+import os
+
+private let logger = Logger(subsystem: "com.tokenburn", category: "Tracker")
 
 /// Tracks token events in a sliding window and computes tok/s
 @MainActor
 final class TokenTracker: ObservableObject {
     struct TokenEvent {
-        let timestamp: Date
+        let timestamp: Date      // always local Date(), never server timestamp
         let tokens: Int
         let agent: String
         let inputTokens: Int
@@ -23,7 +26,6 @@ final class TokenTracker: ObservableObject {
     private let windowDuration: TimeInterval = 10.0
     private let decayAfter: TimeInterval = 5.0
     private var lastEventTime: Date = .distantPast
-    private var displayedRate: Double = 0
     private var timer: Timer?
 
     // Cost estimate: ~$3 per 1M input tokens, ~$15 per 1M output tokens (blended)
@@ -57,11 +59,14 @@ final class TokenTracker: ObservableObject {
             outputTokens: outputTokens
         )
         events.append(event)
-        lastEventTime = ts
+        lastEventTime = Date()  // Always use wall-clock for "last seen" tracking
         activeAgents.insert(agent)
         totalTokensToday += tokens
         estimatedCostToday += Double(tokens) * blendedCostPerToken
+
+        logger.info("Tracker: recorded \(tokens) tok from \(agent), events in window: \(self.events.count)")
         pruneAndRecalculate()
+        logger.info("Tracker: rate now \(self.tokensPerSecond, format: .fixed(precision: 1)) tok/s")
     }
 
     func loadSummary(totalTokens: Int, estimatedCost: Double) {
@@ -78,18 +83,19 @@ final class TokenTracker: ObservableObject {
         let timeSinceLastEvent = Date().timeIntervalSince(lastEventTime)
         if timeSinceLastEvent > decayAfter {
             let decayFactor = max(0, 1.0 - (timeSinceLastEvent - decayAfter) / 5.0)
-            displayedRate = tokensPerSecond * decayFactor
-            tokensPerSecond = displayedRate
+            let decayedRate = tokensPerSecond * decayFactor
+            tokensPerSecond = decayedRate
 
             // Clear active agents if fully idle
-            if displayedRate < 1.0 {
+            if decayedRate < 1.0 {
                 activeAgents.removeAll()
             }
         }
     }
 
     private func pruneAndRecalculate() {
-        let cutoff = Date().addingTimeInterval(-windowDuration)
+        let now = Date()
+        let cutoff = now.addingTimeInterval(-windowDuration)
         events.removeAll { $0.timestamp < cutoff }
 
         guard !events.isEmpty else {
@@ -97,9 +103,13 @@ final class TokenTracker: ObservableObject {
         }
 
         let totalTokensInWindow = events.reduce(0) { $0 + $1.tokens }
+
+        // Use wall-clock window duration (now - first event) instead of
+        // event-to-event span. This matches the web speedometer's calculation
+        // and produces a more accurate rate when events arrive in bursts.
+        // The web version uses: totalTokens / max(0.5, (now - windowStart))
         let windowStart = events.first!.timestamp
-        let windowEnd = events.last!.timestamp
-        let duration = max(1.0, windowEnd.timeIntervalSince(windowStart))
+        let duration = max(1.0, now.timeIntervalSince(windowStart))
 
         tokensPerSecond = Double(totalTokensInWindow) / duration
     }

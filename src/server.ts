@@ -3,6 +3,7 @@ import { serve } from "@hono/node-server";
 import { ServiceLoader } from "./service-loader.js";
 import { uiRoutes } from "./ui/routes.js";
 import { sharePublicRoutes } from "./reports/manifest.js";
+import { rateLimit } from "./middleware/rate-limit.js";
 
 // Import all service manifests
 import { manifest as boardManifest } from "./board/manifest.js";
@@ -14,6 +15,9 @@ import { manifest as reportsManifest } from "./reports/manifest.js";
 import { manifest as usageManifest } from "./usage/manifest.js";
 import { manifest as commitManifest } from "./commits/manifest.js";
 import { manifest as journalManifest } from "./journal/manifest.js";
+import { manifest as configManifest } from "./config/manifest.js";
+import { manifest as twilioManifest } from "./twilio/manifest.js";
+import { manifest as authManifest } from "./auth/manifest.js";
 
 const app = new Hono();
 const loader = new ServiceLoader();
@@ -29,6 +33,9 @@ loader.register(reportsManifest);
 loader.register(usageManifest);
 loader.register(commitManifest);
 loader.register(journalManifest);
+loader.register(configManifest);
+loader.register(twilioManifest);
+loader.register(authManifest);
 
 // ─── Health check — unauthenticated ───
 app.get("/health", (c) => c.json({ status: "ok", uptime: process.uptime() }));
@@ -38,6 +45,11 @@ app.route("/", uiRoutes);
 
 // ─── Public share link route — NO auth ───
 app.route("/reports", sharePublicRoutes);
+
+// ─── Rate limiting for write endpoints (applied before service mount) ───
+app.post("/feed/events", rateLimit({ windowMs: 60_000, maxRequests: 60 }));
+app.post("/log", rateLimit({ windowMs: 60_000, maxRequests: 30 }));
+app.post("/board/tasks", rateLimit({ windowMs: 60_000, maxRequests: 30 }));
 
 // ─── Mount all service routes (with auth) ───
 await loader.mount(app);

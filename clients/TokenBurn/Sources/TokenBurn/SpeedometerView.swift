@@ -1,8 +1,15 @@
 import SwiftUI
+import Combine
 
 /// Semicircular speedometer gauge drawn with Canvas
+///
+/// Uses `onReceive` with a direct Combine subscription to the tracker's
+/// `$tokensPerSecond` publisher. This is more reliable than passing the
+/// value as a parameter + `onChange(of:)` — the latter breaks in NSPopover
+/// contexts on macOS 14+ where @ObservedObject observation chains in
+/// NSHostingController don't reliably trigger view body re-evaluation.
 struct SpeedometerView: View {
-    let tokensPerSecond: Double
+    @ObservedObject var tracker: TokenTracker
     let maxValue: Double = 5000
 
     // Animated needle position
@@ -41,13 +48,20 @@ struct SpeedometerView: View {
             // Digital readout
             digitalReadout
         }
-        .onChange(of: tokensPerSecond) { newValue in
+        // Direct Combine subscription — bypasses broken @ObservedObject chain
+        // in NSPopover/NSHostingController on macOS 14+. Fires reliably
+        // regardless of whether the popover is attached to a window.
+        .onReceive(tracker.$tokensPerSecond) { newRate in
+            let clamped = min(newRate, maxValue)
+            // Skip animation if the view just appeared (animatedValue still 0
+            // and rate is 0 — no point animating from 0 to 0)
+            if animatedValue == 0 && clamped == 0 { return }
             withAnimation(.spring(response: 0.6, dampingFraction: 0.65, blendDuration: 0.1)) {
-                animatedValue = min(newValue, maxValue)
+                animatedValue = clamped
             }
         }
         .onAppear {
-            animatedValue = min(tokensPerSecond, maxValue)
+            animatedValue = min(tracker.tokensPerSecond, maxValue)
             // Start glow animation
             withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
                 glowPhase = 1.0
@@ -235,5 +249,3 @@ struct SpeedometerView: View {
         }
     }
 }
-
-
