@@ -1,3 +1,4 @@
+import { ValidationError, NotFoundError } from "../errors.js";
 import { ulid } from "ulid";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
@@ -91,20 +92,6 @@ export interface SkillFilters {
 }
 
 // ─── Errors ──────────────────────────────────────────────────
-
-export class NotFoundError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NotFoundError";
-  }
-}
-
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ValidationError";
-  }
-}
 
 // ─── Change Subscriber ──────────────────────────────────────
 
@@ -654,3 +641,5 @@ export class ManifestStore {
     this.scheduleSave();
   }
 }
+
+export { ValidationError, NotFoundError } from "../errors.js";

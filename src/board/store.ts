@@ -1,3 +1,4 @@
+import { ValidationError, NotFoundError } from "../errors.js";
 import { ulid } from "ulid";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
@@ -298,16 +299,4 @@ export class BoardStore {
   }
 }
 
-export class NotFoundError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NotFoundError";
-  }
-}
-
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ValidationError";
-  }
-}
+export { ValidationError, NotFoundError } from "../errors.js";

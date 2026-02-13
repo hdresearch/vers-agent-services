@@ -1,3 +1,4 @@
+import { ValidationError, ConflictError } from "../errors.js";
 import { ulid } from "ulid";
 import { readFileSync, appendFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
@@ -153,16 +154,4 @@ export class CommitStore {
   }
 }
 
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ValidationError";
-  }
-}
-
-export class ConflictError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ConflictError";
-  }
-}
+export { ValidationError, ConflictError } from "../errors.js";

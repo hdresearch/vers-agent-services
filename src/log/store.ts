@@ -1,3 +1,4 @@
+import { ValidationError } from "../errors.js";
 import { ulid } from "ulid";
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
@@ -136,9 +137,4 @@ export class LogStore {
   }
 }
 
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ValidationError";
-  }
-}
+export { ValidationError } from "../errors.js";

@@ -1,3 +1,4 @@
+import { ValidationError } from "../errors.js";
 import { ulid } from "ulid";
 import { mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
@@ -144,13 +145,6 @@ function validateCostBreakdown(cost: any): cost is CostBreakdown {
 }
 
 // --- Errors ---
-
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ValidationError";
-  }
-}
 
 // --- Promisified DuckDB helpers ---
 
@@ -578,3 +572,5 @@ function toISOString(val: any): string {
   if (typeof val === "string") return val;
   return String(val);
 }
+
+export { ValidationError } from "../errors.js";
