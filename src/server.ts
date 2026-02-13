@@ -12,6 +12,7 @@ import { reportsRoutes, sharePublicRoutes } from "./reports/routes.js";
 import { usageRoutes } from "./usage/routes.js";
 import { commitRoutes } from "./commits/routes.js";
 import { journalRoutes } from "./journal/routes.js";
+import { configRoutes } from "./config/routes.js";
 import { uiRoutes } from "./ui/routes.js";
 import { twilioRoutes } from "./twilio/routes.js";
 
@@ -40,6 +41,7 @@ app.use("/reports/*", bearerAuth());
 app.use("/usage/*", bearerAuth());
 app.use("/commits/*", bearerAuth());
 app.use("/journal/*", bearerAuth());
+app.use("/config/*", bearerAuth());
 
 // Rate limiting for write endpoints (applied after auth)
 app.post("/feed/events", rateLimit({ windowMs: 60_000, maxRequests: 60 }));
@@ -57,6 +59,7 @@ app.route("/reports", reportsRoutes);
 app.route("/usage", usageRoutes);
 app.route("/commits", commitRoutes);
 app.route("/journal", journalRoutes);
+app.route("/config", configRoutes);
 
 // TODO: mount these as they're built
 // app.route("/context", contextRoutes);
