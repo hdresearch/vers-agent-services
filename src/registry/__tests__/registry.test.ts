@@ -217,6 +217,96 @@ describe("RegistryStore", () => {
       expect(store2.get("vm-1")?.name).toBe("persisted");
     });
   });
+
+  describe("pinned VMs", () => {
+    it("pinned VMs are never stale", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "pinned1.json"), 1);
+      shortStore.register(makeInput({ id: "vm-pinned", role: "infra", pinned: true }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          const results = shortStore.discover("infra");
+          expect(results).toHaveLength(1);
+          expect(results[0].id).toBe("vm-pinned");
+          resolve();
+        }, 10);
+      });
+    });
+
+    it("unpinned VMs still go stale", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "pinned2.json"), 1);
+      shortStore.register(makeInput({ id: "vm-unpinned", role: "infra" }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          const results = shortStore.discover("infra");
+          expect(results).toHaveLength(0);
+          resolve();
+        }, 10);
+      });
+    });
+
+    it("pinned flag persists through upsert", () => {
+      store.upsert(makeInput({ id: "vm-ups", role: "infra", pinned: true }));
+      const vm = store.get("vm-ups");
+      expect(vm?.pinned).toBe(true);
+    });
+  });
+
+  describe("upsert", () => {
+    it("registers a new VM if not exists", () => {
+      const vm = store.upsert(makeInput({ id: "vm-new", name: "new-vm" }));
+      expect(vm.name).toBe("new-vm");
+      expect(store.get("vm-new")).toBeDefined();
+    });
+
+    it("updates existing VM and refreshes lastSeen", () => {
+      store.register(makeInput({ id: "vm-exist", name: "old-name" }));
+      const before = store.get("vm-exist")!.lastSeen;
+
+      // Small delay to ensure different timestamp
+      const vm = store.upsert(makeInput({ id: "vm-exist", name: "new-name" }));
+      expect(vm.name).toBe("new-name");
+      expect(new Date(vm.lastSeen).getTime()).toBeGreaterThanOrEqual(new Date(before).getTime());
+    });
+
+    it("can pin an existing unpinned VM", () => {
+      store.register(makeInput({ id: "vm-topin" }));
+      expect(store.get("vm-topin")?.pinned).toBeFalsy();
+
+      store.upsert(makeInput({ id: "vm-topin", pinned: true }));
+      expect(store.get("vm-topin")?.pinned).toBe(true);
+    });
+  });
+
+  describe("listStale", () => {
+    it("returns only stale unpinned VMs", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "stale1.json"), 1);
+      shortStore.register(makeInput({ id: "vm-pinned", role: "infra", pinned: true }));
+      shortStore.register(makeInput({ id: "vm-unpinned", role: "infra" }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          const stale = shortStore.listStale();
+          expect(stale).toHaveLength(1);
+          expect(stale[0].id).toBe("vm-unpinned");
+          resolve();
+        }, 10);
+      });
+    });
+  });
+
+  describe("listAll", () => {
+    it("returns all VMs regardless of stale status", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "all1.json"), 1);
+      shortStore.register(makeInput({ id: "vm-1", role: "infra" }));
+      shortStore.register(makeInput({ id: "vm-2", role: "worker" }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          const all = shortStore.listAll();
+          expect(all).toHaveLength(2);
+          resolve();
+        }, 10);
+      });
+    });
+  });
 });
 
 // --- HTTP route tests ---

@@ -26,16 +26,19 @@ registryRoutes.post("/vms", async (c) => {
   }
 });
 
-// List all registered VMs
+// List registered VMs (excludes stale by default unless include_stale=true)
 registryRoutes.get("/vms", (c) => {
   const filters: VMFilters = {};
   const role = c.req.query("role");
   const status = c.req.query("status");
+  const includeStale = c.req.query("include_stale") === "true";
 
   if (role) filters.role = role as VMRole;
   if (status) filters.status = status as VMStatus;
 
-  const vms = registryStore.list(filters);
+  const vms = includeStale
+    ? registryStore.listAll(filters)
+    : registryStore.list(filters, true);
   return c.json({ vms, count: vms.length });
 });
 
@@ -75,6 +78,12 @@ registryRoutes.post("/vms/:id/heartbeat", (c) => {
     if (e instanceof NotFoundError) return c.json({ error: e.message }, 404);
     throw e;
   }
+});
+
+// List stale VMs
+registryRoutes.get("/stale", (c) => {
+  const vms = registryStore.listStale();
+  return c.json({ vms, count: vms.length });
 });
 
 // Discover VMs by role
