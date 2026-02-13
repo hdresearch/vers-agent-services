@@ -737,6 +737,7 @@ export default function (pi: ExtensionAPI) {
           metadata: {
             pid: process.pid,
             startedAt: new Date().toISOString(),
+            parentAgent: process.env.VERS_PARENT_AGENT || null,
           },
         });
       }
