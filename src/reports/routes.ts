@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { ReportsStore, ValidationError, NotFoundError, type ReportFilters } from "./store.js";
 import { ShareStore } from "./share-store.js";
 import { createShareAdminRoutes, createSharePublicRoutes } from "./share-routes.js";
+import { emit } from "../events/emit.js";
 
 const reportsStore = new ReportsStore();
 const shareStore = new ShareStore();
@@ -13,6 +14,7 @@ reportsRoutes.post("/", async (c) => {
   try {
     const body = await c.req.json();
     const report = reportsStore.create(body);
+    emit('reports', 'reports.report.created', { reportId: report.id, title: report.title, author: report.author, tags: report.tags }, report.author);
     return c.json(report, 201);
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);

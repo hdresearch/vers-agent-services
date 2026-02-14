@@ -8,6 +8,7 @@ import {
   type TaskEffort,
   type AddArtifactInput,
 } from "./store.js";
+import { emit } from "../events/emit.js";
 
 export const store = new BoardStore();
 
@@ -18,6 +19,7 @@ boardRoutes.post("/tasks", async (c) => {
   try {
     const body = await c.req.json();
     const task = store.createTask(body);
+    emit('board', 'board.task.created', { taskId: task.id, title: task.title, tags: task.tags, assignee: task.assignee, status: task.status }, task.createdBy);
     return c.json(task, 201);
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
@@ -86,6 +88,7 @@ boardRoutes.post("/tasks/:id/review", async (c) => {
 
     // Set status to in_review
     store.updateTask(id, { status: "in_review" });
+    emit('board', 'board.task.status_changed', { taskId: id, status: 'in_review', previous: 'unknown' }, body.reviewedBy?.trim());
 
     // Add summary note
     const author = body.reviewedBy?.trim() || "unknown";
@@ -124,6 +127,7 @@ boardRoutes.post("/tasks/:id/approve", async (c) => {
 
     // Set status to done
     store.updateTask(id, { status: "done" });
+    emit('board', 'board.task.status_changed', { taskId: id, status: 'done', action: 'approved' }, approvedBy);
 
     // Add approval note
     const noteContent = comment
@@ -158,6 +162,7 @@ boardRoutes.post("/tasks/:id/reject", async (c) => {
 
     // Set status to open
     store.updateTask(id, { status: "open" });
+    emit('board', 'board.task.status_changed', { taskId: id, status: 'open', action: 'rejected', reason: body.reason.trim() }, rejectedBy);
 
     // Add rejection note
     store.addNote(id, {
@@ -187,6 +192,7 @@ boardRoutes.patch("/tasks/:id", async (c) => {
   try {
     const body = await c.req.json();
     const task = store.updateTask(c.req.param("id"), body);
+    emit('board', body.status ? 'board.task.status_changed' : 'board.task.updated', { taskId: task.id, ...body }, task.assignee || undefined);
     return c.json(task);
   } catch (e) {
     if (e instanceof NotFoundError) return c.json({ error: e.message }, 404);

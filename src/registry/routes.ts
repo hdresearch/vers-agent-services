@@ -8,6 +8,7 @@ import {
   type VMRole,
   type VMStatus,
 } from "./store.js";
+import { emit } from "../events/emit.js";
 
 export const registryStore = new RegistryStore();
 
@@ -18,6 +19,7 @@ registryRoutes.post("/vms", async (c) => {
   try {
     const body = await c.req.json();
     const vm = registryStore.register(body);
+    emit('registry', 'registry.vm.registered', { vmId: vm.id, name: vm.name, role: vm.role, address: vm.address }, vm.registeredBy);
     return c.json(vm, 201);
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
@@ -53,6 +55,7 @@ registryRoutes.delete("/stale", (c) => {
   const staleVms = registryStore.listStale();
   for (const vm of staleVms) {
     registryStore.deregister(vm.id);
+    emit('registry', 'registry.vm.stale', { vmId: vm.id, name: vm.name, role: vm.role });
   }
   return c.json({ purged: staleVms.length });
 });
@@ -79,8 +82,10 @@ registryRoutes.patch("/vms/:id", async (c) => {
 
 // Deregister a VM
 registryRoutes.delete("/vms/:id", (c) => {
-  const deleted = registryStore.deregister(c.req.param("id"));
+  const vmId = c.req.param("id");
+  const deleted = registryStore.deregister(vmId);
   if (!deleted) return c.json({ error: "VM not found" }, 404);
+  emit('registry', 'registry.vm.deregistered', { vmId });
   return c.json({ deleted: true });
 });
 
@@ -88,6 +93,7 @@ registryRoutes.delete("/vms/:id", (c) => {
 registryRoutes.post("/vms/:id/heartbeat", (c) => {
   try {
     const vm = registryStore.heartbeat(c.req.param("id"));
+    emit('registry', 'registry.vm.heartbeat', { vmId: vm.id, lastSeen: vm.lastSeen });
     return c.json({ id: vm.id, lastSeen: vm.lastSeen });
   } catch (e) {
     if (e instanceof NotFoundError) return c.json({ error: e.message }, 404);

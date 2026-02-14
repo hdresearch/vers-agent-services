@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { FeedStore, VALID_EVENT_TYPES } from "./store.js";
 import type { PublishInput, FeedEvent } from "./store.js";
+import { emit } from "../events/emit.js";
 
 export const feedStore = new FeedStore();
 export const feedRoutes = new Hono();
@@ -37,6 +38,7 @@ feedRoutes.post("/events", async (c) => {
     detail: input.detail as string | undefined,
     metadata: input.metadata as Record<string, unknown> | undefined,
   });
+  emit('feed', 'feed.event.published', { feedId: event.id, type: event.type, summary: event.summary }, event.agent);
   return c.json(event, 201);
 });
 
