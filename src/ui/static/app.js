@@ -74,7 +74,7 @@ let lastBoardHash = '';
 async function loadBoard() {
   const board = document.getElementById('board');
   try {
-    const data = await api('/board/tasks');
+    const data = await api('/board/tasks?compact=true');
     renderBoard(data.tasks || []);
   } catch (e) {
     // Only show error if board is currently empty or showing error
@@ -905,3 +905,4 @@ async function init() {
 }
 
 init();
+

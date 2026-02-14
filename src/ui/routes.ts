@@ -127,7 +127,10 @@ uiRoutes.get("/ui/static/:file", (c) => {
     const content = readFileSync(join(getStaticDir(), file), "utf-8");
     const ext = file.split(".").pop();
     const contentType = ext === "css" ? "text/css" : ext === "js" ? "application/javascript" : "text/plain";
-    return c.body(content, 200, { "Content-Type": contentType });
+    return c.body(content, 200, {
+      "Content-Type": contentType,
+      "Cache-Control": "public, max-age=300",  // 5 min cache for static files
+    });
   } catch {
     return c.text("Not found", 404);
   }
@@ -198,3 +201,4 @@ uiRoutes.all("/ui/api/*", async (c) => {
     return c.json({ error: "Proxy error", details: String(e) }, 502);
   }
 });
+

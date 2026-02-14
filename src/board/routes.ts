@@ -44,6 +44,14 @@ boardRoutes.get("/tasks", (c) => {
   if (unsupervisedGte) filters.unsupervised_gte = Number(unsupervisedGte);
 
   const tasks = store.listTasks(filters);
+
+  // ?compact=true strips notes, artifacts, and description for faster list loads
+  const compact = c.req.query("compact") === "true";
+  if (compact) {
+    const slim = tasks.map(({ notes, artifacts, description, ...rest }) => rest);
+    return c.json({ tasks: slim, count: slim.length });
+  }
+
   return c.json({ tasks, count: tasks.length });
 });
 
@@ -242,3 +250,4 @@ boardRoutes.get("/tasks/:id/notes", (c) => {
     throw e;
   }
 });
+
