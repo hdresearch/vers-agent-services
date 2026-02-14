@@ -129,6 +129,7 @@ function err(text: string) {
   };
 }
 
+
 // =============================================================================
 // SkillHub client — sync skills & extensions from hub to local filesystem
 // =============================================================================
@@ -504,7 +505,7 @@ export default function (pi: ExtensionAPI) {
       const running = registryRes.vms.filter((v) => v.status === "running").length;
 
       const lines = [
-        "─── Agent Services ───",
+        `─── Agent Services ─── ${base}/ui`,
         `Board: ${open} open, ${inProgress} in-progress, ${blocked} blocked`,
         `Feed: ${feedRes.total} events`,
         `Registry: ${total} VMs (${running} running)`,
