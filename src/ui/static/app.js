@@ -708,9 +708,11 @@ function switchView(viewName) {
     stopSkillsRefresh();
   }
 
-  // Chat: initialize on first visit
+  // Chat: initialize on first visit, cleanup on leave
   if (viewName === 'chat') {
     if (typeof window._chatInit === 'function') window._chatInit();
+  } else {
+    if (typeof window._chatDestroy === 'function') window._chatDestroy();
   }
 
   // Metrics: pause animation when leaving, resume when returning

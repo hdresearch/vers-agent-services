@@ -13,10 +13,13 @@
   let initialized = false;
   let autoScroll = true;
   let lastEventId = null;
+  let refreshTimer = null;
 
   // ─── Time formatting ───
   function timeAgo(iso) {
+    if (!iso) return '';
     const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 0) return 'now';
     if (ms < 60000) return `${Math.floor(ms / 1000)}s`;
     if (ms < 3600000) return `${Math.floor(ms / 60000)}m`;
     if (ms < 86400000) return `${Math.floor(ms / 3600000)}h`;
@@ -27,6 +30,23 @@
     const d = document.createElement('div');
     d.textContent = s || '';
     return d.innerHTML;
+  }
+
+  // ─── Safe fetch that handles auth redirects ───
+  async function safeFetch(url, opts) {
+    const res = await fetch(url, opts);
+    if (res.redirected || res.status === 302 || res.status === 401) {
+      throw new Error('Session expired — reload to re-authenticate');
+    }
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+    // Check content-type to avoid parsing HTML as JSON
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+      throw new Error('Unexpected response type: ' + ct);
+    }
+    return res.json();
   }
 
   // ─── Render a message bubble ───
@@ -55,13 +75,15 @@
   function checkAutoScroll() {
     const el = messagesEl();
     if (!el) return;
-    // Auto-scroll if within 100px of bottom
     autoScroll = (el.scrollHeight - el.scrollTop - el.clientHeight) < 100;
   }
 
   function maybeScroll() {
     if (autoScroll) requestAnimationFrame(scrollToBottom);
   }
+
+  // ─── Dedup tracking ───
+  const seenIds = new Set();
 
   // ─── Load initial data ───
   async function loadHistory() {
@@ -72,30 +94,34 @@
     const welcome = el.querySelector('.chat-welcome');
 
     try {
-      // Load recent log entries and feed events in parallel
-      const [logRes, feedRes] = await Promise.all([
-        fetch(`${API}/log?limit=30`).then(r => r.json()),
-        fetch(`${API}/feed/events?limit=30`).then(r => r.json()),
+      // Load recent log entries (use ?last=6h for reasonable volume)
+      // and feed events in parallel
+      const [logData, feedData] = await Promise.all([
+        safeFetch(`${API}/log?last=6h`),
+        safeFetch(`${API}/feed/events?limit=50`),
       ]);
 
       const items = [];
 
       // Log entries
-      const logs = Array.isArray(logRes) ? logRes : (logRes.entries || []);
+      const logs = logData.entries || [];
       for (const entry of logs) {
+        const key = 'log:' + entry.timestamp + ':' + (entry.agent || '') + ':' + (entry.text || '').slice(0, 50);
+        seenIds.add(key);
         items.push({
           time: entry.timestamp,
           agent: entry.agent || 'unknown',
-          body: entry.text,
+          body: entry.text || '',
           cssClass: 'feed',
           typeLabel: 'log',
         });
       }
 
-      // Feed events (skip token_update noise)
-      const events = feedRes.events || [];
+      // Feed events (skip noisy types)
+      const events = feedData.events || [];
       for (const evt of events) {
-        if (evt.type === 'token_update') continue;
+        if (evt.type === 'token_update' || evt.type === 'cost_update') continue;
+        seenIds.add(evt.id);
         items.push({
           time: evt.timestamp,
           agent: evt.agent || 'unknown',
@@ -112,15 +138,27 @@
       // Remove welcome, add items
       if (welcome) welcome.remove();
 
-      // Only show last 50
-      const recent = items.slice(-50);
-      for (const item of recent) {
-        el.appendChild(renderMsg(item));
+      // Only show last 60
+      const recent = items.slice(-60);
+      if (recent.length === 0) {
+        el.appendChild(renderMsg({
+          body: 'No recent activity. Send a message to get started!',
+          cssClass: 'system',
+        }));
+      } else {
+        for (const item of recent) {
+          el.appendChild(renderMsg(item));
+        }
       }
 
       scrollToBottom();
     } catch (e) {
       console.error('Chat: failed to load history', e);
+      if (welcome) welcome.remove();
+      el.appendChild(renderMsg({
+        body: `⚠ Failed to load history: ${e.message}`,
+        cssClass: 'system',
+      }));
     }
   }
 
@@ -128,7 +166,9 @@
   // Hook into app.js SSE by exposing a global callback
   window._chatOnFeedEvent = function (evt) {
     if (!initialized) return;
-    if (evt.type === 'token_update') return;
+    if (evt.type === 'token_update' || evt.type === 'cost_update') return;
+    if (evt.id && seenIds.has(evt.id)) return;
+    if (evt.id) seenIds.add(evt.id);
 
     const el = messagesEl();
     if (!el) return;
@@ -172,15 +212,14 @@
       maybeScroll();
 
       try {
-        const res = await fetch(`${API}/board/tasks`, {
+        const data = await safeFetch(`${API}/board/tasks`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title, createdBy: 'noah', tags: ['from-chat'] }),
         });
-        const data = await res.json();
 
         el.appendChild(renderMsg({
-          body: `✓ Task created: ${data.id}`,
+          body: `✓ Task created: ${data.id || 'ok'}`,
           cssClass: 'system',
         }));
       } catch (e) {
@@ -194,7 +233,7 @@
     }
 
     // Handle /reports command
-    if (text === '/reports' || text.startsWith('/reports')) {
+    if (text === '/reports' || text === '/reports ') {
       el.appendChild(renderMsg({
         body: 'Loading recent reports…',
         cssClass: 'system',
@@ -202,18 +241,24 @@
       maybeScroll();
 
       try {
-        const res = await fetch(`${API}/reports`);
-        const data = await res.json();
+        const data = await safeFetch(`${API}/reports`);
         const reports = (data.reports || []).slice(0, 10);
 
-        for (const r of reports) {
+        if (reports.length === 0) {
           el.appendChild(renderMsg({
-            agent: r.author || 'unknown',
-            body: r.title,
-            time: r.createdAt,
-            cssClass: 'feed',
-            typeLabel: 'report',
+            body: 'No reports found.',
+            cssClass: 'system',
           }));
+        } else {
+          for (const r of reports) {
+            el.appendChild(renderMsg({
+              agent: r.author || 'unknown',
+              body: r.title,
+              time: r.createdAt,
+              cssClass: 'feed',
+              typeLabel: 'report',
+            }));
+          }
         }
       } catch (e) {
         el.appendChild(renderMsg({
@@ -226,7 +271,7 @@
     }
 
     // Handle /board command
-    if (text === '/board' || text.startsWith('/board')) {
+    if (text === '/board' || text === '/board ') {
       el.appendChild(renderMsg({
         body: 'Loading board summary…',
         cssClass: 'system',
@@ -234,8 +279,7 @@
       maybeScroll();
 
       try {
-        const res = await fetch(`${API}/board/tasks`);
-        const data = await res.json();
+        const data = await safeFetch(`${API}/board/tasks`);
         const tasks = data.tasks || [];
         const open = tasks.filter(t => t.status === 'open').length;
         const inProg = tasks.filter(t => t.status === 'in_progress').length;
@@ -248,16 +292,16 @@
           cssClass: 'system',
         }));
 
-        // Show top 5 open tasks by score
+        // Show top 5 non-done tasks by score
         const topOpen = tasks
-          .filter(t => t.status === 'open')
+          .filter(t => t.status !== 'done')
           .sort((a, b) => (b.score || 0) - (a.score || 0))
           .slice(0, 5);
         for (const t of topOpen) {
           el.appendChild(renderMsg({
-            body: `[${t.score || 0}] ${t.title}`,
+            body: `[${t.status}] ${t.title}`,
             cssClass: 'feed',
-            typeLabel: 'open',
+            typeLabel: t.status,
           }));
         }
       } catch (e) {
@@ -266,6 +310,16 @@
           cssClass: 'system',
         }));
       }
+      maybeScroll();
+      return;
+    }
+
+    // Handle /help command
+    if (text === '/help') {
+      el.appendChild(renderMsg({
+        body: 'Commands:\n/task <title> — create a board task\n/board — show board summary\n/reports — show recent reports\n/help — this message\n\nAnything else posts to the work log.',
+        cssClass: 'system',
+      }));
       maybeScroll();
       return;
     }
@@ -280,7 +334,7 @@
     maybeScroll();
 
     try {
-      await fetch(`${API}/log`, {
+      await safeFetch(`${API}/log`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text, agent: 'noah' }),
@@ -291,6 +345,40 @@
         cssClass: 'system',
       }));
       maybeScroll();
+    }
+  }
+
+  // ─── Periodic refresh for new log entries ───
+  async function pollNewEntries() {
+    if (!initialized) return;
+    try {
+      const data = await safeFetch(`${API}/log?last=2m`);
+      const entries = data.entries || [];
+      const el = messagesEl();
+      if (!el) return;
+
+      let added = false;
+      for (const entry of entries) {
+        const key = 'log:' + entry.timestamp + ':' + (entry.agent || '') + ':' + (entry.text || '').slice(0, 50);
+        if (seenIds.has(key)) continue;
+        seenIds.add(key);
+
+        // Don't show our own messages (already rendered optimistically)
+        if ((entry.agent || '').toLowerCase() === 'noah') continue;
+
+        checkAutoScroll();
+        el.appendChild(renderMsg({
+          time: entry.timestamp,
+          agent: entry.agent || 'unknown',
+          body: entry.text || '',
+          cssClass: 'feed',
+          typeLabel: 'log',
+        }));
+        added = true;
+      }
+      if (added) maybeScroll();
+    } catch (e) {
+      // Silent — don't spam errors on poll
     }
   }
 
@@ -309,10 +397,16 @@
           sendMessage();
         }
       });
+      // Focus input on mobile for quick typing
+      // (delay to avoid interfering with tab switch animation)
+      setTimeout(() => input.focus(), 300);
     }
 
     if (sendBtn) {
-      sendBtn.addEventListener('click', sendMessage);
+      sendBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        sendMessage();
+      });
     }
 
     const msgs = messagesEl();
@@ -321,15 +415,35 @@
     }
 
     loadHistory();
+
+    // Poll for new log entries every 15s (feed events come via SSE)
+    refreshTimer = setInterval(pollNewEntries, 15000);
   }
 
+  // ─── Cleanup when leaving tab ───
+  window._chatDestroy = function () {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+  };
+
   // ─── Tab activation hook ───
-  // Called by app.js when switching to chat tab
-  window._chatInit = init;
+  window._chatInit = function () {
+    if (!initialized) {
+      init();
+    } else {
+      // Re-entering chat tab — restart polling
+      if (!refreshTimer) {
+        refreshTimer = setInterval(pollNewEntries, 15000);
+      }
+      // Scroll to bottom on re-entry
+      scrollToBottom();
+    }
+  };
 
   // Also init if chat tab is already visible
   if (document.querySelector('#view-chat.active')) {
     init();
   }
 })();
-
