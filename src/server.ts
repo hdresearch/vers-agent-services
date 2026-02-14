@@ -29,6 +29,7 @@ import { cryoRoutes } from "./cryo/routes.js";
 import { gossipRoutes, gossipStore } from "./gossip/routes.js";
 import { loopRoutes, loopStore as loopRunnerStore } from "./loop/routes.js";
 import { routerRoutes } from "./router/routes.js";
+import { fleetChatRoutes, fleetChatPublicRoutes } from "./fleet-chat/routes.js";
 
 const app = new Hono();
 
@@ -46,6 +47,10 @@ app.route("/twilio", twilioRoutes);
 
 // Gitea webhook — NO bearer auth (uses HMAC signature validation)
 app.route("/webhooks", webhookRoutes);
+
+// Fleet chat public inbox — NO bearer auth (verified by sender's public key)
+// Mounted before bearer auth middleware; /fleet-chat/inbox and /fleet-chat/inbox/stream are public
+app.route("/fleet-chat", fleetChatPublicRoutes);
 
 // LLM Router — NO bearer auth on /v1 (agents auth with x-agent-id or fleet token;
 // router validates internally). This is the single source of truth for API keys.
@@ -67,6 +72,13 @@ app.use("/review/*", bearerAuth());
 app.use("/events/*", bearerAuth());
 app.use("/personas/*", bearerAuth());
 app.use("/cryo/*", bearerAuth());
+// Fleet chat: auth on all routes EXCEPT /inbox (public endpoint)
+app.use("/fleet-chat/channels/*", bearerAuth());
+app.use("/fleet-chat/identity", bearerAuth());
+app.use("/fleet-chat/trusted/*", bearerAuth());
+app.use("/fleet-chat/trusted", bearerAuth());
+app.use("/fleet-chat/quarantine/*", bearerAuth());
+app.use("/fleet-chat/quarantine", bearerAuth());
 
 // ETag for polling-heavy GET endpoints (board, registry, reports, feed)
 // Returns 304 Not Modified when data hasn't changed — saves bandwidth on 10-30s polling
@@ -102,6 +114,7 @@ app.route("/personas", personaRoutes);
 app.route("/cryo", cryoRoutes);
 app.route("/gossip", gossipRoutes);
 app.route("/loop", loopRoutes);
+app.route("/fleet-chat", fleetChatRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
