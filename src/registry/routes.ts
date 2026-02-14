@@ -26,7 +26,7 @@ registryRoutes.post("/vms", async (c) => {
   }
 });
 
-// List all registered VMs (excludes stale by default)
+// List registered VMs (excludes stale by default unless include_stale=true)
 registryRoutes.get("/vms", (c) => {
   const filters: VMFilters = {};
   const role = c.req.query("role");
@@ -36,7 +36,9 @@ registryRoutes.get("/vms", (c) => {
   if (role) filters.role = role as VMRole;
   if (status) filters.status = status as VMStatus;
 
-  const vms = registryStore.list(filters, includeStale);
+  const vms = includeStale
+    ? registryStore.listAll(filters)
+    : registryStore.list(filters, true);
   return c.json({ vms, count: vms.length });
 });
 

@@ -7,6 +7,7 @@ import { boardRoutes } from "./board/routes.js";
 import { feedRoutes } from "./feed/routes.js";
 import { logRoutes } from "./log/routes.js";
 import { registryRoutes } from "./registry/routes.js";
+import { initPersistentVMs } from "./registry/persistent.js";
 import { skillsRoutes } from "./skills/routes.js";
 import { reportsRoutes, sharePublicRoutes } from "./reports/routes.js";
 import { usageRoutes } from "./usage/routes.js";
@@ -99,6 +100,10 @@ serve({ fetch: app.fetch, port, hostname: "::" }, () => {
   // Auto-start zombie watchdog
   watchdogStore.start();
   console.log(`watchdog started — checking every 2min for zombie agents`);
+
+  // Auto-register persistent VMs (infra, gitea, minio) and start heartbeat loop.
+  // This ensures they survive TTL purging without manual intervention.
+  initPersistentVMs();
 });
 
 export { app };

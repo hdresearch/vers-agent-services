@@ -172,6 +172,10 @@ function startSSE() {
       if (typeof window._speedometerOnFeedEvent === 'function') {
         window._speedometerOnFeedEvent(evt);
       }
+      // Forward to chat tab
+      if (typeof window._chatOnFeedEvent === 'function') {
+        window._chatOnFeedEvent(evt);
+      }
       const feed = feedEl();
       if (feed) {
         feed.prepend(renderEvent(evt));
@@ -704,6 +708,11 @@ function switchView(viewName) {
     stopSkillsRefresh();
   }
 
+  // Chat: initialize on first visit
+  if (viewName === 'chat') {
+    if (typeof window._chatInit === 'function') window._chatInit();
+  }
+
   // Metrics: pause animation when leaving, resume when returning
   // But DON'T destroy state — that's what causes the re-render bug
   if (viewName === 'metrics') {
@@ -800,3 +809,5 @@ async function init() {
 }
 
 init();
+
+

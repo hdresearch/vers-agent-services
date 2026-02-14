@@ -16,6 +16,7 @@
       <button class="tab" data-view="journal">Journal</button>
       <button class="tab" data-view="skills">Skills</button>
       <button class="tab" data-view="metrics">Metrics</button>
+      <button class="tab" data-view="chat">Chat</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -235,9 +236,32 @@
     </div>
   </div>
 
+  <!-- Chat view -->
+  <div class="view" id="view-chat">
+    <div class="chat-container">
+      <div class="chat-messages" id="chat-messages">
+        <div class="chat-welcome">
+          <div class="chat-welcome-icon">▸</div>
+          <div class="chat-welcome-text">Fleet Chat</div>
+          <div class="chat-welcome-hint">
+            Messages go to the work log. Use <code>/task</code> to create a board task.<br>
+            Live feed events stream in automatically.
+          </div>
+        </div>
+      </div>
+      <div class="chat-input-area">
+        <input type="text" id="chat-input" placeholder="Message the fleet…" autocomplete="off" spellcheck="false">
+        <button id="chat-send" class="chat-send-btn">▸</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/static/chat.js"></script>
   <script src="/ui/static/speedometer.js"></script>
   <script src="/ui/static/metrics.js"></script>
   <script src="/ui/static/analytics.js"></script>
   <script type="module" src="/ui/static/app.js"></script>
 </body>
 </html>
+
+
