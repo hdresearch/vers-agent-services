@@ -99,7 +99,7 @@ if (!process.env.VERS_AUTH_TOKEN) {
   );
 }
 
-serve({ fetch: app.fetch, port, hostname: "::" }, () => {
+const server = serve({ fetch: app.fetch, port, hostname: "::" }, () => {
   console.log(`vers-agent-services running on :${port}`);
   // Auto-start zombie watchdog
   watchdogStore.start();
@@ -109,5 +109,25 @@ serve({ fetch: app.fetch, port, hostname: "::" }, () => {
   // This ensures they survive TTL purging without manual intervention.
   initPersistentVMs();
 });
+
+// Graceful shutdown — let in-flight requests drain before exiting.
+// This is critical for zero-downtime deploys: Caddy retries during the brief
+// window between SIGTERM and the new process starting.
+function gracefulShutdown(signal: string) {
+  console.log(`\n${signal} received — shutting down gracefully...`);
+  watchdogStore.stop();
+  server.close(() => {
+    console.log("All connections closed. Exiting.");
+    process.exit(0);
+  });
+  // Force exit after 10s if connections don't drain
+  setTimeout(() => {
+    console.warn("Forceful shutdown after 10s timeout.");
+    process.exit(1);
+  }, 10_000).unref();
+}
+
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 export { app };
