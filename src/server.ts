@@ -26,7 +26,7 @@ import { reviewRoutes } from "./review/routes.js";
 import { eventRoutes } from "./events/routes.js";
 import { personaRoutes } from "./personas/routes.js";
 import { cryoRoutes } from "./cryo/routes.js";
-import { gossipRoutes } from "./gossip/routes.js";
+import { gossipRoutes, gossipStore } from "./gossip/routes.js";
 import { loopRoutes, loopStore as loopRunnerStore } from "./loop/routes.js";
 
 const app = new Hono();
@@ -137,6 +137,12 @@ const server = serve({ fetch: app.fetch, port, hostname: "::" }, () => {
 function gracefulShutdown(signal: string) {
   console.log(`\n${signal} received — shutting down gracefully...`);
   watchdogStore.stop();
+  // Flush gossip store to prevent data loss from debounced writes
+  gossipStore.flush();
+  // Stop loop runner timers
+  if (loopRunnerStore.isRunning) {
+    try { loopRunnerStore.stop(); } catch {}
+  }
   server.close(() => {
     console.log("All connections closed. Exiting.");
     process.exit(0);

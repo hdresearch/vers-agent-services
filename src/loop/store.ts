@@ -72,9 +72,9 @@ export class LoopStore {
   private timers: Map<string, ReturnType<typeof setInterval>> = new Map();
   private runs: RunRecord[] = [];
   private filePath: string;
-  private onTick?: (role: RoleConfig) => void;
+  private onTick?: (role: RoleConfig) => void | Promise<void>;
 
-  constructor(filePath = "data/loop.json", onTick?: (role: RoleConfig) => void) {
+  constructor(filePath = "data/loop.json", onTick?: (role: RoleConfig) => void | Promise<void>) {
     this.filePath = filePath;
     this.onTick = onTick;
     this.roles = this.loadConfig();
@@ -148,7 +148,7 @@ export class LoopStore {
     this.timers.set(role.name, timer);
   }
 
-  private tickRole(role: RoleConfig): void {
+  private async tickRole(role: RoleConfig): Promise<void> {
     const run: RunRecord = {
       id: ulid(),
       role: role.name,
@@ -161,7 +161,7 @@ export class LoopStore {
 
     try {
       if (this.onTick) {
-        this.onTick(role);
+        await this.onTick(role);
       }
       run.result = "success";
       run.completedAt = new Date().toISOString();

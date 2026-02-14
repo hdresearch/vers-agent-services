@@ -545,14 +545,15 @@
         parts.push('VMs: failed to fetch');
       }
 
-      // Usage
+      // Usage — API returns { totals: { tokens, cost, sessions, vms }, byAgent }
       try {
         const usage = await safeFetch(`${API}/usage/summary?range=24h`);
-        if (usage.totalCost != null) {
-          parts.push(`Cost (24h): $${Number(usage.totalCost).toFixed(4)}`);
+        const totals = usage.totals || {};
+        if (totals.cost != null) {
+          parts.push(`Cost (24h): $${Number(totals.cost).toFixed(4)}`);
         }
-        if (usage.totalTokens != null) {
-          parts.push(`Tokens (24h): ${Number(usage.totalTokens).toLocaleString()}`);
+        if (totals.tokens != null) {
+          parts.push(`Tokens (24h): ${Number(totals.tokens).toLocaleString()}`);
         }
       } catch {}
 

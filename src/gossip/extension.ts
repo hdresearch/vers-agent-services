@@ -62,13 +62,18 @@ export async function gossip_reply(params: {
   body: string;
   priority?: "low" | "normal" | "high" | "urgent";
 }) {
+  // Fetch the original message to get the correct recipient
+  const original = await gossipFetch(\`/threads/\${params.replyTo}\`).catch(() => null);
+  const origMsg = original?.messages?.find((m: any) => m.id === params.replyTo);
+  const to = origMsg ? origMsg.from : params.from; // reply to sender of original
+
   return gossipFetch("/messages", {
     method: "POST",
     body: JSON.stringify({
       from: params.from,
-      to: "", // will be filled from original message context
+      to,
       type: "reply",
-      subject: "re:",
+      subject: "re:" + (origMsg?.subject ? " " + origMsg.subject : ""),
       body: params.body,
       priority: params.priority || "normal",
       replyTo: params.replyTo,

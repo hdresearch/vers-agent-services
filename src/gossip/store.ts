@@ -107,6 +107,10 @@ export class GossipStore {
       const parent = this.messages.find((m) => m.id === input.replyTo);
       if (!parent) throw new NotFoundError(`Message ${input.replyTo} not found`);
       threadId = parent.threadId;
+      // Auto-resolve 'to' for replies: reply goes to original sender
+      if (!input.to?.trim() && parent.from) {
+        input.to = parent.from;
+      }
     } else {
       threadId = ulid();
     }
@@ -218,6 +222,15 @@ export class GossipStore {
       topSenders,
       urgentUnread,
     };
+  }
+
+  /** Flush any pending debounced write immediately. Call on shutdown to prevent data loss. */
+  flush(): void {
+    if (this.writeTimer) {
+      clearTimeout(this.writeTimer);
+      this.writeTimer = null;
+      atomicWriteFileSync(this.filePath, JSON.stringify(this.messages, null, 2));
+    }
   }
 
   get size(): number {

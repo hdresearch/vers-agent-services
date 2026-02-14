@@ -11,7 +11,8 @@
   let fleetActive = false;
   let fleetRAF = null;
   let fleetSSE = null;
-  let fleetPollTimer = null;
+  let fleetPollTimer = null;       // vitals refresh timer
+  let fleetStreamPollTimer = null; // SSE fallback stream polling timer
   let nodes = [];       // {id, name, role, status, x, y, vx, vy, radius, vm}
   let hoveredNode = null;
   let selectedNode = null;
@@ -54,7 +55,23 @@
     try {
       const res = await fetch(`${API}${path}`, { signal: ctrl.signal });
       clearTimeout(t);
+
+      // Handle session expiry — redirect to login
+      if (res.status === 401 || res.status === 403) {
+        window.location.href = '/ui/login';
+        throw new Error('Session expired');
+      }
+      if (res.redirected && res.url.includes('/login')) {
+        window.location.href = '/ui/login';
+        throw new Error('Session expired');
+      }
       if (!res.ok) throw new Error(`${res.status}`);
+
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('text/html')) {
+        window.location.href = '/ui/login';
+        throw new Error('Session expired');
+      }
       return res.json();
     } catch (e) {
       clearTimeout(t);
@@ -113,11 +130,12 @@
         setText('fv-tasks-done', done);
       }
 
-      // Usage
+      // Usage — API returns { totals: { tokens, cost, sessions, vms }, byAgent }
       if (usageData.status === 'fulfilled') {
         const u = usageData.value;
-        const totalTokens = u.totalTokens || u.total_tokens || 0;
-        const totalCost = u.totalCost || u.total_cost || 0;
+        const totals = u.totals || {};
+        const totalTokens = totals.tokens || 0;
+        const totalCost = totals.cost || 0;
         setText('fv-tokens', totalTokens > 1000000 ? (totalTokens / 1000000).toFixed(1) + 'M' : totalTokens > 1000 ? (totalTokens / 1000).toFixed(0) + 'K' : totalTokens);
         setText('fv-cost', '$' + (typeof totalCost === 'number' ? totalCost.toFixed(2) : totalCost));
       }
@@ -366,7 +384,10 @@
 
     canvas.addEventListener('mousemove', onMouseMove);
     canvas.addEventListener('click', onCanvasClick);
-    canvas.addEventListener('mouseleave', () => { mouse.x = -1000; mouse.y = -1000; hoveredNode = null; });
+    canvas.addEventListener('mouseleave', onMouseLeave);
+    canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+    canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+    canvas.addEventListener('touchend', onTouchEnd, { passive: false });
     window.addEventListener('resize', resizeCanvas);
   }
 
@@ -399,6 +420,51 @@
       if (dx * dx + dy * dy <= (n.radius + 6) * (n.radius + 6)) return n;
     }
     return null;
+  }
+
+  function onMouseLeave() {
+    mouse.x = -1000; mouse.y = -1000; hoveredNode = null;
+  }
+
+  function getTouchPos(e) {
+    const touch = e.touches[0] || e.changedTouches[0];
+    if (!touch || !canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    return { x: touch.clientX - rect.left, y: touch.clientY - rect.top };
+  }
+
+  function onTouchStart(e) {
+    const pos = getTouchPos(e);
+    if (!pos) return;
+    mouse.x = pos.x;
+    mouse.y = pos.y;
+    hoveredNode = hitTest(pos.x, pos.y);
+    if (hoveredNode) e.preventDefault(); // prevent scroll when interacting with a node
+  }
+
+  function onTouchMove(e) {
+    const pos = getTouchPos(e);
+    if (!pos) return;
+    mouse.x = pos.x;
+    mouse.y = pos.y;
+    hoveredNode = hitTest(pos.x, pos.y);
+    if (hoveredNode) e.preventDefault();
+  }
+
+  function onTouchEnd(e) {
+    const pos = getTouchPos(e);
+    if (!pos) return;
+    const hit = hitTest(pos.x, pos.y);
+    if (hit) {
+      e.preventDefault();
+      selectedNode = hit;
+      showDetail(hit);
+    } else {
+      selectedNode = null;
+      hideDetail();
+    }
+    // Clear hover state after touch
+    setTimeout(() => { mouse.x = -1000; mouse.y = -1000; hoveredNode = null; }, 300);
   }
 
   function onMouseMove(e) {
@@ -503,14 +569,14 @@
         } catch {}
       };
       fleetSSE.onerror = () => {
-        // Fall back to polling
+        // Fall back to polling for stream events
         if (fleetSSE) { try { fleetSSE.close(); } catch {} fleetSSE = null; }
-        if (!fleetPollTimer && fleetActive) {
-          fleetPollTimer = setInterval(pollStream, 15000);
+        if (!fleetStreamPollTimer && fleetActive) {
+          fleetStreamPollTimer = setInterval(pollStream, 15000);
         }
       };
     } catch {
-      if (!fleetPollTimer) fleetPollTimer = setInterval(pollStream, 15000);
+      if (!fleetStreamPollTimer) fleetStreamPollTimer = setInterval(pollStream, 15000);
     }
   }
 
@@ -597,5 +663,17 @@
     if (fleetRAF) { cancelAnimationFrame(fleetRAF); fleetRAF = null; }
     if (fleetSSE) { try { fleetSSE.close(); } catch {} fleetSSE = null; }
     if (fleetPollTimer) { clearInterval(fleetPollTimer); fleetPollTimer = null; }
+    if (fleetStreamPollTimer) { clearInterval(fleetStreamPollTimer); fleetStreamPollTimer = null; }
+
+    // Remove canvas event listeners to prevent leak on tab switch
+    if (canvas) {
+      canvas.removeEventListener('mousemove', onMouseMove);
+      canvas.removeEventListener('click', onCanvasClick);
+      canvas.removeEventListener('mouseleave', onMouseLeave);
+      canvas.removeEventListener('touchstart', onTouchStart);
+      canvas.removeEventListener('touchmove', onTouchMove);
+      canvas.removeEventListener('touchend', onTouchEnd);
+    }
+    window.removeEventListener('resize', resizeCanvas);
   };
 })();

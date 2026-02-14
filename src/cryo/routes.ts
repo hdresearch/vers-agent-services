@@ -9,6 +9,7 @@ import {
   type TrustLevel,
 } from "./store.js";
 import { emit } from "../events/emit.js";
+import { registryStore } from "../registry/routes.js";
 
 export const cryoStore = new CryoStore();
 
@@ -90,6 +91,28 @@ cryoRoutes.post("/agents/:name/wake", async (c) => {
     const body = await c.req.json();
     const agent = cryoStore.wake(c.req.param("name"), body);
     emit("cryo", "cryo.agent.woken", { name: agent.name, vmId: agent.currentVmId }, agent.name);
+
+    // Auto-register in service registry so the agent is discoverable
+    if (agent.currentVmId) {
+      try {
+        registryStore.register({
+          id: agent.currentVmId,
+          name: agent.name,
+          role: (agent as any).role || "worker",
+          address: (body as any).address || (agent as any).address || "",
+          registeredBy: "cryo",
+          services: (body as any).services || [],
+        });
+      } catch (regErr: any) {
+        // If already registered (conflict), update heartbeat instead
+        if (regErr?.message?.includes?.("already registered") || regErr?.constructor?.name === "ConflictError") {
+          try { registryStore.heartbeat(agent.currentVmId); } catch {}
+        }
+        // Don't fail the wake if registry fails — log it
+        emit("cryo", "cryo.registry.warn", { name: agent.name, error: regErr?.message || String(regErr) }, agent.name);
+      }
+    }
+
     return c.json(agent);
   } catch (e) {
     if (e instanceof NotFoundError) return c.json({ error: e.message }, 404);
