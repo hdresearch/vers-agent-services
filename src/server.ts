@@ -29,6 +29,7 @@ import { cryoRoutes } from "./cryo/routes.js";
 import { gossipRoutes, gossipStore } from "./gossip/routes.js";
 import { loopRoutes, loopStore as loopRunnerStore } from "./loop/routes.js";
 import { routerRoutes } from "./router/routes.js";
+import { couchRoutes, couchPublicRoutes, couchStore } from "./couch/routes.js";
 
 const app = new Hono();
 
@@ -46,6 +47,9 @@ app.route("/twilio", twilioRoutes);
 
 // Gitea webhook — NO bearer auth (uses HMAC signature validation)
 app.route("/webhooks", webhookRoutes);
+
+// Couch redeem — NO bearer auth (this is the public door for guest agents)
+app.route("/couch", couchPublicRoutes);
 
 // LLM Router — NO bearer auth on /v1 (agents auth with x-agent-id or fleet token;
 // router validates internally). This is the single source of truth for API keys.
@@ -67,6 +71,7 @@ app.use("/review/*", bearerAuth());
 app.use("/events/*", bearerAuth());
 app.use("/personas/*", bearerAuth());
 app.use("/cryo/*", bearerAuth());
+app.use("/couch/*", bearerAuth());
 
 // ETag for polling-heavy GET endpoints (board, registry, reports, feed)
 // Returns 304 Not Modified when data hasn't changed — saves bandwidth on 10-30s polling
@@ -102,6 +107,7 @@ app.route("/personas", personaRoutes);
 app.route("/cryo", cryoRoutes);
 app.route("/gossip", gossipRoutes);
 app.route("/loop", loopRoutes);
+app.route("/couch", couchRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
@@ -144,6 +150,8 @@ function gracefulShutdown(signal: string) {
   watchdogStore.stop();
   // Flush gossip store to prevent data loss from debounced writes
   gossipStore.flush();
+  // Flush couch store
+  couchStore.flush();
   // Stop loop runner timers
   if (loopRunnerStore.isRunning) {
     try { loopRunnerStore.stop(); } catch {}
