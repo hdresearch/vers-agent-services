@@ -812,6 +812,13 @@ function switchView(viewName) {
     if (typeof window.metricsDestroy === 'function') window.metricsDestroy();
     if (typeof window.analyticsDestroy === 'function') window.analyticsDestroy();
   }
+
+  // Fleet: init/destroy
+  if (viewName === 'fleet') {
+    if (typeof window._fleetInit === 'function') window._fleetInit();
+  } else if (prevView === 'fleet') {
+    if (typeof window._fleetDestroy === 'function') window._fleetDestroy();
+  }
 }
 
 // ─── Metrics Sub-tabs ───

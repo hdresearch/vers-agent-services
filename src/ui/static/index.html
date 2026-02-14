@@ -17,6 +17,7 @@
       <button class="tab" data-view="skills">Skills</button>
       <button class="tab" data-view="metrics">Metrics</button>
       <button class="tab" data-view="chat">Chat</button>
+      <button class="tab" data-view="fleet">Fleet</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -256,6 +257,93 @@
     </div>
   </div>
 
+  <!-- Fleet View -->
+  <div class="view" id="view-fleet">
+    <!-- Vitals bar -->
+    <div class="fleet-vitals" id="fleet-vitals">
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Agents</span>
+        <span class="fleet-vital-val" id="fv-agents">—</span>
+      </div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Awake</span>
+        <span class="fleet-vital-val fv-green" id="fv-awake">—</span>
+      </div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Idle</span>
+        <span class="fleet-vital-val fv-yellow" id="fv-idle">—</span>
+      </div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Error</span>
+        <span class="fleet-vital-val fv-red" id="fv-error">—</span>
+      </div>
+      <div class="fleet-vital-sep"></div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Token Spend</span>
+        <span class="fleet-vital-val" id="fv-tokens">—</span>
+      </div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Cost</span>
+        <span class="fleet-vital-val fv-green" id="fv-cost">—</span>
+      </div>
+      <div class="fleet-vital-sep"></div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Tasks Open</span>
+        <span class="fleet-vital-val fv-blue" id="fv-tasks-open">—</span>
+      </div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Tasks Done</span>
+        <span class="fleet-vital-val" id="fv-tasks-done">—</span>
+      </div>
+      <div class="fleet-vital-sep"></div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Last Deploy</span>
+        <span class="fleet-vital-val" id="fv-last-deploy">—</span>
+      </div>
+    </div>
+
+    <div class="fleet-layout">
+      <!-- Agent Map (Canvas) -->
+      <div class="fleet-map-wrap">
+        <div class="fleet-map-header">
+          <span>Agent Map</span>
+          <div class="fleet-legend">
+            <span class="fleet-legend-dot" style="background:#4f9"></span> awake
+            <span class="fleet-legend-dot" style="background:#fd0"></span> idle
+            <span class="fleet-legend-dot" style="background:#666"></span> hibernating
+            <span class="fleet-legend-dot" style="background:#f55"></span> error
+            <span class="fleet-legend-dot" style="background:#a7f"></span> orchestrator
+          </div>
+        </div>
+        <canvas id="fleet-canvas"></canvas>
+        <!-- Agent detail popover -->
+        <div class="fleet-detail" id="fleet-detail" style="display:none">
+          <div class="fleet-detail-close" id="fleet-detail-close">✕</div>
+          <div class="fleet-detail-name" id="fd-name"></div>
+          <div class="fleet-detail-role" id="fd-role"></div>
+          <div class="fleet-detail-status" id="fd-status"></div>
+          <div class="fleet-detail-meta" id="fd-meta"></div>
+          <div class="fleet-detail-services" id="fd-services"></div>
+        </div>
+      </div>
+
+      <!-- Activity stream sidebar -->
+      <div class="fleet-sidebar">
+        <div class="fleet-sidebar-header">Activity Stream</div>
+        <div class="fleet-stream" id="fleet-stream">
+          <div class="empty">Connecting…</div>
+        </div>
+        <!-- Quick actions -->
+        <div class="fleet-actions">
+          <button class="fleet-action-btn" id="fleet-new-task" title="New Task">+ Task</button>
+          <button class="fleet-action-btn" id="fleet-wake-agent" title="Wake Agent">⚡ Wake</button>
+          <button class="fleet-action-btn" id="fleet-jump-chat" title="Jump to Chat">💬 Chat</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/static/fleet.js"></script>
   <script src="/ui/static/chat.js"></script>
   <script src="/ui/static/speedometer.js"></script>
   <script src="/ui/static/metrics.js"></script>
