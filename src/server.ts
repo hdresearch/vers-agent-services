@@ -28,6 +28,7 @@ import { personaRoutes } from "./personas/routes.js";
 import { cryoRoutes } from "./cryo/routes.js";
 import { gossipRoutes } from "./gossip/routes.js";
 import { loopRoutes, loopStore as loopRunnerStore } from "./loop/routes.js";
+import { routerRoutes } from "./router/routes.js";
 
 const app = new Hono();
 
@@ -45,6 +46,10 @@ app.route("/twilio", twilioRoutes);
 
 // Gitea webhook — NO bearer auth (uses HMAC signature validation)
 app.route("/webhooks", webhookRoutes);
+
+// LLM Router — NO bearer auth on /v1 (agents auth with x-agent-id or fleet token;
+// router validates internally). This is the single source of truth for API keys.
+app.route("/v1", routerRoutes);
 
 // Bearer auth — applied per-route to API endpoints
 app.use("/auth/*", bearerAuth());
