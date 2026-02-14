@@ -29,6 +29,7 @@ import { cryoRoutes } from "./cryo/routes.js";
 import { gossipRoutes, gossipStore } from "./gossip/routes.js";
 import { loopRoutes, loopStore as loopRunnerStore } from "./loop/routes.js";
 import { routerRoutes } from "./router/routes.js";
+import { kbRoutes, kbStore } from "./kb/routes.js";
 
 const app = new Hono();
 
@@ -67,6 +68,7 @@ app.use("/review/*", bearerAuth());
 app.use("/events/*", bearerAuth());
 app.use("/personas/*", bearerAuth());
 app.use("/cryo/*", bearerAuth());
+app.use("/kb/*", bearerAuth());
 
 // ETag for polling-heavy GET endpoints (board, registry, reports, feed)
 // Returns 304 Not Modified when data hasn't changed — saves bandwidth on 10-30s polling
@@ -101,6 +103,7 @@ app.route("/events", eventRoutes);
 app.route("/personas", personaRoutes);
 app.route("/cryo", cryoRoutes);
 app.route("/gossip", gossipRoutes);
+app.route("/kb", kbRoutes);
 app.route("/loop", loopRoutes);
 
 // Watchdog — zombie agent detection
@@ -144,6 +147,8 @@ function gracefulShutdown(signal: string) {
   watchdogStore.stop();
   // Flush gossip store to prevent data loss from debounced writes
   gossipStore.flush();
+  // Flush KB store
+  kbStore.flush();
   // Stop loop runner timers
   if (loopRunnerStore.isRunning) {
     try { loopRunnerStore.stop(); } catch {}
