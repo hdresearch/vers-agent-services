@@ -14,6 +14,7 @@
   --blue: #5af;
   --purple: #a7f;
   --orange: #f93;
+  --surface: #161616;
 }
 
 html, body { 
@@ -47,6 +48,7 @@ html, body {
 /* Views */
 .view { display: none; }
 .view.active { display: block; }
+#view-chat.active { display: flex; justify-content: center; }
 
 /* Stats bar */
 .stats {
@@ -1038,7 +1040,7 @@ html, body {
 .chat-container {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 100px);
+  height: calc(100vh - 120px);
   max-width: 800px;
   margin: 0 auto;
   padding: 0 8px;
@@ -1217,24 +1219,17 @@ html, body {
 
 /* Mobile responsive */
 @media (max-width: 768px) {
-  .chat-container {
-    height: calc(100vh - 80px);
-    padding: 0 4px;
+  .header {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    gap: 8px;
   }
+  .header h1 { font-size: 13px; }
 
-  .chat-msg {
-    max-width: 92%;
-    font-size: 14px;
-  }
-
-  #chat-input {
-    font-size: 16px; /* prevents iOS zoom on focus */
-    padding: 14px 16px;
-  }
-
-  .chat-send-btn {
-    width: 48px;
-    height: 48px;
+  .stats {
+    padding: 6px 12px;
+    gap: 12px;
+    font-size: 10px;
   }
 
   /* Make tabs scrollable on mobile */
@@ -1242,6 +1237,57 @@ html, body {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
+    flex-shrink: 0;
   }
   .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    padding: 6px 14px;
+    font-size: 12px;
+    white-space: nowrap;
+    min-height: 36px;
+  }
+
+  .chat-container {
+    height: calc(100vh - 110px);
+    padding: 0 4px;
+  }
+
+  .chat-messages {
+    padding: 8px 0;
+  }
+
+  .chat-msg {
+    max-width: 92%;
+    font-size: 14px;
+    padding: 10px 14px;
+  }
+
+  .chat-msg-agent { font-size: 12px; }
+  .chat-msg-time { font-size: 11px; }
+
+  #chat-input {
+    font-size: 16px; /* prevents iOS zoom on focus */
+    padding: 14px 16px;
+    border-radius: 10px;
+  }
+
+  .chat-input-area {
+    padding: 8px 4px 12px;
+    gap: 8px;
+  }
+
+  .chat-send-btn {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    font-size: 20px;
+  }
+
+  .chat-welcome {
+    padding: 30px 16px;
+  }
+
+  .chat-welcome-text {
+    font-size: 16px;
+  }
 }
