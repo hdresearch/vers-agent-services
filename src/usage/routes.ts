@@ -49,6 +49,13 @@ usageRoutes.get("/", async (c) => {
   return c.json(summary);
 });
 
+// GET /summary — alias for / (TokenBurn macOS app uses this path)
+usageRoutes.get("/summary", async (c) => {
+  const range = c.req.query("range") || "7d";
+  const summary = await store.summary(range);
+  return c.json(summary);
+});
+
 // GET /sessions — list sessions
 usageRoutes.get("/sessions", async (c) => {
   const agent = c.req.query("agent");
@@ -74,3 +81,4 @@ usageRoutes.get("/vms", async (c) => {
   });
   return c.json({ vms, count: vms.length });
 });
+
