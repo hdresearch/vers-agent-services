@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { createMagicLink, consumeMagicLink, createSession, validateSession } from "./auth.js";
 import { processAnalyticsQuery } from "./analytics.js";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -127,9 +128,21 @@ uiRoutes.get("/ui/static/:file", (c) => {
     const content = readFileSync(join(getStaticDir(), file), "utf-8");
     const ext = file.split(".").pop();
     const contentType = ext === "css" ? "text/css" : ext === "js" ? "application/javascript" : "text/plain";
+
+    // Compute ETag for conditional requests
+    const hash = createHash("md5").update(content).digest("hex").slice(0, 16);
+    const etagValue = `W/"${hash}"`;
+
+    // Return 304 if unchanged
+    const ifNoneMatch = c.req.header("if-none-match");
+    if (ifNoneMatch === etagValue) {
+      return c.body(null, 304, { ETag: etagValue });
+    }
+
     return c.body(content, 200, {
       "Content-Type": contentType,
-      "Cache-Control": "public, max-age=300",  // 5 min cache for static files
+      "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400",
+      "ETag": etagValue,
     });
   } catch {
     return c.text("Not found", 404);
@@ -175,6 +188,10 @@ uiRoutes.all("/ui/api/*", async (c) => {
   const contentType = c.req.header("content-type");
   if (contentType) headers["Content-Type"] = contentType;
 
+  // Forward conditional request headers for ETag support
+  const ifNoneMatch = c.req.header("if-none-match");
+  if (ifNoneMatch) headers["If-None-Match"] = ifNoneMatch;
+
   const method = c.req.method;
   const body = method !== "GET" && method !== "HEAD" ? await c.req.text() : undefined;
 
@@ -193,10 +210,21 @@ uiRoutes.all("/ui/api/*", async (c) => {
       });
     }
 
+    // Forward 304 Not Modified as-is (ETag polling optimization)
+    if (resp.status === 304) {
+      const respHeaders: Record<string, string> = {};
+      const respEtag = resp.headers.get("etag");
+      if (respEtag) respHeaders["ETag"] = respEtag;
+      return c.body(null, 304, respHeaders);
+    }
+
     const text = await resp.text();
-    return c.body(text, resp.status as any, {
+    const respHeaders: Record<string, string> = {
       "Content-Type": resp.headers.get("content-type") || "application/json",
-    });
+    };
+    const respEtag = resp.headers.get("etag");
+    if (respEtag) respHeaders["ETag"] = respEtag;
+    return c.body(text, resp.status as any, respHeaders);
   } catch (e) {
     return c.json({ error: "Proxy error", details: String(e) }, 502);
   }

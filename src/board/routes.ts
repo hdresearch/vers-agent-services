@@ -27,7 +27,7 @@ boardRoutes.post("/tasks", async (c) => {
   }
 });
 
-// List tasks with optional filters
+// List tasks with optional filters and pagination
 boardRoutes.get("/tasks", (c) => {
   const filters: TaskFilters = {};
   const status = c.req.query("status");
@@ -43,16 +43,24 @@ boardRoutes.get("/tasks", (c) => {
   if (effort) filters.effort = effort as TaskEffort;
   if (unsupervisedGte) filters.unsupervised_gte = Number(unsupervisedGte);
 
-  const tasks = store.listTasks(filters);
+  const allTasks = store.listTasks(filters);
+  const total = allTasks.length;
+
+  // Pagination: ?limit=100&offset=0 (default: all for backward compat, max 500)
+  const limitStr = c.req.query("limit");
+  const limit = limitStr ? Math.min(parseInt(limitStr, 10) || 100, 500) : undefined;
+  const offset = parseInt(c.req.query("offset") || "0", 10) || 0;
+
+  const tasks = limit !== undefined ? allTasks.slice(offset, offset + limit) : allTasks;
 
   // ?compact=true strips notes, artifacts, and description for faster list loads
   const compact = c.req.query("compact") === "true";
   if (compact) {
     const slim = tasks.map(({ notes, artifacts, description, ...rest }) => rest);
-    return c.json({ tasks: slim, count: slim.length });
+    return c.json({ tasks: slim, count: slim.length, total });
   }
 
-  return c.json({ tasks, count: tasks.length });
+  return c.json({ tasks, count: tasks.length, total });
 });
 
 // Get a single task

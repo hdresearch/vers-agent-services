@@ -4,22 +4,44 @@
 
 const API = '/ui/api';
 
-// ─── Fetch with timeout + error boundary ───
+// ─── ETag cache for conditional requests ───
+const etagCache = new Map(); // path → { etag, data }
+
+// ─── Fetch with timeout + error boundary + conditional requests ───
 
 async function api(path, opts = {}) {
   const timeout = opts.timeout || 8000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
+  const headers = {};
+
+  // Send If-None-Match for conditional requests (polling optimization)
+  const cached = etagCache.get(path);
+  if (cached?.etag) {
+    headers['If-None-Match'] = cached.etag;
+  }
+
   try {
-    const res = await fetch(`${API}${path}`, { signal: controller.signal });
+    const res = await fetch(`${API}${path}`, { signal: controller.signal, headers });
     clearTimeout(timer);
     if (res.status === 401) {
-      // Session expired — redirect to login
       window.location.href = '/ui/login';
       throw new Error('Session expired');
     }
+    // 304 Not Modified — return cached data
+    if (res.status === 304 && cached?.data) {
+      return cached.data;
+    }
     if (!res.ok) throw new Error(`API ${path}: ${res.status}`);
-    return res.json();
+    const data = await res.json();
+
+    // Cache ETag for next request
+    const etag = res.headers.get('etag');
+    if (etag) {
+      etagCache.set(path, { etag, data });
+    }
+
+    return data;
   } catch (e) {
     clearTimeout(timer);
     if (e.name === 'AbortError') throw new Error(`API ${path}: timeout after ${timeout}ms`);
@@ -175,7 +197,7 @@ function renderEvent(evt) {
 async function loadFeed() {
   const feed = feedEl();
   try {
-    const events = await api('/feed/events?limit=100');
+    const events = await api('/feed/events?limit=50');
     feed.innerHTML = '';
     const list = Array.isArray(events) ? events : (events.events || []);
     list.reverse();
@@ -769,7 +791,7 @@ function switchView(viewName) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(`view-${viewName}`)?.classList.add('active');
 
-  // Dashboard — always refresh on switch-back
+  // Dashboard — refresh on switch-back (conditional requests make this cheap if unchanged)
   if (viewName === 'dashboard') {
     loadBoard();
     loadRegistry();
@@ -894,14 +916,14 @@ async function init() {
   // SSE starts non-blocking AFTER initial data is painted
   startSSE();
 
-  // Poll only the active view
+  // Poll only the active view — 30s interval (SSE handles real-time feed updates)
   setInterval(() => {
     if (activeView === 'dashboard') {
       loadBoard();
       loadRegistry();
       loadReports();
     }
-  }, 10000);
+  }, 30000);
 }
 
 init();

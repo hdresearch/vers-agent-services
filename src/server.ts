@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { bearerAuth } from "./auth.js";
 import { rateLimit } from "./middleware/rate-limit.js";
+import { etag } from "./middleware/etag.js";
 import { keyRoutes } from "./auth/key-routes.js";
 import { boardRoutes } from "./board/routes.js";
 import { feedRoutes } from "./feed/routes.js";
@@ -55,6 +56,14 @@ app.use("/journal/*", bearerAuth());
 app.use("/config/*", bearerAuth());
 app.use("/review/*", bearerAuth());
 app.use("/events/*", bearerAuth());
+
+// ETag for polling-heavy GET endpoints (board, registry, reports, feed)
+// Returns 304 Not Modified when data hasn't changed — saves bandwidth on 10-30s polling
+app.use("/board/tasks", etag());
+app.use("/registry/vms", etag());
+app.use("/reports", etag());
+app.use("/feed/events", etag());
+app.use("/feed/stats", etag());
 
 // Rate limiting for write endpoints (applied after auth)
 app.post("/feed/events", rateLimit({ windowMs: 60_000, maxRequests: 60 }));

@@ -207,6 +207,34 @@ export class FeedStore {
     };
   }
 
+  /**
+   * Archive events older than N days. Moves old events to an archive file
+   * and rewrites the main feed file with only recent events.
+   */
+  archive(days: number = 7): { archived: number; remaining: number } {
+    const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+    const old = this.events.filter((e) => e.timestamp < cutoff);
+    const recent = this.events.filter((e) => e.timestamp >= cutoff);
+
+    if (old.length === 0) {
+      return { archived: 0, remaining: this.events.length };
+    }
+
+    // Append old events to archive file
+    const archivePath = this.filePath.replace(/\.jsonl$/, ".archive.jsonl");
+    const dir = dirname(archivePath);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const archiveData = old.map((e) => JSON.stringify(e)).join("\n") + "\n";
+    appendFileSync(archivePath, archiveData);
+
+    // Rewrite main file with only recent events
+    const recentData = recent.map((e) => JSON.stringify(e)).join("\n") + (recent.length ? "\n" : "");
+    atomicWriteFileSync(this.filePath, recentData);
+
+    this.events = recent;
+    return { archived: old.length, remaining: recent.length };
+  }
+
   clear(): void {
     this.events = [];
     atomicWriteFileSync(this.filePath, "");

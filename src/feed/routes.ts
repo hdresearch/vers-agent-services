@@ -70,6 +70,14 @@ feedRoutes.delete("/events", (c) => {
   return c.json({ ok: true });
 });
 
+// POST /archive — Archive events older than N days (default: 7), keeping only recent in memory + file
+feedRoutes.post("/archive", (c) => {
+  const daysStr = new URL(c.req.url).searchParams.get("days") || "7";
+  const days = parseInt(daysStr, 10) || 7;
+  const result = feedStore.archive(days);
+  return c.json(result);
+});
+
 // GET /stats — Summary statistics
 feedRoutes.get("/stats", (c) => {
   return c.json(feedStore.stats());

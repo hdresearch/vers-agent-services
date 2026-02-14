@@ -22,7 +22,7 @@ reportsRoutes.post("/", async (c) => {
   }
 });
 
-// List reports with optional filters
+// List reports with optional filters and pagination
 reportsRoutes.get("/", (c) => {
   const filters: ReportFilters = {};
   const author = c.req.query("author");
@@ -31,10 +31,20 @@ reportsRoutes.get("/", (c) => {
   if (author) filters.author = author;
   if (tag) filters.tag = tag;
 
-  const reports = reportsStore.list(filters);
+  const allReports = reportsStore.list(filters);
+  const total = allReports.length;
+
+  // Pagination: ?limit=50&offset=0 (default: 50 most recent)
+  const limit = Math.min(parseInt(c.req.query("limit") || "50", 10) || 50, 200);
+  const offset = parseInt(c.req.query("offset") || "0", 10) || 0;
+
+  // Sort newest first, then paginate
+  const sorted = allReports.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const page = sorted.slice(offset, offset + limit);
+
   // Return reports without content for listing (lighter payload)
-  const summaries = reports.map(({ content, ...rest }) => rest);
-  return c.json({ reports: summaries, count: summaries.length });
+  const summaries = page.map(({ content, ...rest }) => rest);
+  return c.json({ reports: summaries, count: summaries.length, total, limit, offset });
 });
 
 // Get a single report
