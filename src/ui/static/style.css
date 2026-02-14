@@ -288,6 +288,33 @@ html, body {
 
 .empty { color: var(--text-dim); font-style: italic; padding: 20px; text-align: center; }
 
+/* Panel loading state */
+.panel-loading {
+  display: flex; align-items: center; justify-content: center;
+  padding: 32px 20px; color: var(--text-dim); font-size: 12px; gap: 8px;
+}
+.loading-spinner {
+  display: inline-block; animation: spin 1s linear infinite;
+}
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* Panel error state */
+.panel-error {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 24px 20px; color: var(--text-dim); font-size: 12px; gap: 8px; text-align: center;
+}
+.panel-error .error-icon { color: var(--red); font-size: 16px; }
+.panel-error .error-retry {
+  background: none; border: 1px solid var(--border); color: var(--text-dim);
+  padding: 4px 12px; border-radius: 3px; font-family: inherit; font-size: 11px;
+  cursor: pointer; margin-top: 4px; transition: all 0.15s;
+}
+.panel-error .error-retry:hover { border-color: var(--accent); color: var(--accent); }
+
+/* Polling connection dot */
+.header .dot.polling { background: var(--yellow); animation: pulse-dot 2s infinite; }
+@keyframes pulse-dot { 0%, 100% { opacity: 0.4; } 50% { opacity: 1; } }
+
 /* Log view */
 .log-toolbar {
   display: flex; justify-content: space-between; align-items: center;

@@ -88,6 +88,10 @@ uiRoutes.use("/ui/*", async (c, next) => {
 
   const sessionId = getSessionId(c);
   if (!validateSession(sessionId)) {
+    // API calls get 401 JSON (so fetch can detect it), pages get redirect
+    if (path.startsWith("/ui/api/")) {
+      return c.json({ error: "Session expired" }, 401);
+    }
     return c.redirect("/ui/login");
   }
   return next();
