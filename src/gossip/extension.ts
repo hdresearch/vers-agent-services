@@ -56,24 +56,20 @@ export async function gossip_check(params: {
 
 // Tool: gossip_reply
 // Reply to a specific message (continues the thread)
+// Server auto-resolves 'to' from the parent message's sender
 export async function gossip_reply(params: {
   from: string;
   replyTo: string;
   body: string;
   priority?: "low" | "normal" | "high" | "urgent";
 }) {
-  // Fetch the original message to get the correct recipient
-  const original = await gossipFetch(\`/threads/\${params.replyTo}\`).catch(() => null);
-  const origMsg = original?.messages?.find((m: any) => m.id === params.replyTo);
-  const to = origMsg ? origMsg.from : params.from; // reply to sender of original
-
   return gossipFetch("/messages", {
     method: "POST",
     body: JSON.stringify({
       from: params.from,
-      to,
+      to: "",
       type: "reply",
-      subject: "re:" + (origMsg?.subject ? " " + origMsg.subject : ""),
+      subject: "re:",
       body: params.body,
       priority: params.priority || "normal",
       replyTo: params.replyTo,

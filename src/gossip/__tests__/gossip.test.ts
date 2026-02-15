@@ -49,6 +49,12 @@ describe("GossipStore", () => {
         .toThrow("Invalid type");
     });
 
+    it("auto-resolves 'to' from parent when replying with empty to", () => {
+      const orig = store.send({ from: "sentinel", to: "scribe", type: "question", subject: "Q", body: "ask" });
+      const reply = store.send({ from: "scribe", to: "", type: "reply", subject: "Re: Q", body: "answer", replyTo: orig.id });
+      expect(reply.to).toBe("sentinel");
+    });
+
     it("validates priority", () => {
       expect(() => store.send({ from: "a", to: "b", type: "inform", subject: "s", body: "b", priority: "mega" as any }))
         .toThrow("Invalid priority");
@@ -98,17 +104,18 @@ describe("GossipStore", () => {
       store.send({ from: "a", to: "c", type: "inform", subject: "s2", body: "b2" });
       store.send({ from: "c", to: "b", type: "inform", subject: "s3", body: "b3" });
 
-      const inbox = store.getInbox("b");
-      expect(inbox).toHaveLength(2);
-      expect(inbox.every((m) => m.to === "b")).toBe(true);
+      const result = store.getInbox("b");
+      expect(result.messages).toHaveLength(2);
+      expect(result.total).toBe(2);
+      expect(result.messages.every((m) => m.to === "b")).toBe(true);
     });
 
     it("includes broadcasts in inbox", () => {
       store.broadcast({ from: "orchestrator", type: "alert", subject: "Deploy", body: "Deploying v2" });
       store.send({ from: "a", to: "b", type: "inform", subject: "s", body: "b" });
 
-      const inbox = store.getInbox("b");
-      expect(inbox).toHaveLength(2);
+      const result = store.getInbox("b");
+      expect(result.messages).toHaveLength(2);
     });
 
     it("filters unread only", () => {
@@ -116,16 +123,33 @@ describe("GossipStore", () => {
       store.send({ from: "c", to: "b", type: "inform", subject: "s2", body: "b2" });
       store.markRead(msg.id);
 
-      const unread = store.getInbox("b", { unreadOnly: true });
-      expect(unread).toHaveLength(1);
+      const result = store.getInbox("b", { unreadOnly: true });
+      expect(result.messages).toHaveLength(1);
     });
 
-    it("respects limit", () => {
+    it("respects limit and offset", () => {
       for (let i = 0; i < 5; i++) {
         store.send({ from: "a", to: "b", type: "inform", subject: `s${i}`, body: `b${i}` });
       }
-      const limited = store.getInbox("b", { limit: 2 });
-      expect(limited).toHaveLength(2);
+      const page1 = store.getInbox("b", { limit: 2 });
+      expect(page1.messages).toHaveLength(2);
+      expect(page1.total).toBe(5);
+
+      const page2 = store.getInbox("b", { limit: 2, offset: 2 });
+      expect(page2.messages).toHaveLength(2);
+      expect(page2.total).toBe(5);
+
+      const page3 = store.getInbox("b", { limit: 2, offset: 4 });
+      expect(page3.messages).toHaveLength(1);
+    });
+
+    it("defaults to limit 50", () => {
+      for (let i = 0; i < 60; i++) {
+        store.send({ from: "a", to: "b", type: "inform", subject: `s${i}`, body: `b${i}` });
+      }
+      const result = store.getInbox("b");
+      expect(result.messages).toHaveLength(50);
+      expect(result.total).toBe(60);
     });
   });
 
@@ -175,6 +199,42 @@ describe("GossipStore", () => {
 
       const store2 = new GossipStore(TEST_FILE);
       expect(store2.size).toBe(1);
+    });
+
+    it("flush() writes immediately without waiting for timer", () => {
+      store.send({ from: "a", to: "b", type: "inform", subject: "s", body: "flush me" });
+      store.flush(); // synchronous, no timer wait
+
+      const store2 = new GossipStore(TEST_FILE);
+      expect(store2.size).toBe(1);
+    });
+
+    it("flush() writes even when no timer is pending", async () => {
+      store.send({ from: "a", to: "b", type: "inform", subject: "s", body: "b" });
+      // Wait for debounce timer to fire
+      await new Promise((r) => setTimeout(r, 200));
+      // Now send another — timer will be set
+      store.send({ from: "a", to: "b", type: "inform", subject: "s2", body: "b2" });
+      // Flush before timer fires
+      store.flush();
+
+      const store2 = new GossipStore(TEST_FILE);
+      expect(store2.size).toBe(2);
+    });
+  });
+
+  describe("pruning", () => {
+    it("prunes old messages when exceeding maxMessages", () => {
+      const small = new GossipStore(TEST_FILE, 5);
+      for (let i = 0; i < 10; i++) {
+        small.send({ from: "a", to: "b", type: "inform", subject: `s${i}`, body: `b${i}` });
+      }
+      expect(small.size).toBe(5);
+      small.flush();
+
+      // Reload and verify
+      const reloaded = new GossipStore(TEST_FILE, 5);
+      expect(reloaded.size).toBe(5);
     });
   });
 });
