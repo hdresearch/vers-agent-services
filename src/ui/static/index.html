@@ -26,6 +26,7 @@
       <button class="tab" data-view="events">Events</button>
       <button class="tab" data-view="daemon">Daemon</button>
       <button class="tab" data-view="config">Config</button>
+      <button class="tab" data-view="write">Write</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -871,6 +872,14 @@
     </div>
   </div>
 
+  <!-- Write View -->
+  <div class="view" id="view-write">
+    <div class="write-container" id="write-content">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
+
+  <script src="/ui/static/write.js"></script>
   <script src="/ui/static/board-full.js"></script>
   <script src="/ui/static/comms.js"></script>
   <script src="/ui/static/events.js"></script>
