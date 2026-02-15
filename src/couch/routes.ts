@@ -1,13 +1,90 @@
 import { Hono } from "hono";
 import { CouchStore, NotFoundError, ValidationError, ConflictError } from "./store.js";
+import { VersClient } from "./vers-client.js";
 import { emit } from "../events/emit.js";
+import { ConfigStore } from "../config/store.js";
 
 export const couchStore = new CouchStore();
+const configStore = new ConfigStore();
+
+function getVersClient(): VersClient | null {
+  const entry = configStore.get("VERS_API_KEY");
+  if (!entry?.value) return null;
+  return new VersClient(entry.value);
+}
+
+function getGoldenCommitId(): string | null {
+  const entry = configStore.get("GOLDEN_COMMIT_ID");
+  return entry?.value || null;
+}
+
+/** Provision a VM for a guest — runs in background after redeem */
+async function provisionGuestVM(guestId: string, guestName: string): Promise<void> {
+  const client = getVersClient();
+  const goldenCommit = getGoldenCommitId();
+
+  if (!client || !goldenCommit) {
+    emit("couch", "couch.provision.failed", {
+      guestId,
+      error: !client ? "VERS_API_KEY not configured" : "GOLDEN_COMMIT_ID not configured",
+    });
+    return;
+  }
+
+  try {
+    // Spawn VM from golden commit
+    const vm = await client.restoreFromCommit(goldenCommit);
+    emit("couch", "couch.provision.vm_created", { guestId, vmId: vm.vm_id });
+
+    // Wait for it to boot
+    await client.waitForRunning(vm.vm_id, 120_000);
+
+    // Activate the guest with the VM endpoint
+    const endpoint = `https://${vm.vm_id}.vm.vers.sh`;
+    couchStore.activateGuest(guestId, vm.vm_id, endpoint);
+
+    emit("couch", "couch.guest.activated", {
+      guestId,
+      guestName,
+      vmId: vm.vm_id,
+      agentEndpoint: endpoint,
+    });
+
+    console.log(`[couch] Guest ${guestName} provisioned → VM ${vm.vm_id}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    emit("couch", "couch.provision.failed", { guestId, guestName, error: msg });
+    console.error(`[couch] Failed to provision VM for guest ${guestName}: ${msg}`);
+  }
+}
 
 export const couchRoutes = new Hono();
 
 // Public routes — mounted BEFORE bearer auth in server.ts
 export const couchPublicRoutes = new Hono();
+
+// ---------------------------------------------------------------------------
+// GET /status?token=guest_xxx — Guest checks their own status (public, token-authed)
+// ---------------------------------------------------------------------------
+couchPublicRoutes.get("/status", (c) => {
+  const token = c.req.query("token");
+  if (!token) return c.json({ error: "token query parameter required" }, 400);
+
+  const guest = couchStore.getGuestByToken(token);
+  if (!guest) return c.json({ error: "invalid or expired token" }, 404);
+
+  return c.json({
+    guestId: guest.id,
+    name: guest.name,
+    status: guest.status,
+    vmId: guest.vmId ?? null,
+    agentEndpoint: guest.agentEndpoint ?? null,
+    resourceLimits: guest.resourceLimits,
+    permissions: guest.permissions,
+    resourceUsage: guest.resourceUsage,
+    expiresAt: guest.expiresAt,
+  });
+});
 
 // ---------------------------------------------------------------------------
 // POST /invites — Generate a single-use invite (auth required — applied in server.ts)
@@ -67,13 +144,11 @@ couchPublicRoutes.post("/redeem", async (c) => {
       inviteId: guest.inviteId,
     }, guest.name);
 
-    // In a full implementation, this is where we'd spawn a VM from the golden commit.
-    // For now, return the guest record with a provisioning status.
-    // The host's orchestrator picks this up and calls activateGuest() after VM creation.
-    //
-    // Future: integrate with Vers VM spawning:
-    //   const vm = await versClient.createVM({ fromCommit: goldenCommitId, ... });
-    //   couchStore.activateGuest(guest.id, vm.id, `https://${vm.id}.vm.vers.sh`);
+    // Fire-and-forget VM provisioning — guest gets immediate response with
+    // "provisioning" status, then polls /guests/:id/status until "running"
+    provisionGuestVM(guest.id, guest.name).catch((err) => {
+      console.error(`[couch] Background provisioning error for ${guest.name}:`, err);
+    });
 
     return c.json({
       guestId: guest.id,
@@ -141,8 +216,15 @@ couchRoutes.delete("/guests/:id", (c) => {
       vmId: guest.vmId,
     });
 
-    // Future: actually destroy the Vers VM here
-    // await versClient.destroyVM(guest.vmId);
+    // Destroy the Vers VM if one was provisioned
+    if (guest.vmId) {
+      const client = getVersClient();
+      if (client) {
+        client.deleteVM(guest.vmId).catch((err) => {
+          console.error(`[couch] Failed to destroy VM ${guest.vmId}:`, err);
+        });
+      }
+    }
 
     return c.json({ id: guest.id, status: guest.status, stoppedAt: guest.stoppedAt });
   } catch (e) {
@@ -213,3 +295,7 @@ couchRoutes.put("/guests/:id/usage", async (c) => {
     throw e;
   }
 });
+
+
+
+
