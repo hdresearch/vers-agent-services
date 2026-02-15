@@ -1,9 +1,10 @@
 import { Hono } from "hono";
 import { createMagicLink, consumeMagicLink, createSession, validateSession } from "./auth.js";
 import { processAnalyticsQuery } from "./analytics.js";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { join, dirname } from "node:path";
+import { join, dirname, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const uiRoutes = new Hono();
@@ -20,6 +21,75 @@ function getStaticDir(): string {
   } catch {
     return join(process.cwd(), "dist", "ui", "static");
   }
+}
+
+// ─── In-memory static file cache ───
+// Loaded once at startup — no readFileSync per request, no per-request hashing.
+
+interface CachedFile {
+  content: string;
+  contentType: string;
+  etag: string;
+}
+
+const staticCache = new Map<string, CachedFile>();
+
+const CONTENT_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+};
+
+function loadStaticFiles(): void {
+  const dir = getStaticDir();
+  try {
+    const files = readdirSync(dir);
+    for (const file of files) {
+      try {
+        const content = readFileSync(join(dir, file), "utf-8");
+        const ext = extname(file);
+        const hash = createHash("md5").update(content).digest("hex").slice(0, 16);
+        staticCache.set(file, {
+          content,
+          contentType: CONTENT_TYPES[ext] || "text/plain",
+          etag: `W/"${hash}"`,
+        });
+      } catch {
+        // skip unreadable files
+      }
+    }
+  } catch {
+    // static dir missing — will 404 at serve time
+  }
+}
+
+// Load on module init (startup)
+loadStaticFiles();
+
+/** Async fallback for files not in cache (e.g. added after startup). */
+async function getStaticFile(file: string): Promise<CachedFile | null> {
+  const cached = staticCache.get(file);
+  if (cached) return cached;
+  try {
+    const content = await readFile(join(getStaticDir(), file), "utf-8");
+    const ext = extname(file);
+    const hash = createHash("md5").update(content).digest("hex").slice(0, 16);
+    const entry: CachedFile = {
+      content,
+      contentType: CONTENT_TYPES[ext] || "text/plain",
+      etag: `W/"${hash}"`,
+    };
+    staticCache.set(file, entry);
+    return entry;
+  } catch {
+    return null;
+  }
+}
+
+/** Force-reload the static cache (useful after deploys). */
+export function reloadStaticCache(): void {
+  staticCache.clear();
+  loadStaticFiles();
 }
 
 // Helper to parse session cookie
@@ -99,54 +169,43 @@ uiRoutes.use("/ui/*", async (c, next) => {
 });
 
 // Dashboard
-uiRoutes.get("/ui/", (c) => {
-  try {
-    const html = readFileSync(join(getStaticDir(), "index.html"), "utf-8");
-    return c.html(html);
-  } catch (e) {
-    return c.text("Dashboard files not found", 500);
-  }
+uiRoutes.get("/ui/", async (c) => {
+  const file = await getStaticFile("index.html");
+  if (!file) return c.text("Dashboard files not found", 500);
+  return c.html(file.content);
 });
 
 // Report viewer
-uiRoutes.get("/ui/report/:id", (c) => {
-  try {
-    const html = readFileSync(join(getStaticDir(), "report.html"), "utf-8");
-    return c.html(html);
-  } catch (e) {
-    return c.text("Report viewer not found", 500);
-  }
+uiRoutes.get("/ui/report/:id", async (c) => {
+  const file = await getStaticFile("report.html");
+  if (!file) return c.text("Report viewer not found", 500);
+  return c.html(file.content);
 });
 
-// Static files
-uiRoutes.get("/ui/static/:file", (c) => {
-  const file = c.req.param("file");
+// Static files — served from in-memory cache, async fallback for uncached files
+uiRoutes.get("/ui/static/:file", async (c) => {
+  const fileName = c.req.param("file");
   // Sanitize
-  if (file.includes("..") || file.includes("/")) return c.text("Not found", 404);
+  if (fileName.includes("..") || fileName.includes("/")) return c.text("Not found", 404);
 
-  try {
-    const content = readFileSync(join(getStaticDir(), file), "utf-8");
-    const ext = file.split(".").pop();
-    const contentType = ext === "css" ? "text/css" : ext === "js" ? "application/javascript" : "text/plain";
+  const file = await getStaticFile(fileName);
+  if (!file) return c.text("Not found", 404);
 
-    // Compute ETag for conditional requests
-    const hash = createHash("md5").update(content).digest("hex").slice(0, 16);
-    const etagValue = `W/"${hash}"`;
-
-    // Return 304 if unchanged
-    const ifNoneMatch = c.req.header("if-none-match");
-    if (ifNoneMatch === etagValue) {
-      return c.body(null, 304, { ETag: etagValue });
-    }
-
-    return c.body(content, 200, {
-      "Content-Type": contentType,
-      "Cache-Control": "public, max-age=3600, stale-while-revalidate=86400",
-      "ETag": etagValue,
-    });
-  } catch {
-    return c.text("Not found", 404);
+  // Return 304 if unchanged
+  const ifNoneMatch = c.req.header("if-none-match");
+  if (ifNoneMatch === file.etag) {
+    return c.body(null, 304, { ETag: file.etag });
   }
+
+  // Long cache for CSS/JS (fingerprinted or revalidated via ETag), short for others
+  const ext = extname(fileName);
+  const maxAge = ext === ".css" || ext === ".js" ? 86400 : 3600;
+
+  return c.body(file.content, 200, {
+    "Content-Type": file.contentType,
+    "Cache-Control": `public, max-age=${maxAge}, stale-while-revalidate=86400`,
+    "ETag": file.etag,
+  });
 });
 
 // ─── Analytics Query Endpoint ───
