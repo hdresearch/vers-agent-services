@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { compress } from "hono/compress";
 import { serve } from "@hono/node-server";
 import { bearerAuth } from "./auth.js";
 import { rateLimit } from "./middleware/rate-limit.js";
@@ -34,6 +35,7 @@ import { fleetChatRoutes, fleetChatPublicRoutes, fleetChatStore } from "./fleet-
 import { kbRoutes, kbStore } from "./kb/routes.js";
 import { daemonRoutes, daemonEngine, daemonStore } from "./daemon/routes.js";
 import { contactsRoutes, contactsPublicRoutes, contactsStore } from "./contacts/routes.js";
+import { notificationRoutes } from "./notifications/routes.js";
 
 const app = new Hono();
 
@@ -64,6 +66,9 @@ app.route("/contacts", contactsPublicRoutes);
 // LLM Router — NO bearer auth on /v1 (agents auth with x-agent-id or fleet token;
 // router validates internally). This is the single source of truth for API keys.
 app.route("/v1", routerRoutes);
+
+// Gzip compression for all responses > 1KB
+app.use("*", compress());
 
 // Bearer auth — applied per-route to API endpoints
 app.use("/auth/*", bearerAuth());
@@ -141,6 +146,7 @@ app.route("/couch", couchRoutes);
 app.route("/fleet-chat", fleetChatRoutes);
 app.route("/contacts", contactsRoutes);
 app.route("/daemon", daemonRoutes);
+app.route("/notifications", notificationRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
@@ -219,6 +225,8 @@ process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 export { app };
+
+
 
 
 
