@@ -26,6 +26,8 @@ import { reviewRoutes } from "./review/routes.js";
 import { eventRoutes } from "./events/routes.js";
 import { personaRoutes } from "./personas/routes.js";
 import { cryoRoutes } from "./cryo/routes.js";
+import { gossipRoutes } from "./gossip/routes.js";
+import { loopRoutes, loopStore as loopRunnerStore } from "./loop/routes.js";
 
 const app = new Hono();
 
@@ -68,6 +70,8 @@ app.use("/registry/vms", etag());
 app.use("/reports", etag());
 app.use("/feed/events", etag());
 app.use("/feed/stats", etag());
+app.use("/gossip/*", bearerAuth());
+app.use("/loop/*", bearerAuth());
 
 // Rate limiting for write endpoints (applied after auth)
 app.post("/feed/events", rateLimit({ windowMs: 60_000, maxRequests: 60 }));
@@ -91,6 +95,8 @@ app.route("/review", reviewRoutes);
 app.route("/events", eventRoutes);
 app.route("/personas", personaRoutes);
 app.route("/cryo", cryoRoutes);
+app.route("/gossip", gossipRoutes);
+app.route("/loop", loopRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
