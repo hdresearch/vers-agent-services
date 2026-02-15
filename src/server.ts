@@ -33,6 +33,7 @@ import { couchRoutes, couchPublicRoutes, couchStore } from "./couch/routes.js";
 import { fleetChatRoutes, fleetChatPublicRoutes, fleetChatStore } from "./fleet-chat/routes.js";
 import { kbRoutes, kbStore } from "./kb/routes.js";
 import { daemonRoutes, daemonEngine, daemonStore } from "./daemon/routes.js";
+import { contactsRoutes, contactsPublicRoutes, contactsStore } from "./contacts/routes.js";
 
 const app = new Hono();
 
@@ -56,6 +57,9 @@ app.route("/couch", couchPublicRoutes);
 
 // Fleet chat public inbox — NO bearer auth (verified by sender's public key)
 app.route("/fleet-chat", fleetChatPublicRoutes);
+
+// Contacts peering accept — NO bearer auth (public door for peer handshake)
+app.route("/contacts", contactsPublicRoutes);
 
 // LLM Router — NO bearer auth on /v1 (agents auth with x-agent-id or fleet token;
 // router validates internally). This is the single source of truth for API keys.
@@ -88,6 +92,13 @@ app.use("/fleet-chat/quarantine", bearerAuth());
 app.use("/fleet-chat/send", bearerAuth());
 app.use("/kb/*", bearerAuth());
 app.use("/daemon/*", bearerAuth());
+// Contacts: auth on management routes. /peer/accept is public (for peering handshake).
+// Note: /:id routes have auth applied at router level in contacts/routes.ts
+app.use("/contacts", bearerAuth());            // list + create
+app.use("/contacts/from-github/*", bearerAuth());
+app.use("/contacts/refresh-keys/*", bearerAuth());
+app.use("/contacts/peer/invite", bearerAuth());
+app.use("/contacts/peer/invites", bearerAuth());
 
 // ETag for polling-heavy GET endpoints (board, registry, reports, feed)
 // Returns 304 Not Modified when data hasn't changed — saves bandwidth on 10-30s polling
@@ -126,6 +137,7 @@ app.route("/kb", kbRoutes);
 app.route("/loop", loopRoutes);
 app.route("/couch", couchRoutes);
 app.route("/fleet-chat", fleetChatRoutes);
+app.route("/contacts", contactsRoutes);
 app.route("/daemon", daemonRoutes);
 
 // Watchdog — zombie agent detection
@@ -179,6 +191,8 @@ function gracefulShutdown(signal: string) {
   if (loopRunnerStore.isRunning) {
     try { loopRunnerStore.stop(); } catch {}
   }
+  // Close contacts DB
+  try { contactsStore.close(); } catch {}
   // Stop daemon event loop
   if (daemonEngine.isRunning) {
     try { daemonEngine.stop(); } catch {}
