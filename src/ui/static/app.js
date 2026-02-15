@@ -1054,6 +1054,27 @@ function switchView(viewName) {
   } else if (prevView === 'comms') {
     if (typeof window._commsDestroy === 'function') window._commsDestroy();
   }
+
+  // Events: init/destroy
+  if (viewName === 'events') {
+    if (typeof window._eventsInit === 'function') window._eventsInit();
+  } else if (prevView === 'events') {
+    if (typeof window._eventsDestroy === 'function') window._eventsDestroy();
+  }
+
+  // Daemon: init/destroy
+  if (viewName === 'daemon') {
+    if (typeof window._daemonInit === 'function') window._daemonInit();
+  } else if (prevView === 'daemon') {
+    if (typeof window._daemonDestroy === 'function') window._daemonDestroy();
+  }
+
+  // Config: init/destroy
+  if (viewName === 'config') {
+    if (typeof window._configInit === 'function') window._configInit();
+  } else if (prevView === 'config') {
+    if (typeof window._configDestroy === 'function') window._configDestroy();
+  }
 }
 
 // ─── Metrics Sub-tabs ───

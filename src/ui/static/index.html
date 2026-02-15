@@ -22,6 +22,9 @@
       <button class="tab" data-view="couch">Couch</button>
       <button class="tab" data-view="agents">Agents</button>
       <button class="tab" data-view="comms">Comms</button>
+      <button class="tab" data-view="events">Events</button>
+      <button class="tab" data-view="daemon">Daemon</button>
+      <button class="tab" data-view="config">Config</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -639,7 +642,146 @@
     </div>
   </div>
 
+  <!-- Events View -->
+  <div class="view" id="view-events">
+    <div class="events-stats-bar" id="events-stats-bar">
+      <div class="events-stat">Loading stats…</div>
+    </div>
+    <div class="events-toolbar">
+      <div class="events-filters">
+        <input type="text" id="events-source-filter" placeholder="source…" autocomplete="off">
+        <input type="text" id="events-type-filter" placeholder="event type…" autocomplete="off">
+        <input type="text" id="events-agent-filter" placeholder="agent…" autocomplete="off">
+        <select id="events-limit">
+          <option value="50">50</option>
+          <option value="100" selected>100</option>
+          <option value="200">200</option>
+          <option value="500">500</option>
+        </select>
+        <label class="events-noise-label"><input type="checkbox" id="events-exclude-noise" checked> hide feed noise</label>
+      </div>
+      <div class="events-controls">
+        <span id="events-count" class="events-count-label">—</span>
+        <button class="btn" id="events-breakdown-btn" title="Type breakdown">📊 Types</button>
+        <button class="btn" id="events-refresh-btn">↻ Refresh</button>
+        <div class="events-stream-indicator">
+          <span class="events-dot" id="events-stream-dot"></span>
+          <span id="events-stream-label">paused</span>
+        </div>
+        <button class="btn btn-accent" id="events-stream-btn">▶ Stream</button>
+      </div>
+    </div>
+    <div class="events-list" id="events-list">
+      <div class="empty">Loading events…</div>
+    </div>
+    <!-- Type breakdown modal -->
+    <div class="agents-modal-overlay" id="events-breakdown-modal" style="display:none">
+      <div class="agents-modal agents-modal-wide">
+        <div class="agents-modal-header">
+          <span>Event Type Breakdown</span>
+          <button class="agents-modal-close" id="events-breakdown-close">✕</button>
+        </div>
+        <div id="events-breakdown-body" style="max-height:60vh;overflow-y:auto;padding:12px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Daemon View -->
+  <div class="view" id="view-daemon">
+    <div class="daemon-layout">
+      <div class="daemon-status-panel" id="daemon-status-panel">
+        <div class="daemon-header-row">
+          <div class="daemon-indicator">
+            <span class="daemon-dot" id="daemon-dot"></span>
+            <span id="daemon-status-label">—</span>
+          </div>
+          <div class="daemon-controls">
+            <button class="btn btn-accent" id="daemon-start-btn">▶ Start</button>
+            <button class="btn btn-danger" id="daemon-stop-btn">■ Stop</button>
+            <button class="btn" id="daemon-refresh-btn">↻</button>
+          </div>
+        </div>
+        <div class="daemon-vitals">
+          <div class="daemon-vital"><span class="daemon-vital-label">Uptime</span><span class="daemon-vital-val" id="daemon-uptime">—</span></div>
+          <div class="daemon-vital"><span class="daemon-vital-label">Started</span><span class="daemon-vital-val" id="daemon-started">—</span></div>
+          <div class="daemon-vital"><span class="daemon-vital-label">Last Poll</span><span class="daemon-vital-val" id="daemon-last-poll">—</span></div>
+          <div class="daemon-vital"><span class="daemon-vital-label">Last Action</span><span class="daemon-vital-val" id="daemon-last-action">—</span></div>
+          <div class="daemon-vital"><span class="daemon-vital-label">Event Cursor</span><span class="daemon-vital-val" id="daemon-cursor">—</span></div>
+          <div class="daemon-vital"><span class="daemon-vital-label">Total Actions</span><span class="daemon-vital-val" id="daemon-total-actions">—</span></div>
+        </div>
+        <div class="daemon-section-header">Recent Actions (preview)</div>
+        <div id="daemon-recent-preview" class="daemon-recent-preview">
+          <div class="empty">Loading…</div>
+        </div>
+      </div>
+      <div class="daemon-actions-panel">
+        <div class="daemon-actions-header">
+          <span>Action Log</span>
+          <div class="daemon-actions-controls">
+            <span class="daemon-actions-count" id="daemon-actions-count">—</span>
+            <select id="daemon-actions-limit">
+              <option value="25">25</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+            </select>
+          </div>
+        </div>
+        <div class="daemon-actions-list" id="daemon-actions-list">
+          <div class="empty">Loading actions…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Config View -->
+  <div class="view" id="view-config">
+    <div class="config-stats-bar">
+      <div class="config-stat">Total <span class="config-stat-val" id="config-stat-total">—</span></div>
+      <div class="config-stat">Secrets <span class="config-stat-val config-stat-red" id="config-stat-secrets">—</span></div>
+      <div class="config-stat">Config <span class="config-stat-val config-stat-green" id="config-stat-configs">—</span></div>
+    </div>
+    <div class="config-toolbar">
+      <input type="text" id="config-filter" placeholder="filter by key…" autocomplete="off">
+      <select id="config-type-filter">
+        <option value="">all types</option>
+        <option value="config">config</option>
+        <option value="secret">secret</option>
+      </select>
+      <button class="btn btn-accent" id="config-add-btn">+ Add</button>
+      <button class="btn" id="config-refresh-btn">↻ Refresh</button>
+    </div>
+    <div class="config-list" id="config-list">
+      <div class="empty">Loading config…</div>
+    </div>
+    <!-- Edit modal -->
+    <div class="agents-modal-overlay" id="config-modal" style="display:none">
+      <div class="agents-modal">
+        <div class="agents-modal-header">
+          <span id="config-modal-title">Edit Config</span>
+          <button class="agents-modal-close" id="config-modal-close">✕</button>
+        </div>
+        <div class="agents-form" style="padding:16px;display:flex;flex-direction:column;gap:12px;">
+          <label>Key<input type="text" id="config-modal-key" placeholder="CONFIG_KEY"></label>
+          <label>Value<textarea id="config-modal-value" rows="4" placeholder="Config value"></textarea></label>
+          <label>Type
+            <select id="config-modal-type">
+              <option value="config">config</option>
+              <option value="secret">secret</option>
+            </select>
+          </label>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button class="btn" id="config-modal-cancel">Cancel</button>
+            <button class="btn btn-accent" id="config-modal-save">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="/ui/static/comms.js"></script>
+  <script src="/ui/static/events.js"></script>
+  <script src="/ui/static/daemon.js"></script>
+  <script src="/ui/static/config.js"></script>
   <script src="/ui/static/fleet.js"></script>
   <script src="/ui/static/chat.js"></script>
   <script src="/ui/static/speedometer.js"></script>
