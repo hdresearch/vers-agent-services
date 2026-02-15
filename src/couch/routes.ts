@@ -130,6 +130,10 @@ couchRoutes.delete("/invites/:id", (c) => {
 // POST /redeem — Guest redeems an invite (NO auth — this is the public door)
 // Mounted via couchPublicRoutes BEFORE bearer auth in server.ts.
 // ---------------------------------------------------------------------------
+// Rate limit: 5 attempts per 15 minutes per IP
+import { rateLimit } from "../middleware/rate-limit.js";
+couchPublicRoutes.use("/redeem", rateLimit({ windowMs: 15 * 60 * 1000, maxRequests: 5 }));
+
 couchPublicRoutes.post("/redeem", async (c) => {
   try {
     const body = await c.req.json();
@@ -292,6 +296,7 @@ couchRoutes.put("/guests/:id/usage", async (c) => {
     throw e;
   }
 });
+
 
 
 

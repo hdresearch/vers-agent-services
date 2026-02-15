@@ -398,7 +398,12 @@ fleetChatRoutes.post("/quarantine/:id/reject", (c) => {
 
 // ── Public routes (no bearer auth — verified by sender's public key) ──────
 
+import { rateLimit } from "../middleware/rate-limit.js";
+
 export const fleetChatPublicRoutes = new Hono();
+
+// Rate limit inbox: 30 messages per minute per IP
+fleetChatPublicRoutes.use("/inbox", rateLimit({ windowMs: 60_000, maxRequests: 30 }));
 
 // POST /inbox — Receive a message from another fleet (PUBLIC endpoint)
 fleetChatPublicRoutes.post("/inbox", async (c) => {
@@ -461,8 +466,14 @@ fleetChatPublicRoutes.post("/inbox", async (c) => {
   }
 });
 
-// GET /inbox/stream — SSE stream of ALL incoming messages (PUBLIC — for agent polling)
+// GET /inbox/stream — REMOVED from public routes. Now served under auth at /fleet-chat/inbox/stream
+// (see fleetChatRoutes below — bearer auth applied in server.ts)
 fleetChatPublicRoutes.get("/inbox/stream", (c) => {
+  return c.json({ error: "SSE stream requires authentication. Use Authorization: Bearer <token>" }, 401);
+});
+
+// Authenticated SSE stream — mounted under bearer auth in server.ts
+fleetChatRoutes.get("/inbox/stream", (c) => {
   return streamSSE(c, async (stream) => {
     const removeListener = fleetChatStore.addInboxListener(async (msg) => {
       try {
@@ -494,3 +505,7 @@ fleetChatPublicRoutes.get("/inbox/stream", (c) => {
     });
   });
 });
+
+
+
+
