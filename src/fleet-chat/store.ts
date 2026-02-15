@@ -661,7 +661,7 @@ export class FleetChatStore {
     // Re-process the message now that sender is trusted
     // Ensure from field is set for receiveInbound
     const normalizedMessage = { ...raw, from: senderIdentity };
-    const result = this.receiveInbound(normalizedMessage);
+    const result = await this.receiveInbound(normalizedMessage);
 
     this.scheduleSave();
 
@@ -706,3 +706,4 @@ export class FleetChatStore {
     return this.data.quarantine.length;
   }
 }
+
