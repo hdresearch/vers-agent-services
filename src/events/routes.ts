@@ -36,6 +36,7 @@ eventRoutes.get("/", (c) => {
 
   const source = c.req.query("source");
   const type = c.req.query("type");
+  const exclude = c.req.query("exclude");
   const agent = c.req.query("agent");
   const since = c.req.query("since");
   const sinceId = c.req.query("since_id");
@@ -43,6 +44,7 @@ eventRoutes.get("/", (c) => {
 
   if (source) filters.source = source;
   if (type) filters.type = type;
+  if (exclude) filters.exclude = exclude.split(",").map((s) => s.trim());
   if (agent) filters.agent = agent;
   if (since) filters.since = since;
   if (sinceId) filters.sinceId = parseInt(sinceId, 10);
@@ -62,6 +64,10 @@ eventRoutes.get("/stream", (c) => {
   const sinceIdStr = c.req.query("since_id");
   const source = c.req.query("source");
   const type = c.req.query("type");
+  const streamEvtExclude = c.req.query("exclude");
+  const streamEvtExcludeSet = streamEvtExclude
+    ? new Set(streamEvtExclude.split(",").map((s) => s.trim()))
+    : null;
 
   return streamSSE(c, async (stream) => {
     // Replay missed events if since_id provided
@@ -71,6 +77,7 @@ eventRoutes.get("/stream", (c) => {
       for (const event of missed) {
         if (source && event.source !== source) continue;
         if (type && event.type !== type) continue;
+        if (streamEvtExcludeSet && streamEvtExcludeSet.has(event.type)) continue;
         await stream.writeSSE({
           id: String(event.id),
           data: JSON.stringify(event),
@@ -82,6 +89,7 @@ eventRoutes.get("/stream", (c) => {
     const unsubscribe = eventLogStore.subscribe((event) => {
       if (source && event.source !== source) return;
       if (type && event.type !== type) return;
+      if (streamEvtExcludeSet && streamEvtExcludeSet.has(event.type)) return;
       stream
         .writeSSE({
           id: String(event.id),

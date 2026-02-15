@@ -27,6 +27,7 @@ export interface EventRecord {
 export interface EventFilters {
   source?: string;
   type?: string;
+  exclude?: string[];   // event types to exclude from results
   agent?: string;
   since?: string;       // ISO timestamp or event_id (ULID)
   sinceId?: number;     // numeric auto-increment ID (for stream cursor)
@@ -165,6 +166,11 @@ export class EventLogStore {
     if (filters.agent) {
       conditions.push("agent = ?");
       params.push(filters.agent);
+    }
+    if (filters.exclude && filters.exclude.length > 0) {
+      const placeholders = filters.exclude.map(() => "?").join(", ");
+      conditions.push(`type NOT IN (${placeholders})`);
+      params.push(...filters.exclude);
     }
     if (filters.since) {
       // If it looks like a ULID (26 chars, alphanumeric), filter by event_id
