@@ -5,9 +5,9 @@
 (function () {
   'use strict';
 
-  const TOKEN = 'fa2490f6cd1fa376b58bcb36ac66b2a0ec51b621cdb4e0e83c9a2c58342a082f';
-  const BASE = '/fleet-chat';
-  const HEADERS = { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' };
+  // Auth handled by session cookie via /ui/api proxy
+  const BASE = '/ui/api/fleet-chat';
+  const HEADERS = { 'Content-Type': 'application/json' };
 
   let _refreshTimer = null;
   let _activeChannel = null;
