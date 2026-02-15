@@ -7,7 +7,7 @@ import { signContent, encryptContent } from "./crypto.js";
 
 const PRIVATE_KEY_PATH = process.env.FLEET_PRIVATE_KEY_PATH || "/root/.ssh/fleet-identity";
 
-export const fleetChatStore = new FleetChatStore("data/fleet-chat.json", undefined, {
+export const fleetChatStore = new FleetChatStore("data/fleet-chat.db", undefined, {
   privateKeyPath: PRIVATE_KEY_PATH,
   requireSignatures: process.env.REQUIRE_SIGNATURES === "true",
 });

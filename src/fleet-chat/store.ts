@@ -1,6 +1,7 @@
+import Database from "better-sqlite3";
 import { ulid } from "ulid";
-import { readFileSync, existsSync } from "node:fs";
-import { atomicWriteFileSync, recoverTmpFile } from "../utils/atomic-write.js";
+import { mkdirSync, existsSync } from "node:fs";
+import { dirname } from "node:path";
 import { ValidationError, NotFoundError } from "../errors.js";
 import { createHash, createSign, createVerify, generateKeyPairSync } from "node:crypto";
 import { signContent, verifyContent, isRealSignature, decryptContent } from "./crypto.js";
@@ -172,69 +173,175 @@ function validateFleetIdentity(fleet: unknown, label: string): FleetIdentity {
 // ── Store ──────────────────────────────────────────────────────────────────
 
 export class FleetChatStore {
-  private data: StoreData = {
-    channels: [],
-    messages: [],
-    trustedEndpoints: [],
-    quarantine: [],
-    localIdentity: null,
-  };
-  private filePath: string;
-  private writeTimer: ReturnType<typeof setTimeout> | null = null;
+  private db: Database.Database;
   private privateKey?: string;
   private privateKeyPath?: string;
   private requireSignatures: boolean;
   private sseListeners: Set<(msg: ChatMessage) => void> = new Set();
 
   constructor(
-    filePath = "data/fleet-chat.json",
+    dbPath = "data/fleet-chat.db",
     privateKey?: string,
     opts?: { privateKeyPath?: string; requireSignatures?: boolean },
   ) {
-    this.filePath = filePath;
+    const dir = dirname(dbPath);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+    this.db = new Database(dbPath);
+    this.db.pragma("journal_mode = WAL");
     this.privateKey = privateKey;
     this.privateKeyPath = opts?.privateKeyPath;
     this.requireSignatures = opts?.requireSignatures ?? (process.env.REQUIRE_SIGNATURES === "true");
-    this.load();
+    this.init();
   }
 
-  private load(): void {
-    recoverTmpFile(this.filePath);
-    if (!existsSync(this.filePath)) return;
-    try {
-      const content = readFileSync(this.filePath, "utf-8");
-      const parsed = JSON.parse(content);
-      if (parsed && typeof parsed === "object") {
-        this.data = {
-          channels: parsed.channels || [],
-          messages: parsed.messages || [],
-          trustedEndpoints: parsed.trustedEndpoints || [],
-          quarantine: parsed.quarantine || [],
-          localIdentity: parsed.localIdentity || null,
-        };
-      }
-    } catch {
-      // start fresh
-    }
+  private init(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS channels (
+        id TEXT PRIMARY KEY,
+        localFleetName TEXT NOT NULL,
+        localFleetEndpoint TEXT NOT NULL,
+        localFleetPublicKey TEXT NOT NULL,
+        remoteFleetName TEXT NOT NULL,
+        remoteFleetEndpoint TEXT NOT NULL,
+        remoteFleetPublicKey TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        lastMessageAt TEXT,
+        metadata TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_channels_status ON channels(status);
+      CREATE INDEX IF NOT EXISTS idx_channels_remoteEndpoint ON channels(remoteFleetEndpoint);
+      CREATE INDEX IF NOT EXISTS idx_channels_remotePublicKey ON channels(remoteFleetPublicKey);
+
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        channelId TEXT NOT NULL,
+        threadId TEXT NOT NULL,
+        fromName TEXT NOT NULL,
+        fromEndpoint TEXT NOT NULL,
+        fromPublicKey TEXT NOT NULL,
+        toName TEXT NOT NULL,
+        toEndpoint TEXT NOT NULL,
+        toPublicKey TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'text',
+        content TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        signature TEXT NOT NULL,
+        delivery TEXT NOT NULL DEFAULT 'pending',
+        deliveredAt TEXT,
+        readAt TEXT,
+        replyTo TEXT,
+        metadata TEXT,
+        FOREIGN KEY (channelId) REFERENCES channels(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_messages_channelId ON messages(channelId);
+      CREATE INDEX IF NOT EXISTS idx_messages_threadId ON messages(threadId);
+      CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+
+      CREATE TABLE IF NOT EXISTS trusted_peers (
+        endpoint TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        publicKey TEXT NOT NULL,
+        addedAt TEXT NOT NULL,
+        notes TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_trusted_peers_publicKey ON trusted_peers(publicKey);
+
+      CREATE TABLE IF NOT EXISTS quarantine (
+        id TEXT PRIMARY KEY,
+        rawMessage TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        receivedAt TEXT NOT NULL,
+        reviewed INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_quarantine_receivedAt ON quarantine(receivedAt);
+
+      CREATE TABLE IF NOT EXISTS local_identity (
+        key TEXT PRIMARY KEY DEFAULT 'identity',
+        name TEXT NOT NULL,
+        endpoint TEXT NOT NULL,
+        publicKey TEXT NOT NULL
+      );
+    `);
   }
 
-  private scheduleSave(): void {
-    if (this.writeTimer) return;
-    this.writeTimer = setTimeout(() => {
-      this.writeTimer = null;
-      atomicWriteFileSync(this.filePath, JSON.stringify(this.data, null, 2));
-    }, 100);
+  // ── Row → Object helpers ─────────────────────────────────────────────────
+
+  private rowToChannel(row: any): Channel {
+    return {
+      id: row.id,
+      localFleet: { name: row.localFleetName, endpoint: row.localFleetEndpoint, publicKey: row.localFleetPublicKey },
+      remoteFleet: { name: row.remoteFleetName, endpoint: row.remoteFleetEndpoint, publicKey: row.remoteFleetPublicKey },
+      status: row.status as ChannelStatus,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      lastMessageAt: row.lastMessageAt || undefined,
+      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+    };
+  }
+
+  private rowToMessage(row: any): ChatMessage {
+    return {
+      id: row.id,
+      channelId: row.channelId,
+      threadId: row.threadId,
+      from: { name: row.fromName, endpoint: row.fromEndpoint, publicKey: row.fromPublicKey },
+      to: { name: row.toName, endpoint: row.toEndpoint, publicKey: row.toPublicKey },
+      type: row.type as MessageType,
+      content: row.content,
+      timestamp: row.timestamp,
+      signature: row.signature,
+      delivery: row.delivery as DeliveryStatus,
+      deliveredAt: row.deliveredAt || undefined,
+      readAt: row.readAt || undefined,
+      replyTo: row.replyTo || undefined,
+      metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+    };
+  }
+
+  private rowToTrustedEndpoint(row: any): TrustedEndpoint {
+    return {
+      name: row.name,
+      endpoint: row.endpoint,
+      publicKey: row.publicKey,
+      addedAt: row.addedAt,
+      notes: row.notes || undefined,
+    };
+  }
+
+  private rowToQuarantined(row: any): QuarantinedMessage {
+    return {
+      id: row.id,
+      rawMessage: JSON.parse(row.rawMessage),
+      reason: row.reason,
+      receivedAt: row.receivedAt,
+      reviewed: !!row.reviewed,
+    };
   }
 
   // ── Local Identity ───────────────────────────────────────────────────────
 
   setLocalIdentity(identity: FleetIdentity): void {
-    this.data.localIdentity = validateFleetIdentity(identity, "localIdentity");
-    this.scheduleSave();
+    const validated = validateFleetIdentity(identity, "localIdentity");
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO local_identity (key, name, endpoint, publicKey)
+         VALUES ('identity', ?, ?, ?)`
+      )
+      .run(validated.name, validated.endpoint, validated.publicKey);
   }
 
   getLocalIdentity(): FleetIdentity | null {
-    return this.data.localIdentity;
+    const row = this.db.prepare("SELECT * FROM local_identity WHERE key = 'identity'").get() as any;
+    if (!row) return null;
+    return { name: row.name, endpoint: row.endpoint, publicKey: row.publicKey };
   }
 
   setPrivateKey(key: string): void {
@@ -253,70 +360,101 @@ export class FleetChatStore {
     this.requireSignatures = require;
   }
 
-  // ── Trusted Endpoints (simple contacts substitute) ───────────────────────
+  // ── Trusted Endpoints ────────────────────────────────────────────────────
 
   addTrustedEndpoint(endpoint: Omit<TrustedEndpoint, "addedAt">): TrustedEndpoint {
     const validated = validateFleetIdentity(endpoint, "trustedEndpoint");
-    const existing = this.data.trustedEndpoints.find(
-      (e) => e.endpoint === validated.endpoint || e.publicKey === validated.publicKey,
-    );
+
+    // Check existing by endpoint or publicKey
+    const existing = this.db
+      .prepare("SELECT * FROM trusted_peers WHERE endpoint = ? OR publicKey = ?")
+      .get(validated.endpoint, validated.publicKey) as any;
+
     if (existing) {
       // Update existing
-      existing.name = validated.name;
-      existing.endpoint = validated.endpoint;
-      existing.publicKey = validated.publicKey;
-      existing.notes = (endpoint as TrustedEndpoint).notes;
-      this.scheduleSave();
-      return existing;
+      this.db
+        .prepare(
+          `UPDATE trusted_peers SET name = ?, endpoint = ?, publicKey = ?, notes = ?
+           WHERE endpoint = ? OR publicKey = ?`
+        )
+        .run(
+          validated.name,
+          validated.endpoint,
+          validated.publicKey,
+          (endpoint as TrustedEndpoint).notes || existing.notes || null,
+          validated.endpoint,
+          validated.publicKey,
+        );
+      return this.rowToTrustedEndpoint(
+        this.db.prepare("SELECT * FROM trusted_peers WHERE endpoint = ?").get(validated.endpoint),
+      );
     }
+
     const entry: TrustedEndpoint = {
       ...validated,
       addedAt: new Date().toISOString(),
       notes: (endpoint as TrustedEndpoint).notes,
     };
-    this.data.trustedEndpoints.push(entry);
-    this.scheduleSave();
+
+    this.db
+      .prepare(
+        `INSERT INTO trusted_peers (endpoint, name, publicKey, addedAt, notes)
+         VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(entry.endpoint, entry.name, entry.publicKey, entry.addedAt, entry.notes || null);
+
     return entry;
   }
 
   removeTrustedEndpoint(endpoint: string): boolean {
-    const idx = this.data.trustedEndpoints.findIndex((e) => e.endpoint === endpoint);
-    if (idx === -1) return false;
-    this.data.trustedEndpoints.splice(idx, 1);
-    this.scheduleSave();
-    return true;
+    const result = this.db.prepare("DELETE FROM trusted_peers WHERE endpoint = ?").run(endpoint);
+    return result.changes > 0;
   }
 
   getTrustedEndpoints(): TrustedEndpoint[] {
-    return [...this.data.trustedEndpoints];
+    const rows = this.db.prepare("SELECT * FROM trusted_peers ORDER BY addedAt DESC").all() as any[];
+    return rows.map((r) => this.rowToTrustedEndpoint(r));
   }
 
   isTrusted(endpoint?: string, publicKey?: string): boolean {
-    return this.data.trustedEndpoints.some(
-      (e) => (endpoint && e.endpoint === endpoint) || (publicKey && e.publicKey === publicKey),
-    );
+    if (!endpoint && !publicKey) return false;
+    const conditions: string[] = [];
+    const params: any[] = [];
+    if (endpoint) {
+      conditions.push("endpoint = ?");
+      params.push(endpoint);
+    }
+    if (publicKey) {
+      conditions.push("publicKey = ?");
+      params.push(publicKey);
+    }
+    const row = this.db
+      .prepare(`SELECT 1 FROM trusted_peers WHERE ${conditions.join(" OR ")} LIMIT 1`)
+      .get(...params);
+    return !!row;
   }
 
   findTrustedByKey(publicKey: string): TrustedEndpoint | undefined {
-    return this.data.trustedEndpoints.find((e) => e.publicKey === publicKey);
+    const row = this.db.prepare("SELECT * FROM trusted_peers WHERE publicKey = ?").get(publicKey) as any;
+    return row ? this.rowToTrustedEndpoint(row) : undefined;
   }
 
   // ── Channels ─────────────────────────────────────────────────────────────
 
   createChannel(input: CreateChannelInput): Channel {
-    const localIdentity = this.data.localIdentity;
+    const localIdentity = this.getLocalIdentity();
     if (!localIdentity) throw new ValidationError("Local identity must be set before creating channels");
 
     const remoteFleet = validateFleetIdentity(input.remoteFleet, "remoteFleet");
 
     // Check for existing active channel with this fleet
-    const existing = this.data.channels.find(
-      (ch) =>
-        ch.status === "active" &&
-        (ch.remoteFleet.endpoint === remoteFleet.endpoint ||
-          ch.remoteFleet.publicKey === remoteFleet.publicKey),
-    );
-    if (existing) return existing; // Idempotent
+    const existing = this.db
+      .prepare(
+        `SELECT * FROM channels WHERE status = 'active'
+         AND (remoteFleetEndpoint = ? OR remoteFleetPublicKey = ?)`
+      )
+      .get(remoteFleet.endpoint, remoteFleet.publicKey) as any;
+    if (existing) return this.rowToChannel(existing); // Idempotent
 
     const now = new Date().toISOString();
     const channel: Channel = {
@@ -329,49 +467,85 @@ export class FleetChatStore {
       metadata: input.metadata,
     };
 
-    this.data.channels.push(channel);
+    this.db
+      .prepare(
+        `INSERT INTO channels (id, localFleetName, localFleetEndpoint, localFleetPublicKey,
+         remoteFleetName, remoteFleetEndpoint, remoteFleetPublicKey, status, createdAt, updatedAt,
+         lastMessageAt, metadata)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        channel.id,
+        localIdentity.name,
+        localIdentity.endpoint,
+        localIdentity.publicKey,
+        remoteFleet.name,
+        remoteFleet.endpoint,
+        remoteFleet.publicKey,
+        channel.status,
+        channel.createdAt,
+        channel.updatedAt,
+        null,
+        input.metadata ? JSON.stringify(input.metadata) : null,
+      );
 
     // Auto-add remote fleet to trusted endpoints if not already trusted
     if (!this.isTrusted(remoteFleet.endpoint, remoteFleet.publicKey)) {
       this.addTrustedEndpoint(remoteFleet);
     }
 
-    this.scheduleSave();
     return channel;
   }
 
   getChannel(id: string): Channel {
-    const ch = this.data.channels.find((c) => c.id === id);
-    if (!ch) throw new NotFoundError(`Channel ${id} not found`);
-    return ch;
+    const row = this.db.prepare("SELECT * FROM channels WHERE id = ?").get(id) as any;
+    if (!row) throw new NotFoundError(`Channel ${id} not found`);
+    return this.rowToChannel(row);
   }
 
   listChannels(opts?: { status?: ChannelStatus }): Channel[] {
-    let channels = [...this.data.channels];
+    let sql = "SELECT * FROM channels";
+    const params: any[] = [];
     if (opts?.status) {
-      channels = channels.filter((c) => c.status === opts.status);
+      sql += " WHERE status = ?";
+      params.push(opts.status);
     }
-    return channels.sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
+    sql += " ORDER BY updatedAt DESC";
+    const rows = this.db.prepare(sql).all(...params) as any[];
+    return rows.map((r) => this.rowToChannel(r));
   }
 
   findChannelByRemote(endpoint?: string, publicKey?: string): Channel | undefined {
-    return this.data.channels.find(
-      (ch) =>
-        ch.status === "active" &&
-        ((endpoint && ch.remoteFleet.endpoint === endpoint) ||
-          (publicKey && ch.remoteFleet.publicKey === publicKey)),
-    );
+    const conditions: string[] = ["status = 'active'"];
+    const params: any[] = [];
+    const remoteConditions: string[] = [];
+    if (endpoint) {
+      remoteConditions.push("remoteFleetEndpoint = ?");
+      params.push(endpoint);
+    }
+    if (publicKey) {
+      remoteConditions.push("remoteFleetPublicKey = ?");
+      params.push(publicKey);
+    }
+    if (remoteConditions.length === 0) return undefined;
+    conditions.push(`(${remoteConditions.join(" OR ")})`);
+
+    const row = this.db
+      .prepare(`SELECT * FROM channels WHERE ${conditions.join(" AND ")} LIMIT 1`)
+      .get(...params) as any;
+    return row ? this.rowToChannel(row) : undefined;
   }
 
   updateChannelStatus(id: string, status: ChannelStatus): Channel {
-    const ch = this.getChannel(id);
+    this.getChannel(id); // Verify exists
     if (!VALID_CHANNEL_STATUSES.has(status)) {
       throw new ValidationError(`Invalid status. Must be one of: ${[...VALID_CHANNEL_STATUSES].join(", ")}`);
     }
-    ch.status = status;
-    ch.updatedAt = new Date().toISOString();
-    this.scheduleSave();
-    return ch;
+    const now = new Date().toISOString();
+    this.db
+      .prepare("UPDATE channels SET status = ?, updatedAt = ? WHERE id = ?")
+      .run(status, now, id);
+    return this.getChannel(id);
   }
 
   // ── Messages ─────────────────────────────────────────────────────────────
@@ -394,7 +568,7 @@ export class FleetChatStore {
     // Determine thread
     let threadId: string;
     if (input.replyTo) {
-      const parent = this.data.messages.find((m) => m.id === input.replyTo);
+      const parent = this.db.prepare("SELECT threadId FROM messages WHERE id = ?").get(input.replyTo) as any;
       if (!parent) throw new NotFoundError(`Message ${input.replyTo} not found`);
       threadId = parent.threadId;
     } else {
@@ -427,10 +601,27 @@ export class FleetChatStore {
       metadata: input.metadata,
     };
 
-    this.data.messages.push(msg);
-    channel.lastMessageAt = now;
-    channel.updatedAt = now;
-    this.scheduleSave();
+    this.db
+      .prepare(
+        `INSERT INTO messages (id, channelId, threadId, fromName, fromEndpoint, fromPublicKey,
+         toName, toEndpoint, toPublicKey, type, content, timestamp, signature, delivery,
+         deliveredAt, readAt, replyTo, metadata)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        msg.id, msg.channelId, msg.threadId,
+        msg.from.name, msg.from.endpoint, msg.from.publicKey,
+        msg.to.name, msg.to.endpoint, msg.to.publicKey,
+        msg.type, msg.content, msg.timestamp, msg.signature, msg.delivery,
+        null, null, msg.replyTo || null,
+        msg.metadata ? JSON.stringify(msg.metadata) : null,
+      );
+
+    // Update channel timestamps
+    this.db
+      .prepare("UPDATE channels SET lastMessageAt = ?, updatedAt = ? WHERE id = ?")
+      .run(now, now, channel.id);
+
     return msg;
   }
 
@@ -440,45 +631,62 @@ export class FleetChatStore {
   ): ChatMessage[] {
     this.getChannel(channelId); // Verify channel exists
 
-    let msgs = this.data.messages.filter((m) => m.channelId === channelId);
+    const conditions: string[] = ["channelId = ?"];
+    const params: any[] = [channelId];
 
     if (opts?.threadId) {
-      msgs = msgs.filter((m) => m.threadId === opts.threadId);
+      conditions.push("threadId = ?");
+      params.push(opts.threadId);
     }
     if (opts?.after) {
-      msgs = msgs.filter((m) => m.timestamp > opts.after!);
+      conditions.push("timestamp > ?");
+      params.push(opts.after);
     }
     if (opts?.before) {
-      msgs = msgs.filter((m) => m.timestamp < opts.before!);
+      conditions.push("timestamp < ?");
+      params.push(opts.before);
     }
 
-    // Chronological order
-    msgs = msgs.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
+    let sql = `SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY timestamp ASC`;
 
     if (opts?.limit) {
-      msgs = msgs.slice(-opts.limit); // Last N messages
+      // Last N messages: use a subquery to get the tail
+      sql = `SELECT * FROM (
+        SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY timestamp DESC LIMIT ?
+      ) sub ORDER BY timestamp ASC`;
+      params.push(opts.limit);
     }
 
-    return msgs;
+    const rows = this.db.prepare(sql).all(...params) as any[];
+    return rows.map((r) => this.rowToMessage(r));
   }
 
   updateDelivery(messageId: string, status: DeliveryStatus): ChatMessage {
-    const msg = this.data.messages.find((m) => m.id === messageId);
-    if (!msg) throw new NotFoundError(`Message ${messageId} not found`);
-    msg.delivery = status;
-    if (status === "delivered") msg.deliveredAt = new Date().toISOString();
-    if (status === "read") msg.readAt = new Date().toISOString();
-    this.scheduleSave();
-    return msg;
+    const row = this.db.prepare("SELECT * FROM messages WHERE id = ?").get(messageId) as any;
+    if (!row) throw new NotFoundError(`Message ${messageId} not found`);
+
+    const updates: string[] = ["delivery = ?"];
+    const params: any[] = [status];
+
+    if (status === "delivered") {
+      updates.push("deliveredAt = ?");
+      params.push(new Date().toISOString());
+    }
+    if (status === "read") {
+      updates.push("readAt = ?");
+      params.push(new Date().toISOString());
+    }
+
+    params.push(messageId);
+    this.db.prepare(`UPDATE messages SET ${updates.join(", ")} WHERE id = ?`).run(...params);
+
+    return this.rowToMessage(
+      this.db.prepare("SELECT * FROM messages WHERE id = ?").get(messageId),
+    );
   }
 
   // ── Inbound (Public Inbox) ───────────────────────────────────────────────
 
-  /**
-   * Receive a message from another fleet via the public inbox.
-   * Verifies the sender against trusted endpoints.
-   * Unknown senders go to quarantine.
-   */
   async receiveInbound(inbound: InboundMessage): Promise<{ message?: ChatMessage; quarantined?: QuarantinedMessage }> {
     // Accept both "from" and "sender" field names for compatibility
     const rawFrom = inbound.from || (inbound as any).sender;
@@ -512,8 +720,9 @@ export class FleetChatStore {
         receivedAt: new Date().toISOString(),
         reviewed: false,
       };
-      this.data.quarantine.push(quarantined);
-      this.scheduleSave();
+      this.db
+        .prepare("INSERT INTO quarantine (id, rawMessage, reason, receivedAt, reviewed) VALUES (?, ?, ?, ?, ?)")
+        .run(quarantined.id, JSON.stringify(inbound), quarantined.reason, quarantined.receivedAt, 0);
       return { quarantined };
     }
 
@@ -522,10 +731,8 @@ export class FleetChatStore {
     const hasRealSig = sig && isRealSignature(sig);
 
     if (hasRealSig) {
-      // Verify Ed25519 signature against sender's public key
       const valid = verifyContent(inbound.content, sig, from.publicKey);
       if (!valid) {
-        // Invalid signature → quarantine regardless of trust
         const quarantined: QuarantinedMessage = {
           id: ulid(),
           rawMessage: inbound,
@@ -533,12 +740,12 @@ export class FleetChatStore {
           receivedAt: new Date().toISOString(),
           reviewed: false,
         };
-        this.data.quarantine.push(quarantined);
-        this.scheduleSave();
+        this.db
+          .prepare("INSERT INTO quarantine (id, rawMessage, reason, receivedAt, reviewed) VALUES (?, ?, ?, ?, ?)")
+          .run(quarantined.id, JSON.stringify(inbound), quarantined.reason, quarantined.receivedAt, 0);
         return { quarantined };
       }
     } else if (this.requireSignatures) {
-      // Phase 2: require signatures from trusted senders
       const quarantined: QuarantinedMessage = {
         id: ulid(),
         rawMessage: inbound,
@@ -546,17 +753,17 @@ export class FleetChatStore {
         receivedAt: new Date().toISOString(),
         reviewed: false,
       };
-      this.data.quarantine.push(quarantined);
-      this.scheduleSave();
+      this.db
+        .prepare("INSERT INTO quarantine (id, rawMessage, reason, receivedAt, reviewed) VALUES (?, ?, ?, ?, ?)")
+        .run(quarantined.id, JSON.stringify(inbound), quarantined.reason, quarantined.receivedAt, 0);
       return { quarantined };
     }
-    // Phase 1: accept unsigned messages from trusted senders
 
     // Find or create channel for this sender
     let channel = this.findChannelByRemote(from.endpoint, from.publicKey);
     if (!channel) {
-      // Auto-create channel for trusted senders
-      if (this.data.localIdentity) {
+      const localIdentity = this.getLocalIdentity();
+      if (localIdentity) {
         channel = this.createChannel({ remoteFleet: from });
       } else {
         throw new ValidationError("Local identity not set, cannot receive messages");
@@ -566,7 +773,7 @@ export class FleetChatStore {
     // Determine thread
     let threadId: string;
     if (inbound.replyTo) {
-      const parent = this.data.messages.find((m) => m.id === inbound.replyTo);
+      const parent = this.db.prepare("SELECT threadId FROM messages WHERE id = ?").get(inbound.replyTo) as any;
       threadId = parent?.threadId || inbound.threadId || ulid();
     } else {
       threadId = inbound.threadId || ulid();
@@ -581,10 +788,8 @@ export class FleetChatStore {
     if (type === "encrypted" && this.privateKeyPath) {
       try {
         finalContent = await decryptContent(inbound.content.trim(), this.privateKeyPath);
-        // After decryption, store as text (readable in the channel)
         finalType = "text";
       } catch (err) {
-        // Decryption failed — quarantine
         const quarantined: QuarantinedMessage = {
           id: ulid(),
           rawMessage: inbound,
@@ -592,14 +797,25 @@ export class FleetChatStore {
           receivedAt: now,
           reviewed: false,
         };
-        this.data.quarantine.push(quarantined);
-        this.scheduleSave();
+        this.db
+          .prepare("INSERT INTO quarantine (id, rawMessage, reason, receivedAt, reviewed) VALUES (?, ?, ?, ?, ?)")
+          .run(quarantined.id, JSON.stringify(inbound), quarantined.reason, quarantined.receivedAt, 0);
         return { quarantined };
       }
     }
 
+    const msgId = inbound.id || ulid();
+
+    // Deduplicate — if we already have this message ID, skip
+    if (inbound.id) {
+      const existing = this.db.prepare("SELECT * FROM messages WHERE id = ?").get(inbound.id) as any;
+      if (existing) {
+        return { message: this.rowToMessage(existing) };
+      }
+    }
+
     const msg: ChatMessage = {
-      id: inbound.id || ulid(),
+      id: msgId,
       channelId: channel.id,
       threadId,
       from,
@@ -614,15 +830,26 @@ export class FleetChatStore {
       metadata: { ...inbound.metadata, ...(type === "encrypted" ? { wasEncrypted: true } : {}) },
     };
 
-    // Deduplicate — if we already have this message ID, skip
-    if (inbound.id && this.data.messages.some((m) => m.id === inbound.id)) {
-      return { message: this.data.messages.find((m) => m.id === inbound.id)! };
-    }
+    this.db
+      .prepare(
+        `INSERT INTO messages (id, channelId, threadId, fromName, fromEndpoint, fromPublicKey,
+         toName, toEndpoint, toPublicKey, type, content, timestamp, signature, delivery,
+         deliveredAt, readAt, replyTo, metadata)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        msg.id, msg.channelId, msg.threadId,
+        msg.from.name, msg.from.endpoint, msg.from.publicKey,
+        msg.to.name, msg.to.endpoint, msg.to.publicKey,
+        msg.type, msg.content, msg.timestamp, msg.signature, msg.delivery,
+        msg.deliveredAt || null, msg.readAt || null, msg.replyTo || null,
+        msg.metadata ? JSON.stringify(msg.metadata) : null,
+      );
 
-    this.data.messages.push(msg);
-    channel.lastMessageAt = now;
-    channel.updatedAt = now;
-    this.scheduleSave();
+    // Update channel timestamps
+    this.db
+      .prepare("UPDATE channels SET lastMessageAt = ?, updatedAt = ? WHERE id = ?")
+      .run(now, now, channel.id);
 
     // Notify SSE listeners
     for (const listener of this.sseListeners) {
@@ -637,14 +864,17 @@ export class FleetChatStore {
   // ── Quarantine ───────────────────────────────────────────────────────────
 
   getQuarantine(): QuarantinedMessage[] {
-    return [...this.data.quarantine].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
+    const rows = this.db
+      .prepare("SELECT * FROM quarantine ORDER BY receivedAt DESC")
+      .all() as any[];
+    return rows.map((r) => this.rowToQuarantined(r));
   }
 
   async approveQuarantined(quarantineId: string): Promise<ChatMessage> {
-    const idx = this.data.quarantine.findIndex((q) => q.id === quarantineId);
-    if (idx === -1) throw new NotFoundError(`Quarantined message ${quarantineId} not found`);
+    const row = this.db.prepare("SELECT * FROM quarantine WHERE id = ?").get(quarantineId) as any;
+    if (!row) throw new NotFoundError(`Quarantined message ${quarantineId} not found`);
 
-    const quarantined = this.data.quarantine[idx];
+    const quarantined = this.rowToQuarantined(row);
     const raw = quarantined.rawMessage;
 
     // Normalize: ensure "from" is set (may have arrived as "sender")
@@ -654,27 +884,21 @@ export class FleetChatStore {
     // Add sender to trusted endpoints
     this.addTrustedEndpoint(senderIdentity);
 
-    // Remove from quarantine BEFORE re-processing to avoid
-    // receiveInbound finding this same entry if anything goes wrong
-    this.data.quarantine.splice(idx, 1);
+    // Remove from quarantine BEFORE re-processing
+    this.db.prepare("DELETE FROM quarantine WHERE id = ?").run(quarantineId);
 
     // Re-process the message now that sender is trusted
-    // Ensure from field is set for receiveInbound
     const normalizedMessage = { ...raw, from: senderIdentity };
     const result = await this.receiveInbound(normalizedMessage);
-
-    this.scheduleSave();
 
     if (result.message) return result.message;
     throw new ValidationError("Failed to process quarantined message after approval");
   }
 
   rejectQuarantined(quarantineId: string): void {
-    const idx = this.data.quarantine.findIndex((q) => q.id === quarantineId);
-    if (idx === -1) throw new NotFoundError(`Quarantined message ${quarantineId} not found`);
-    this.data.quarantine[idx].reviewed = true;
-    this.data.quarantine.splice(idx, 1);
-    this.scheduleSave();
+    const row = this.db.prepare("SELECT * FROM quarantine WHERE id = ?").get(quarantineId) as any;
+    if (!row) throw new NotFoundError(`Quarantined message ${quarantineId} not found`);
+    this.db.prepare("DELETE FROM quarantine WHERE id = ?").run(quarantineId);
   }
 
   // ── SSE Support ──────────────────────────────────────────────────────────
@@ -687,23 +911,25 @@ export class FleetChatStore {
   // ── Utilities ────────────────────────────────────────────────────────────
 
   flush(): void {
-    if (this.writeTimer) {
-      clearTimeout(this.writeTimer);
-      this.writeTimer = null;
-      atomicWriteFileSync(this.filePath, JSON.stringify(this.data, null, 2));
-    }
+    // No-op for SQLite — writes are immediate. Kept for API compatibility.
   }
 
   get channelCount(): number {
-    return this.data.channels.length;
+    const row = this.db.prepare("SELECT COUNT(*) as cnt FROM channels").get() as any;
+    return row.cnt;
   }
 
   get messageCount(): number {
-    return this.data.messages.length;
+    const row = this.db.prepare("SELECT COUNT(*) as cnt FROM messages").get() as any;
+    return row.cnt;
   }
 
   get quarantineCount(): number {
-    return this.data.quarantine.length;
+    const row = this.db.prepare("SELECT COUNT(*) as cnt FROM quarantine").get() as any;
+    return row.cnt;
+  }
+
+  close(): void {
+    this.db.close();
   }
 }
-

@@ -27,7 +27,7 @@ const UNKNOWN_FLEET: FleetIdentity = {
 
 function makeStore(): FleetChatStore {
   // Use unique temp path per test to avoid collisions
-  const store = new FleetChatStore(`/tmp/fleet-chat-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  const store = new FleetChatStore(`/tmp/fleet-chat-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   store.setLocalIdentity(LOCAL_FLEET);
   return store;
 }
@@ -139,7 +139,7 @@ describe("FleetChatStore", () => {
     });
 
     it("requires local identity before creating channels", () => {
-      const store = new FleetChatStore(`/tmp/fleet-chat-test-${Date.now()}.json`);
+      const store = new FleetChatStore(`/tmp/fleet-chat-test-${Date.now()}.db`);
       expect(() => store.createChannel({ remoteFleet: REMOTE_FLEET })).toThrow("Local identity");
     });
   });
@@ -646,7 +646,7 @@ describe("FleetChatStore", () => {
 
     it("with requireSignatures, rejects unsigned from trusted", async () => {
       const store = new FleetChatStore(
-        `/tmp/fleet-chat-test-${Date.now()}.json`,
+        `/tmp/fleet-chat-test-${Date.now()}.db`,
         undefined,
         { requireSignatures: true },
       );
