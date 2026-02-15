@@ -61,9 +61,11 @@ export class GossipStore {
   private messages: Message[] = [];
   private filePath: string;
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
+  private maxMessages: number;
 
-  constructor(filePath = "data/gossip.json") {
+  constructor(filePath = "data/gossip.json", maxMessages = 10000) {
     this.filePath = filePath;
+    this.maxMessages = maxMessages;
     this.load();
   }
 
@@ -79,19 +81,32 @@ export class GossipStore {
     } catch {
       // start fresh
     }
+    // Prune to max on load
+    if (this.messages.length > this.maxMessages) {
+      this.messages = this.messages.slice(-this.maxMessages);
+    }
+  }
+
+  private save(): void {
+    atomicWriteFileSync(this.filePath, JSON.stringify(this.messages, null, 2));
   }
 
   private scheduleSave(): void {
     if (this.writeTimer) return;
     this.writeTimer = setTimeout(() => {
       this.writeTimer = null;
-      atomicWriteFileSync(this.filePath, JSON.stringify(this.messages, null, 2));
+      this.save();
     }, 100);
+  }
+
+  private prune(): void {
+    if (this.messages.length > this.maxMessages) {
+      this.messages = this.messages.slice(-this.maxMessages);
+    }
   }
 
   send(input: SendInput): Message {
     if (!input.from?.trim()) throw new ValidationError("'from' is required");
-    if (!input.to?.trim()) throw new ValidationError("'to' is required");
     if (!input.subject?.trim()) throw new ValidationError("'subject' is required");
     if (!input.body?.trim()) throw new ValidationError("'body' is required");
     if (!VALID_TYPES.has(input.type)) {
@@ -115,6 +130,9 @@ export class GossipStore {
       threadId = ulid();
     }
 
+    // Validate 'to' after replyTo auto-resolve so replies can omit it
+    if (!input.to?.trim()) throw new ValidationError("'to' is required");
+
     const msg: Message = {
       id: ulid(),
       threadId,
@@ -129,6 +147,7 @@ export class GossipStore {
     };
 
     this.messages.push(msg);
+    this.prune();
     this.scheduleSave();
     return msg;
   }
@@ -140,7 +159,7 @@ export class GossipStore {
     });
   }
 
-  getInbox(agent: string, opts?: { unreadOnly?: boolean; limit?: number }): Message[] {
+  getInbox(agent: string, opts?: { unreadOnly?: boolean; limit?: number; offset?: number }): { messages: Message[]; total: number } {
     let msgs = this.messages.filter(
       (m) => m.to === agent || m.to === "*"
     );
@@ -152,11 +171,12 @@ export class GossipStore {
     // Newest first
     msgs = msgs.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
-    if (opts?.limit) {
-      msgs = msgs.slice(0, opts.limit);
-    }
+    const total = msgs.length;
+    const offset = opts?.offset ?? 0;
+    const limit = opts?.limit ?? 50;
+    msgs = msgs.slice(offset, offset + limit);
 
-    return msgs;
+    return { messages: msgs, total };
   }
 
   getThread(threadId: string): Message[] {
@@ -224,13 +244,13 @@ export class GossipStore {
     };
   }
 
-  /** Flush any pending debounced write immediately. Call on shutdown to prevent data loss. */
+  /** Flush to disk immediately. Always writes, regardless of pending timer. Call on shutdown. */
   flush(): void {
     if (this.writeTimer) {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;
-      atomicWriteFileSync(this.filePath, JSON.stringify(this.messages, null, 2));
     }
+    this.save();
   }
 
   get size(): number {

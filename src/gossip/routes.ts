@@ -35,16 +35,17 @@ gossipRoutes.post("/messages", async (c) => {
   }
 });
 
-// GET /messages?to=:name&unread=true&limit=50
+// GET /messages?to=:name&unread=true&limit=50&offset=0
 gossipRoutes.get("/messages", (c) => {
   const to = c.req.query("to");
   if (!to) return c.json({ error: "Query param 'to' is required" }, 400);
 
   const unreadOnly = c.req.query("unread") === "true";
   const limit = c.req.query("limit") ? parseInt(c.req.query("limit")!, 10) : undefined;
+  const offset = c.req.query("offset") ? parseInt(c.req.query("offset")!, 10) : undefined;
 
-  const messages = gossipStore.getInbox(to, { unreadOnly, limit });
-  return c.json({ messages, count: messages.length });
+  const result = gossipStore.getInbox(to, { unreadOnly, limit, offset });
+  return c.json({ messages: result.messages, count: result.messages.length, total: result.total });
 });
 
 // GET /threads/:id
