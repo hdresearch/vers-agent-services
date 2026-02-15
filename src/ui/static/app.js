@@ -841,6 +841,13 @@ function switchView(viewName) {
   } else if (prevView === 'fleet') {
     if (typeof window._fleetDestroy === 'function') window._fleetDestroy();
   }
+
+  // Comms: init/destroy
+  if (viewName === 'comms') {
+    if (typeof window._commsInit === 'function') window._commsInit();
+  } else if (prevView === 'comms') {
+    if (typeof window._commsDestroy === 'function') window._commsDestroy();
+  }
 }
 
 // ─── Metrics Sub-tabs ───

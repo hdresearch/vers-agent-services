@@ -18,6 +18,7 @@
       <button class="tab" data-view="metrics">Metrics</button>
       <button class="tab" data-view="chat">Chat</button>
       <button class="tab" data-view="fleet">Fleet</button>
+      <button class="tab" data-view="comms">Comms</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -343,7 +344,69 @@
     </div>
   </div>
 
+  <!-- Comms View -->
+  <div class="view" id="view-comms">
+    <!-- Identity bar -->
+    <div class="comms-identity" id="comms-identity-bar">
+      <span class="comms-id-label">Loading identity…</span>
+    </div>
+
+    <!-- Sub-tabs -->
+    <div class="comms-subtabs">
+      <button class="comms-subtab active" data-subview="channels">Channels</button>
+      <button class="comms-subtab" data-subview="quarantine">Quarantine</button>
+      <button class="comms-subtab" data-subview="gossip">Gossip</button>
+    </div>
+
+    <!-- Channels sub-view -->
+    <div class="comms-subview active" id="comms-subview-channels">
+      <div class="comms-layout">
+        <div class="comms-sidebar">
+          <div class="comms-sidebar-header">Channels</div>
+          <div class="comms-channel-list" id="comms-channel-list">
+            <div class="comms-empty">Loading…</div>
+          </div>
+        </div>
+        <div class="comms-main">
+          <div class="comms-msg-header-bar">
+            <span id="comms-msg-channel-name">Select a channel</span>
+          </div>
+          <div class="comms-messages" id="comms-messages">
+            <div class="comms-empty">Select a channel to view messages</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quarantine sub-view -->
+    <div class="comms-subview" id="comms-subview-quarantine">
+      <div class="comms-quarantine-wrap">
+        <div class="comms-quarantine-header">Quarantined Agents</div>
+        <div class="comms-quarantine-list" id="comms-quarantine-list">
+          <div class="comms-empty">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Gossip sub-view -->
+    <div class="comms-subview" id="comms-subview-gossip">
+      <div class="comms-gossip-wrap">
+        <div class="comms-gossip-header">
+          <span>Gossip Messages</span>
+          <div class="comms-gossip-search-bar">
+            <input type="text" id="comms-gossip-agent" placeholder="Agent name…" autocomplete="off">
+            <button id="comms-gossip-search" class="comms-btn comms-btn-search">Search</button>
+          </div>
+        </div>
+        <div class="comms-gossip-list" id="comms-gossip-list">
+          <div class="comms-empty">Enter an agent name to view gossip messages</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="/ui/static/fleet.js"></script>
+  <script src="/ui/static/comms.js"></script>
   <script src="/ui/static/chat.js"></script>
   <script src="/ui/static/speedometer.js"></script>
   <script src="/ui/static/metrics.js"></script>
