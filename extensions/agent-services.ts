@@ -364,6 +364,38 @@ async function syncExtensionsFromHub(): Promise<string[]> {
 }
 
 // ---------------------------------------------------------------------------
+// KB Briefing — sync fleet knowledge base to agent context
+// ---------------------------------------------------------------------------
+
+const KB_CONTEXT_DIR = join(homedir(), ".pi", "agent", "context");
+const KB_BRIEFING_FILE = join(KB_CONTEXT_DIR, "kb-briefing.md");
+
+async function syncKBBriefing(): Promise<boolean> {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) return false;
+
+  try {
+    const res = await api<{ briefing: string; entryCount: number }>(
+      "GET",
+      "/kb/briefing",
+    );
+
+    if (!res.briefing || res.entryCount === 0) {
+      // No KB entries — remove stale briefing file if it exists
+      await rm(KB_BRIEFING_FILE, { force: true }).catch(() => {});
+      return false;
+    }
+
+    await mkdir(KB_CONTEXT_DIR, { recursive: true });
+    await writeFile(KB_BRIEFING_FILE, res.briefing);
+    return true;
+  } catch {
+    // Best effort — don't block session start
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // SSE stream for real-time skill/extension updates
 // ---------------------------------------------------------------------------
 
@@ -533,6 +565,9 @@ export default function (pi: ExtensionAPI) {
     // Sync skills and extensions from SkillHub
     syncSkillsFromHub().catch(() => {});
     syncExtensionsFromHub().catch(() => {});
+
+    // Sync KB briefing — write fleet knowledge to context file
+    syncKBBriefing().catch(() => {});
 
     // Subscribe to SSE stream for real-time updates
     startSkillStream();
@@ -1513,6 +1548,131 @@ export default function (pi: ExtensionAPI) {
             ? `Synced from hub:\nSkills: ${synced.join(", ") || "up to date"}\nExtensions: ${extsSynced.join(", ") || "up to date"}${skippedNote}${extsSynced.length > 0 ? "\n\nNote: Extension changes require /reload to take effect." : ""}`
             : `Everything up to date.${skippedNote}`;
         return ok(text, { skills: synced, extensions: extsSynced, skippedFromPackages: Array.from(packageSkills) });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  // ===========================================================================
+  // KB (Knowledge Base) Tools
+  // ===========================================================================
+
+  pi.registerTool({
+    name: "kb_add",
+    label: "KB: Add Entry",
+    description:
+      "Add a knowledge base entry — lessons learned, conventions, SOPs, gotchas, decisions, or references. Use when the fleet learns something that should persist across sessions.",
+    parameters: Type.Object({
+      type: StringEnum(
+        ["lesson", "convention", "sop", "gotcha", "reference", "decision"] as const,
+        { description: "Entry type" },
+      ),
+      title: Type.String({ description: "Short descriptive title" }),
+      content: Type.String({ description: "Full content (markdown supported)" }),
+      source: Type.Optional(Type.String({ description: "Source, e.g. 'agent:backend-lt', 'human:noah'" })),
+      tags: Type.Optional(Type.Array(Type.String(), { description: "Tags for filtering" })),
+      priority: Type.Optional(
+        StringEnum(["low", "normal", "high", "critical"] as const, {
+          description: "Priority level (critical entries are always shown)",
+        }),
+      ),
+      decayDays: Type.Optional(
+        Type.Number({ description: "Days until entry expires (omit for permanent)" }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const entry = await api("POST", "/kb/entries", {
+          ...params,
+          source: params.source || `agent:${agentName}`,
+        });
+        return ok(JSON.stringify(entry, null, 2), { entry });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "kb_search",
+    label: "KB: Search",
+    description:
+      "Search the fleet knowledge base. Find lessons, conventions, SOPs, and gotchas. Use before starting unfamiliar work to check what the fleet already knows.",
+    parameters: Type.Object({
+      search: Type.Optional(Type.String({ description: "Full-text search query" })),
+      type: Type.Optional(
+        StringEnum(
+          ["lesson", "convention", "sop", "gotcha", "reference", "decision"] as const,
+          { description: "Filter by entry type" },
+        ),
+      ),
+      tag: Type.Optional(Type.String({ description: "Filter by tag" })),
+      priority: Type.Optional(
+        StringEnum(["low", "normal", "high", "critical"] as const, {
+          description: "Filter by priority",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const qs = new URLSearchParams();
+        if (params.search) qs.set("search", params.search);
+        if (params.type) qs.set("type", params.type);
+        if (params.tag) qs.set("tag", params.tag);
+        if (params.priority) qs.set("priority", params.priority);
+        const query = qs.toString();
+        const result = await api("GET", `/kb/entries${query ? `?${query}` : ""}`);
+        return ok(JSON.stringify(result, null, 2), { result });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "kb_briefing",
+    label: "KB: Get Briefing",
+    description:
+      "Get the full KB briefing document — all non-expired entries formatted as markdown. Also refreshes the local context file.",
+    parameters: Type.Object({
+      tags: Type.Optional(Type.Array(Type.String(), { description: "Filter by tags" })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const qs = new URLSearchParams();
+        if (params.tags?.length) qs.set("tags", params.tags.join(","));
+        const query = qs.toString();
+        const result = await api<{ briefing: string; entryCount: number }>(
+          "GET",
+          `/kb/briefing${query ? `?${query}` : ""}`,
+        );
+        // Also refresh local context file
+        if (result.briefing) {
+          await mkdir(KB_CONTEXT_DIR, { recursive: true }).catch(() => {});
+          await writeFile(KB_BRIEFING_FILE, result.briefing).catch(() => {});
+        }
+        return ok(result.briefing || "(no KB entries)", { entryCount: result.entryCount });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "kb_stats",
+    label: "KB: Stats",
+    description:
+      "Get KB statistics — total entries, entries by type/priority, top tags.",
+    parameters: Type.Object({}),
+    async execute() {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const stats = await api("GET", "/kb/stats");
+        return ok(JSON.stringify(stats, null, 2), { stats });
       } catch (e: any) {
         return err(e.message);
       }
