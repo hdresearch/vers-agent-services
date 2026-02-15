@@ -20,6 +20,7 @@
       <button class="tab" data-view="fleet">Fleet</button>
       <button class="tab" data-view="knowledge">Knowledge</button>
       <button class="tab" data-view="couch">Couch</button>
+      <button class="tab" data-view="agents">Agents</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -469,11 +470,123 @@
   </div>
 
   <script src="/ui/static/couch.js"></script>
+  <!-- Agents view -->
+  <div class="view" id="view-agents">
+    <!-- Sub-tabs -->
+    <div class="agents-subtabs">
+      <button class="agents-subtab active" data-section="personas">Personas</button>
+      <button class="agents-subtab" data-section="cryo">Cryochamber</button>
+      <button class="agents-subtab" data-section="loop">Fleet Loop</button>
+    </div>
+
+    <!-- Personas Section -->
+    <div class="agents-section active" id="agents-section-personas">
+      <div class="agents-toolbar">
+        <input type="text" id="persona-filter" placeholder="filter personas…">
+        <button class="btn btn-accent" id="persona-add-btn">+ New Persona</button>
+      </div>
+      <div class="persona-grid" id="persona-grid">
+        <div class="empty">Loading personas…</div>
+      </div>
+
+      <!-- Persona Form Modal -->
+      <div class="agents-modal-overlay" id="persona-modal" style="display:none">
+        <div class="agents-modal">
+          <div class="agents-modal-header">
+            <span id="persona-form-title">New Persona</span>
+            <button class="agents-modal-close" id="persona-modal-close">✕</button>
+          </div>
+          <form id="persona-form" class="agents-form">
+            <input type="hidden" id="pf-editing">
+            <label>Name<input type="text" id="pf-name" required placeholder="e.g. architect"></label>
+            <label>Description<input type="text" id="pf-description" placeholder="Short description"></label>
+            <label>Specialization<input type="text" id="pf-specialization" placeholder="e.g. infrastructure"></label>
+            <label>Author<input type="text" id="pf-author" placeholder="Who created this"></label>
+            <label>Tags <span class="hint">(comma-separated)</span><input type="text" id="pf-tags" placeholder="ops, infra, review"></label>
+            <label>Extends<input type="text" id="pf-extends" placeholder="Parent persona name"></label>
+            <label>System Prompt<textarea id="pf-prompt" rows="10" placeholder="You are a…"></textarea></label>
+            <div class="agents-form-actions">
+              <button type="button" class="btn" id="persona-form-cancel">Cancel</button>
+              <button type="submit" class="btn btn-accent">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Persona Detail Expand -->
+      <div class="agents-modal-overlay" id="persona-detail-modal" style="display:none">
+        <div class="agents-modal agents-modal-wide">
+          <div class="agents-modal-header">
+            <span id="persona-detail-name"></span>
+            <div style="display:flex;gap:8px">
+              <button class="btn" id="persona-detail-edit">Edit</button>
+              <button class="agents-modal-close" id="persona-detail-close">✕</button>
+            </div>
+          </div>
+          <div id="persona-detail-body" class="persona-detail-body"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cryochamber Section -->
+    <div class="agents-section" id="agents-section-cryo">
+      <div class="agents-toolbar">
+        <select id="cryo-status-filter">
+          <option value="">all statuses</option>
+          <option value="awake">awake</option>
+          <option value="hibernating">hibernating</option>
+          <option value="retired">retired</option>
+        </select>
+        <button class="btn btn-accent" id="cryo-add-btn">+ Register Agent</button>
+      </div>
+      <div class="cryo-list" id="cryo-list">
+        <div class="empty">Loading cryochamber…</div>
+      </div>
+
+      <!-- Cryo Agent Form Modal -->
+      <div class="agents-modal-overlay" id="cryo-modal" style="display:none">
+        <div class="agents-modal">
+          <div class="agents-modal-header">
+            <span>Register Agent</span>
+            <button class="agents-modal-close" id="cryo-modal-close">✕</button>
+          </div>
+          <form id="cryo-form" class="agents-form">
+            <label>Name<input type="text" id="cf-name" required placeholder="e.g. sentinel-01"></label>
+            <label>Persona<input type="text" id="cf-persona" placeholder="Persona name to use"></label>
+            <label>Tags <span class="hint">(comma-separated)</span><input type="text" id="cf-tags" placeholder="ops, worker"></label>
+            <div class="agents-form-actions">
+              <button type="button" class="btn" id="cryo-form-cancel">Cancel</button>
+              <button type="submit" class="btn btn-accent">Register</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fleet Loop Section -->
+    <div class="agents-section" id="agents-section-loop">
+      <div class="agents-toolbar">
+        <div class="loop-status-indicator" id="loop-status-indicator">
+          <span class="loop-dot" id="loop-dot"></span>
+          <span id="loop-status-label">—</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-accent" id="loop-start-btn">▶ Start Loop</button>
+          <button class="btn btn-danger" id="loop-stop-btn">■ Stop Loop</button>
+        </div>
+      </div>
+      <div class="loop-roles" id="loop-roles">
+        <div class="empty">Loading fleet loop…</div>
+      </div>
+    </div>
+  </div>
+
   <script src="/ui/static/fleet.js"></script>
   <script src="/ui/static/chat.js"></script>
   <script src="/ui/static/speedometer.js"></script>
   <script src="/ui/static/metrics.js"></script>
   <script src="/ui/static/analytics.js"></script>
+  <script src="/ui/static/agents.js"></script>
   <script type="module" src="/ui/static/app.js"></script>
 </body>
 </html>
