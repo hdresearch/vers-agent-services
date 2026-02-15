@@ -16,6 +16,28 @@ export const manifestStore = new ManifestStore();
 
 export const skillsRoutes = new Hono();
 
+// ─── Health Check ────────────────────────────────────────────
+
+// GET /health — Report skill/extension counts and restore status
+skillsRoutes.get("/health", (c) => {
+  const skillCount = skillStore.count;
+  const extensionCount = extensionStore.count;
+  const restoredSkills = skillStore.restoredFromBackup;
+  const restoredExtensions = extensionStore.restoredFromBackup;
+  const healthy = skillCount > 0 || extensionCount > 0;
+
+  return c.json({
+    healthy,
+    skills: skillCount,
+    extensions: extensionCount,
+    restored: restoredSkills || restoredExtensions,
+    detail: {
+      skillsRestoredFromBackup: restoredSkills,
+      extensionsRestoredFromBackup: restoredExtensions,
+    },
+  }, healthy ? 200 : 503);
+});
+
 // ─── Skills CRUD ─────────────────────────────────────────────
 
 // POST /items — Publish or update a skill (upsert by name)

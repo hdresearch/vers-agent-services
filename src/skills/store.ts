@@ -1,5 +1,5 @@
 import { ulid } from "ulid";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, copyFileSync } from "node:fs";
 import { atomicWriteFileSync, recoverTmpFile } from "../utils/atomic-write.js";
 
 // ─── Data Models ─────────────────────────────────────────────
@@ -107,10 +107,20 @@ export class SkillStore {
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
   private subscribers: Set<ChangeSubscriber> = new Set();
   private changeLog: ChangeEvent[] = [];
+  private _restoredFromBackup = false;
 
   constructor(filePath = "data/skills.json") {
     this.filePath = filePath;
     this.load();
+  }
+
+  /** Whether the store was restored from a backup file during startup */
+  get restoredFromBackup(): boolean {
+    return this._restoredFromBackup;
+  }
+
+  private get backupPath(): string {
+    return this.filePath + ".bak";
   }
 
   private load(): void {
@@ -130,6 +140,39 @@ export class SkillStore {
       }
     } catch {
       this.skills = new Map();
+    }
+
+    // If we loaded data, create a backup for deploy resilience
+    if (this.skills.size > 0) {
+      try {
+        copyFileSync(this.filePath, this.backupPath);
+      } catch {
+        // best-effort backup
+      }
+    } else {
+      // Data file is empty or missing — try to restore from backup
+      this.restoreFromBackup();
+    }
+  }
+
+  private restoreFromBackup(): void {
+    try {
+      if (!existsSync(this.backupPath)) return;
+      const raw = readFileSync(this.backupPath, "utf-8");
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.skills) && data.skills.length > 0) {
+        for (const s of data.skills) {
+          this.skills.set(s.name, s);
+        }
+        if (Array.isArray(data.changeLog)) {
+          this.changeLog = data.changeLog;
+        }
+        this._restoredFromBackup = true;
+        // Persist the restored data as the primary file
+        this.flush();
+      }
+    } catch {
+      // backup is corrupt — nothing we can do
     }
   }
 
@@ -313,6 +356,11 @@ export class SkillStore {
       .map((s) => ({ name: s.name, version: s.version }));
   }
 
+  /** Number of skills currently in the store */
+  get count(): number {
+    return this.skills.size;
+  }
+
   clear(): void {
     this.skills.clear();
     this.changeLog = [];
@@ -328,10 +376,20 @@ export class ExtensionStore {
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
   private subscribers: Set<ChangeSubscriber> = new Set();
   private changeLog: ChangeEvent[] = [];
+  private _restoredFromBackup = false;
 
   constructor(filePath = "data/extensions.json") {
     this.filePath = filePath;
     this.load();
+  }
+
+  /** Whether the store was restored from a backup file during startup */
+  get restoredFromBackup(): boolean {
+    return this._restoredFromBackup;
+  }
+
+  private get backupPath(): string {
+    return this.filePath + ".bak";
   }
 
   private load(): void {
@@ -351,6 +409,39 @@ export class ExtensionStore {
       }
     } catch {
       this.extensions = new Map();
+    }
+
+    // If we loaded data, create a backup for deploy resilience
+    if (this.extensions.size > 0) {
+      try {
+        copyFileSync(this.filePath, this.backupPath);
+      } catch {
+        // best-effort backup
+      }
+    } else {
+      // Data file is empty or missing — try to restore from backup
+      this.restoreFromBackup();
+    }
+  }
+
+  private restoreFromBackup(): void {
+    try {
+      if (!existsSync(this.backupPath)) return;
+      const raw = readFileSync(this.backupPath, "utf-8");
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.extensions) && data.extensions.length > 0) {
+        for (const e of data.extensions) {
+          this.extensions.set(e.name, e);
+        }
+        if (Array.isArray(data.changeLog)) {
+          this.changeLog = data.changeLog;
+        }
+        this._restoredFromBackup = true;
+        // Persist the restored data as the primary file
+        this.flush();
+      }
+    } catch {
+      // backup is corrupt — nothing we can do
     }
   }
 
@@ -489,6 +580,11 @@ export class ExtensionStore {
     return Array.from(this.extensions.values())
       .filter((e) => e.enabled)
       .map((e) => ({ name: e.name, version: e.version }));
+  }
+
+  /** Number of extensions currently in the store */
+  get count(): number {
+    return this.extensions.size;
   }
 
   clear(): void {
