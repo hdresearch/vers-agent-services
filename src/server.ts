@@ -25,6 +25,7 @@ import { webhookRoutes } from "./webhooks/routes.js";
 import { reviewRoutes } from "./review/routes.js";
 import { eventRoutes } from "./events/routes.js";
 import { personaRoutes } from "./personas/routes.js";
+import { cryoRoutes } from "./cryo/routes.js";
 
 const app = new Hono();
 
@@ -58,6 +59,7 @@ app.use("/config/*", bearerAuth());
 app.use("/review/*", bearerAuth());
 app.use("/events/*", bearerAuth());
 app.use("/personas/*", bearerAuth());
+app.use("/cryo/*", bearerAuth());
 
 // ETag for polling-heavy GET endpoints (board, registry, reports, feed)
 // Returns 304 Not Modified when data hasn't changed — saves bandwidth on 10-30s polling
@@ -88,6 +90,7 @@ app.route("/config", configRoutes);
 app.route("/review", reviewRoutes);
 app.route("/events", eventRoutes);
 app.route("/personas", personaRoutes);
+app.route("/cryo", cryoRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
@@ -143,3 +146,4 @@ process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 export { app };
+
