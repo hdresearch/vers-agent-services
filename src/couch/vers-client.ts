@@ -34,7 +34,7 @@ export class VersClient {
 
   /** Restore a VM from a commit (golden image) */
   async restoreFromCommit(commitId: string): Promise<VersVM> {
-    return this.request("POST", `/vm/restore`, { commit_id: commitId });
+    return this.request("POST", `/vm/from_commit`, { commit_id: commitId });
   }
 
   /** Delete a VM */
@@ -60,4 +60,5 @@ export class VersClient {
     throw new Error(`VM ${vmId} did not reach running state within ${timeoutMs}ms`);
   }
 }
+
 
