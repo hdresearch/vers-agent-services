@@ -1054,6 +1054,13 @@ function switchView(viewName) {
   } else if (prevView === 'comms') {
     if (typeof window._commsDestroy === 'function') window._commsDestroy();
   }
+
+  // Board Full: init/destroy
+  if (viewName === 'board') {
+    if (typeof window._boardFullInit === 'function') window._boardFullInit();
+  } else if (prevView === 'board') {
+    if (typeof window._boardFullDestroy === 'function') window._boardFullDestroy();
+  }
 }
 
 // ─── Metrics Sub-tabs ───

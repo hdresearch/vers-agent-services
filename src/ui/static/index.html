@@ -21,6 +21,7 @@
       <button class="tab" data-view="knowledge">Knowledge</button>
       <button class="tab" data-view="couch">Couch</button>
       <button class="tab" data-view="agents">Agents</button>
+      <button class="tab" data-view="board">Board</button>
       <button class="tab" data-view="comms">Comms</button>
     </nav>
     <div class="status">
@@ -653,6 +654,90 @@
     </div>
   </div>
 
+  <!-- Board Full View -->
+  <div class="view" id="view-board">
+    <!-- Stats bar -->
+    <div class="bf-stats">
+      <div class="bf-stat">Total <span class="bf-stat-val" id="bf-stat-total">—</span></div>
+      <div class="bf-stat">Open <span class="bf-stat-val bf-c-open" id="bf-stat-open">—</span></div>
+      <div class="bf-stat">In Progress <span class="bf-stat-val bf-c-progress" id="bf-stat-progress">—</span></div>
+      <div class="bf-stat">Review <span class="bf-stat-val bf-c-review" id="bf-stat-review">—</span></div>
+      <div class="bf-stat">Blocked <span class="bf-stat-val bf-c-blocked" id="bf-stat-blocked">—</span></div>
+      <div class="bf-stat">Done <span class="bf-stat-val bf-c-done" id="bf-stat-done">—</span></div>
+    </div>
+
+    <!-- Toolbar: filters + create -->
+    <div class="bf-toolbar">
+      <div class="bf-filters">
+        <select id="bf-filter-status" class="bf-filter-select">
+          <option value="">All statuses</option>
+          <option value="open">Open</option>
+          <option value="in_progress">In Progress</option>
+          <option value="in_review">In Review</option>
+          <option value="blocked">Blocked</option>
+          <option value="done">Done</option>
+        </select>
+        <input type="text" id="bf-filter-tag" class="bf-filter-input" placeholder="Filter by tag…">
+        <input type="text" id="bf-filter-assignee" class="bf-filter-input" placeholder="Filter by assignee…">
+        <input type="text" id="bf-filter-search" class="bf-filter-input bf-search" placeholder="🔍 Search tasks…">
+      </div>
+      <div class="bf-toolbar-actions">
+        <button class="bf-select-btn" id="bf-select-all" title="Select all">☑ All</button>
+        <button class="bf-select-btn" id="bf-select-none" title="Clear selection">☐ None</button>
+        <button class="bf-create-btn-main" id="bf-create-btn">+ New Task</button>
+      </div>
+    </div>
+
+    <!-- Bulk action bar -->
+    <div class="bf-bulk-bar" id="bf-bulk-bar" style="display:none">
+      <span><span id="bf-bulk-count">0</span> selected</span>
+      <button class="bf-bulk-btn" id="bf-bulk-close">✓ Close</button>
+      <button class="bf-bulk-btn" id="bf-bulk-reopen">↩ Reopen</button>
+      <button class="bf-bulk-btn" id="bf-bulk-retag">🏷 Retag</button>
+      <button class="bf-bulk-btn" id="bf-bulk-assign">👤 Assign</button>
+      <button class="bf-bulk-btn bf-bulk-danger" id="bf-bulk-delete">🗑 Delete</button>
+    </div>
+
+    <!-- Main layout: list + detail -->
+    <div class="bf-layout">
+      <div class="bf-list-panel">
+        <div class="bf-task-list" id="bf-task-list">
+          <div class="bf-empty">Loading tasks…</div>
+        </div>
+      </div>
+      <div class="bf-detail-panel" id="bf-detail">
+        <div class="bf-detail-placeholder">Select a task to view details</div>
+      </div>
+    </div>
+
+    <!-- Create Task Modal -->
+    <div class="bf-modal-overlay" id="bf-create-overlay" style="display:none">
+      <div class="bf-modal">
+        <div class="bf-modal-header">
+          <span>New Task</span>
+          <button class="bf-modal-close" id="bf-create-cancel">✕</button>
+        </div>
+        <div class="bf-modal-body">
+          <label>Title <span class="bf-required">*</span></label>
+          <input type="text" id="bf-create-title" placeholder="Task title…" class="bf-modal-input">
+          <label>Description</label>
+          <textarea id="bf-create-desc" placeholder="Task description…" rows="4" class="bf-modal-textarea"></textarea>
+          <label>Assignee</label>
+          <input type="text" id="bf-create-assignee" placeholder="Assignee" class="bf-modal-input">
+          <label>Tags (comma-separated)</label>
+          <input type="text" id="bf-create-tags" placeholder="e.g. infra, ops" class="bf-modal-input">
+          <label>Created By</label>
+          <input type="text" id="bf-create-author" placeholder="dashboard-user" value="dashboard-user" class="bf-modal-input">
+        </div>
+        <div class="bf-modal-footer">
+          <button class="bf-modal-btn-cancel" id="bf-create-cancel-btn" onclick="document.getElementById('bf-create-overlay').style.display='none'">Cancel</button>
+          <button class="bf-modal-btn-submit" id="bf-create-submit">Create Task</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/static/board-full.js"></script>
   <script src="/ui/static/comms.js"></script>
   <script src="/ui/static/fleet.js"></script>
   <script src="/ui/static/chat.js"></script>
