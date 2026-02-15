@@ -3,7 +3,7 @@
  * Used by the couch service to spawn sandboxed guest VMs.
  */
 
-const VERS_API_BASE = "https://api.vers.sh";
+const VERS_API_BASE = "https://api.vers.sh/api/v1";
 
 export interface VersVM {
   vm_id: string;
@@ -60,5 +60,6 @@ export class VersClient {
     throw new Error(`VM ${vmId} did not reach running state within ${timeoutMs}ms`);
   }
 }
+
 
 
