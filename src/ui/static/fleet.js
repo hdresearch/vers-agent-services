@@ -20,8 +20,10 @@
   let canvasW = 0, canvasH = 0;
   let mouse = { x: -1000, y: -1000 };
   let streamEvents = [];
+  let fleetPersonas = [];
   const MAX_STREAM = 200;
   const DPR = window.devicePixelRatio || 1;
+  const STALE_MS = 5 * 60 * 1000; // 5 minutes — matches server stale threshold
 
   // ─── Colors ───
   const STATUS_COLORS = {
@@ -103,29 +105,84 @@
 
   async function loadVitals() {
     try {
-      const [vmsData, tasksData, usageData, feedData] = await Promise.allSettled([
-        fapi('/registry/vms'),
+      const [vmsData, cryoData, personasData, tasksData, usageData, feedData] = await Promise.allSettled([
+        fapi('/registry/vms?include_stale=true'),
+        fapi('/cryo/agents'),
+        fapi('/personas'),
         fapi('/board/tasks?compact=true'),
         fapi('/usage/summary'),
         fapi('/feed/events?limit=50'),
       ]);
 
-      // VMs / Agents
-      const vms = vmsData.status === 'fulfilled' ? (vmsData.value.vms || []) : [];
-      updateNodes(vms);
+      // Build unified agent list from registry + cryo
+      const registryVms = vmsData.status === 'fulfilled' ? (vmsData.value.vms || []) : [];
+      const cryoAgents = cryoData.status === 'fulfilled' ? (cryoData.value.agents || []) : [];
+      const personas = personasData.status === 'fulfilled' ? (personasData.value.personas || []) : [];
+
+      // Index registry VMs by name for dedup
+      const registryByName = new Map();
+      const registryById = new Map();
+      for (const vm of registryVms) {
+        registryByName.set(vm.name, vm);
+        registryById.set(vm.id, vm);
+      }
+
+      // Merge cryo agents into unified list — cryo agents that aren't in registry get added
+      const allVms = [...registryVms];
+      for (const agent of cryoAgents) {
+        // Check if this cryo agent is already in registry (by vmId or name)
+        const inRegistryById = agent.currentVmId && registryById.has(agent.currentVmId);
+        const inRegistryByName = registryByName.has(agent.name);
+
+        if (inRegistryById) {
+          // Enrich registry entry with cryo metadata
+          const vm = registryById.get(agent.currentVmId);
+          vm._cryo = agent;
+          vm._persona = agent.persona;
+        } else if (inRegistryByName) {
+          const vm = registryByName.get(agent.name);
+          vm._cryo = agent;
+          vm._persona = agent.persona;
+        } else {
+          // Cryo-only agent (hibernating, not in registry) — synthesize a VM entry
+          const status = agent.status === 'hibernating' ? 'stopped'
+                       : agent.status === 'retired' ? 'stopped'
+                       : agent.status === 'awake' ? 'running' : 'stopped';
+          allVms.push({
+            id: agent.currentVmId || `cryo-${agent.name}`,
+            name: agent.name,
+            role: 'worker',
+            status,
+            address: agent.currentVmId ? `${agent.currentVmId}.vm.vers.sh` : '',
+            registeredBy: 'cryo',
+            registeredAt: agent.createdAt || '',
+            lastSeen: agent.lastWokenAt || agent.lastHibernatedAt || agent.createdAt || '',
+            _cryo: agent,
+            _persona: agent.persona,
+            _source: 'cryo',
+          });
+        }
+      }
+
+      // Store personas for detail popover
+      fleetPersonas = personas;
+
+      updateNodes(allVms);
 
       let awake = 0, idle = 0, error = 0, hibernating = 0;
-      for (const vm of vms) {
-        const s = (vm.status || 'unknown').toLowerCase();
+      for (const vm of allVms) {
+        const cryoStatus = vm._cryo?.status;
+        const s = cryoStatus || (vm.status || 'unknown').toLowerCase();
         if (s === 'running' || s === 'awake') awake++;
         else if (s === 'idle') idle++;
         else if (s === 'error') error++;
         else hibernating++;
       }
-      setText('fv-agents', vms.length);
+      setText('fv-agents', allVms.length);
       setText('fv-awake', awake);
       setText('fv-idle', idle);
       setText('fv-error', error);
+      setText('fv-hibernating', hibernating);
 
       // Tasks
       if (tasksData.status === 'fulfilled') {
@@ -180,6 +237,27 @@
 
   // ─── Node management (force-directed layout) ───
 
+  function effectiveStatus(vm) {
+    // Cryo status takes priority if present
+    const cryo = vm._cryo;
+    if (cryo) {
+      const cs = (cryo.status || '').toLowerCase();
+      if (cs === 'hibernating') return 'hibernating';
+      if (cs === 'retired') return 'stopped';
+      if (cs === 'awake') return 'running';
+    }
+
+    const s = (vm.status || 'unknown').toLowerCase();
+
+    // Mark stale running VMs (no heartbeat for 5min) as idle unless pinned
+    if (s === 'running' && !vm.pinned && vm.lastSeen) {
+      const age = Date.now() - new Date(vm.lastSeen).getTime();
+      if (age > STALE_MS) return 'idle';
+    }
+
+    return s;
+  }
+
   function updateNodes(vms) {
     const existing = new Map(nodes.map(n => [n.id, n]));
     const newNodes = [];
@@ -187,11 +265,13 @@
     for (const vm of vms) {
       const prev = existing.get(vm.id);
       const isOrch = vm.role === 'orchestrator' || vm.role === 'infra';
-      const radius = isOrch ? 20 : 12;
+      const isCryo = vm._source === 'cryo' || vm._cryo?.status === 'hibernating';
+      const radius = isOrch ? 20 : isCryo ? 10 : 12;
+      const status = effectiveStatus(vm);
       if (prev) {
         prev.name = vm.name || vm.id;
         prev.role = vm.role || 'worker';
-        prev.status = (vm.status || 'unknown').toLowerCase();
+        prev.status = status;
         prev.radius = radius;
         prev.vm = vm;
         newNodes.push(prev);
@@ -203,7 +283,7 @@
           id: vm.id,
           name: vm.name || vm.id,
           role: vm.role || 'worker',
-          status: (vm.status || 'unknown').toLowerCase(),
+          status,
           x: canvasW / 2 + Math.cos(angle) * dist,
           y: canvasH / 2 + Math.sin(angle) * dist,
           vx: 0, vy: 0,
@@ -368,12 +448,24 @@
       ctx.lineWidth = isSelected ? 2 : 1;
       ctx.stroke();
 
+      // Dashed border for cryo/stale agents
+      if (n.status === 'hibernating') {
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, n.radius + 3, 0, Math.PI * 2);
+        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
       // Role icon in center
       ctx.fillStyle = '#000';
       ctx.font = `${n.radius < 14 ? 10 : 13}px monospace`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const icon = n.role === 'orchestrator' ? '◉' : n.role === 'infra' ? '⬡' : n.role === 'lieutenant' ? '◈' : '●';
+      const isCryoNode = n.vm?._source === 'cryo' || n.vm?._cryo?.status === 'hibernating';
+      const icon = n.role === 'orchestrator' ? '◉' : n.role === 'infra' ? '⬡' : n.role === 'lieutenant' ? '◈' : isCryoNode ? '❄' : '●';
       ctx.fillText(icon, n.x, n.y);
 
       // Label below
@@ -390,7 +482,7 @@
       ctx.font = '14px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('No agents registered — fleet is empty', canvasW / 2, canvasH / 2);
+      ctx.fillText('No agents in registry or cryochamber', canvasW / 2, canvasH / 2);
     }
 
     fleetRAF = requestAnimationFrame(render);
@@ -515,18 +607,38 @@
   function showDetail(node) {
     const el = document.getElementById('fleet-detail');
     const vm = node.vm || {};
+    const cryo = vm._cryo;
     document.getElementById('fd-name').textContent = node.name;
-    document.getElementById('fd-role').textContent = node.role;
+    document.getElementById('fd-role').textContent = node.role + (vm._persona ? ` · ${vm._persona}` : '');
 
     const statusEl = document.getElementById('fd-status');
-    statusEl.textContent = node.status;
+    statusEl.textContent = node.status + (vm._source === 'cryo' ? ' (cryo)' : '');
     statusEl.style.color = STATUS_COLORS[node.status] || '#ccc';
 
-    document.getElementById('fd-meta').innerHTML = [
+    const metaParts = [
       vm.address ? `<div>Address: <span style="color:var(--blue)">${esc(vm.address)}</span></div>` : '',
       `<div>Last seen: ${timeAgo(vm.lastSeen || vm.registeredAt)}</div>`,
       vm.registeredBy ? `<div>Registered by: ${esc(vm.registeredBy)}</div>` : '',
-    ].join('');
+    ];
+
+    // Cryo-specific metadata
+    if (cryo) {
+      if (cryo.latestCommitId) metaParts.push(`<div>Commit: <span style="color:#fd0">${esc(cryo.latestCommitId.slice(0, 12))}</span></div>`);
+      if (cryo.lastHibernatedAt) metaParts.push(`<div>Hibernated: ${timeAgo(cryo.lastHibernatedAt)}</div>`);
+      if (cryo.lastWokenAt) metaParts.push(`<div>Last woken: ${timeAgo(cryo.lastWokenAt)}</div>`);
+      if (cryo.hibernationCount) metaParts.push(`<div>Hibernation cycles: ${cryo.hibernationCount}</div>`);
+      if (cryo.tags?.length) metaParts.push(`<div>Tags: ${cryo.tags.map(t => `<span style="color:#888">${esc(t)}</span>`).join(', ')}</div>`);
+    }
+
+    // Persona info
+    if (vm._persona && fleetPersonas.length) {
+      const persona = fleetPersonas.find(p => p.name === vm._persona);
+      if (persona?.description) {
+        metaParts.push(`<div style="margin-top:4px;color:#888;font-style:italic">${esc(persona.description)}</div>`);
+      }
+    }
+
+    document.getElementById('fd-meta').innerHTML = metaParts.join('');
 
     const services = vm.services || [];
     if (services.length) {
@@ -645,6 +757,21 @@
     if (!name) return;
     const target = choices.find(n => n.name.toLowerCase().includes(name.toLowerCase()));
     if (!target) { alert('Agent not found.'); return; }
+
+    // If it's a cryo agent, try to wake via cryo API
+    const cryo = target.vm?._cryo;
+    if (cryo && cryo.status === 'hibernating') {
+      const vmId = prompt(`VM ID to wake ${target.name} into (or cancel):`);
+      if (!vmId) return;
+      fapi(`/cryo/agents/${encodeURIComponent(target.name)}/wake`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vmId, address: `${vmId}.vm.vers.sh` }),
+      }).then(() => { alert(`${target.name} is waking up!`); loadVitals(); })
+        .catch(e => { if (e.message !== 'Session expired') alert('Wake failed: ' + e.message); });
+      return;
+    }
+
     alert(`Wake signal sent to ${target.name}.\n(Requires vers CLI integration for actual VM resume.)`);
   }
 
