@@ -18,6 +18,7 @@
       <button class="tab" data-view="metrics">Metrics</button>
       <button class="tab" data-view="chat">Chat</button>
       <button class="tab" data-view="fleet">Fleet</button>
+      <button class="tab" data-view="couch">Couch</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -343,6 +344,69 @@
     </div>
   </div>
 
+  <!-- Couch View -->
+  <div class="view" id="view-couch">
+    <div class="couch-layout">
+      <!-- Left: Guests + Resources -->
+      <div class="couch-main">
+        <div class="couch-section">
+          <div class="couch-section-header">
+            <span>Active Guests</span>
+            <span class="couch-badge" id="couch-guest-count">0</span>
+          </div>
+          <div class="couch-section-body" id="couch-guests">
+            <div class="couch-empty">Loading…</div>
+          </div>
+        </div>
+        <div class="couch-section">
+          <div class="couch-section-header">
+            <span>Resource Dashboard</span>
+          </div>
+          <div class="couch-section-body" id="couch-resources">
+            <div class="couch-empty">Loading…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Invites + Generator -->
+      <div class="couch-sidebar">
+        <div class="couch-section">
+          <div class="couch-section-header">
+            <span>Generate Invite</span>
+          </div>
+          <div class="couch-section-body">
+            <div class="couch-form">
+              <label>Label</label>
+              <input type="text" id="couch-inv-label" placeholder="e.g. Barton's agent" value="">
+              <label>Token Budget</label>
+              <input type="number" id="couch-inv-tokens" value="100000" min="1000" step="1000">
+              <label>Duration (hours)</label>
+              <input type="number" id="couch-inv-duration" value="24" min="1" max="720">
+              <label>Memory Limit (MB)</label>
+              <input type="number" id="couch-inv-memory" value="4096" min="512" step="512">
+              <label>Disk Limit (GB)</label>
+              <input type="number" id="couch-inv-disk" value="20" min="1" max="100">
+              <label>Network Egress (GB)</label>
+              <input type="number" id="couch-inv-network" value="5" min="1" max="50">
+              <button class="couch-create-btn" id="couch-create-invite-btn" onclick="window._couchCreateInvite()">Generate Invite</button>
+            </div>
+            <div id="couch-generated-link"></div>
+          </div>
+        </div>
+        <div class="couch-section">
+          <div class="couch-section-header">
+            <span>Invites</span>
+            <span class="couch-badge" id="couch-invite-count">0</span>
+          </div>
+          <div class="couch-section-body couch-invites-scroll" id="couch-invites-list">
+            <div class="couch-empty">Loading…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/static/couch.js"></script>
   <script src="/ui/static/fleet.js"></script>
   <script src="/ui/static/chat.js"></script>
   <script src="/ui/static/speedometer.js"></script>
