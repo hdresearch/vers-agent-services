@@ -40,7 +40,7 @@ registryRoutes.get("/vms", (c) => {
 
   const vms = includeStale
     ? registryStore.listAll(filters)
-    : registryStore.list(filters, true);
+    : registryStore.list(filters, false);
   return c.json({ vms, count: vms.length });
 });
 

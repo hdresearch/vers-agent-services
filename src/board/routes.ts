@@ -9,8 +9,9 @@ import {
   type AddArtifactInput,
 } from "./store.js";
 import { emit } from "../events/emit.js";
+import { boardStore } from "./shared-store.js";
 
-export const store = new BoardStore();
+export const store = boardStore;
 
 export const boardRoutes = new Hono();
 
@@ -258,4 +259,5 @@ boardRoutes.get("/tasks/:id/notes", (c) => {
     throw e;
   }
 });
+
 
