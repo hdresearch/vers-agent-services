@@ -465,102 +465,63 @@
           <div class="couch-section-body couch-invites-scroll" id="couch-invites-list">
             <div class="couch-empty">Loading…</div>
   <!-- Comms View -->
+
+  <!-- Comms View -->
   <div class="view" id="view-comms">
-    <div class="comms-subtabs">
-      <button class="comms-subtab active" data-comms="fleet-chat">Fleet Chat</button>
-      <button class="comms-subtab" data-comms="gossip">Gossip</button>
+    <!-- Identity bar -->
+    <div class="comms-identity" id="comms-identity-bar">
+      <span class="comms-id-label">Loading identity…</span>
     </div>
 
-    <!-- Fleet Chat sub-view -->
-    <div class="comms-subview active" id="comms-fleet-chat">
+    <!-- Sub-tabs -->
+    <div class="comms-subtabs">
+      <button class="comms-subtab active" data-subview="channels">Channels</button>
+      <button class="comms-subtab" data-subview="quarantine">Quarantine</button>
+      <button class="comms-subtab" data-subview="gossip">Gossip</button>
+    </div>
+
+    <!-- Channels sub-view -->
+    <div class="comms-subview active" id="comms-subview-channels">
       <div class="comms-layout">
-        <!-- Left: channel list + quarantine + trusted -->
         <div class="comms-sidebar">
-          <div class="comms-sidebar-section">
-            <div class="comms-sidebar-header">
-              Channels
-              <button class="comms-btn-sm" id="comms-new-channel" title="New channel">+</button>
-            </div>
-            <div class="comms-channel-list" id="comms-channel-list">
-              <div class="empty">Loading…</div>
-            </div>
-          </div>
-          <div class="comms-sidebar-section">
-            <div class="comms-sidebar-header">Quarantine <span class="comms-badge" id="comms-quarantine-count">0</span></div>
-            <div class="comms-quarantine-list" id="comms-quarantine-list"></div>
-          </div>
-          <div class="comms-sidebar-section">
-            <div class="comms-sidebar-header">
-              Trusted Endpoints
-              <button class="comms-btn-sm" id="comms-add-trusted" title="Add trusted endpoint">+</button>
-            </div>
-            <div class="comms-trusted-list" id="comms-trusted-list"></div>
+          <div class="comms-sidebar-header">Channels</div>
+          <div class="comms-channel-list" id="comms-channel-list">
+            <div class="comms-empty">Loading…</div>
           </div>
         </div>
-
-        <!-- Right: message thread + compose -->
-        <div class="comms-thread-panel">
-          <div class="comms-thread-header" id="comms-thread-header">
-            <span class="comms-thread-title">Select a channel</span>
+        <div class="comms-main">
+          <div class="comms-msg-header-bar">
+            <span id="comms-msg-channel-name">Select a channel</span>
           </div>
           <div class="comms-messages" id="comms-messages">
-            <div class="comms-empty-state">
-              <div class="comms-empty-icon">💬</div>
-              <div>Select a channel to view messages</div>
-            </div>
-          </div>
-          <div class="comms-compose" id="comms-compose" style="display:none">
-            <select id="comms-msg-type">
-              <option value="text">text</option>
-              <option value="capability_query">capability_query</option>
-              <option value="capability_response">capability_response</option>
-              <option value="task_request">task_request</option>
-              <option value="task_response">task_response</option>
-              <option value="status_update">status_update</option>
-            </select>
-            <input type="text" id="comms-msg-input" placeholder="Type a message…" autocomplete="off">
-            <button class="comms-send-btn" id="comms-send-btn">▸</button>
+            <div class="comms-empty">Select a channel to view messages</div>
           </div>
         </div>
       </div>
     </div>
 
+    <!-- Quarantine sub-view -->
+    <div class="comms-subview" id="comms-subview-quarantine">
+      <div class="comms-quarantine-wrap">
+        <div class="comms-quarantine-header">Quarantined Agents</div>
+        <div class="comms-quarantine-list" id="comms-quarantine-list">
+          <div class="comms-empty">Loading…</div>
+        </div>
+      </div>
+    </div>
+
     <!-- Gossip sub-view -->
-    <div class="comms-subview" id="comms-gossip">
-      <div class="comms-layout">
-        <div class="comms-gossip-full">
-          <div class="comms-gossip-toolbar">
-            <input type="text" id="gossip-to-filter" placeholder="Inbox for agent…" value="orchestrator">
-            <label class="comms-check"><input type="checkbox" id="gossip-unread-only"> unread only</label>
-            <button class="comms-btn-sm" id="gossip-refresh-btn">↻</button>
+    <div class="comms-subview" id="comms-subview-gossip">
+      <div class="comms-gossip-wrap">
+        <div class="comms-gossip-header">
+          <span>Gossip Messages</span>
+          <div class="comms-gossip-search-bar">
+            <input type="text" id="comms-gossip-agent" placeholder="Agent name…" autocomplete="off">
+            <button id="comms-gossip-search" class="comms-btn comms-btn-search">Search</button>
           </div>
-          <div class="comms-gossip-feed" id="comms-gossip-feed">
-            <div class="empty">Enter an agent name and press ↻</div>
-          </div>
-          <div class="comms-gossip-compose">
-            <div class="comms-gossip-compose-row">
-              <input type="text" id="gossip-from" placeholder="from">
-              <input type="text" id="gossip-to" placeholder="to">
-              <select id="gossip-type">
-                <option value="info">info</option>
-                <option value="request">request</option>
-                <option value="response">response</option>
-                <option value="alert">alert</option>
-                <option value="coordination">coordination</option>
-              </select>
-              <select id="gossip-priority">
-                <option value="normal">normal</option>
-                <option value="low">low</option>
-                <option value="high">high</option>
-                <option value="urgent">urgent</option>
-              </select>
-            </div>
-            <div class="comms-gossip-compose-row">
-              <input type="text" id="gossip-subject" placeholder="subject">
-              <input type="text" id="gossip-body" placeholder="body" style="flex:2">
-              <button class="comms-send-btn" id="gossip-send-btn">▸</button>
-            </div>
-          </div>
+        </div>
+        <div class="comms-gossip-list" id="comms-gossip-list">
+          <div class="comms-empty">Enter an agent name to view gossip messages</div>
         </div>
       </div>
     </div>
@@ -686,8 +647,15 @@
   <script src="/ui/static/analytics.js"></script>
   <script src="/ui/static/agents.js"></script>
   <script type="module" src="/ui/static/app.js"></script>
+
+  <script src="/ui/static/fleet.js"></script>
+  <script src="/ui/static/comms.js"></script>
+  <script src="/ui/static/chat.js"></script>
+  <script src="/ui/static/speedometer.js"></script>
+  <script src="/ui/static/metrics.js"></script>
+  <script src="/ui/static/analytics.js"></script>
+  <script type="module" src="/ui/static/app.js"></script>
 </body>
 </html>
-
 
 

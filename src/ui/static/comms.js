@@ -1,20 +1,38 @@
-// ─── Comms Tab: Fleet Chat + Gossip ───
+// ═══════════════════════════════════════════════════════════════
+// Comms Tab — Fleet Chat, Quarantine, Gossip
+// ═══════════════════════════════════════════════════════════════
+
 (function () {
-  const API = '/ui/api';
-  let activeChannel = null;
-  let channelSSE = null;
-  let commsRefreshTimer = null;
-  let activeCommsSubview = 'fleet-chat';
+  'use strict';
 
-  // ─── Helpers (mirror app.js) ───
+  const TOKEN = 'fa2490f6cd1fa376b58bcb36ac66b2a0ec51b621cdb4e0e83c9a2c58342a082f';
+  const BASE = '/fleet-chat';
+  const HEADERS = { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' };
 
-  function timeAgo(iso) {
-    const ms = Date.now() - new Date(iso).getTime();
-    if (ms < 60000) return `${Math.floor(ms / 1000)}s ago`;
-    if (ms < 3600000) return `${Math.floor(ms / 60000)}m ago`;
-    if (ms < 86400000) return `${Math.floor(ms / 3600000)}h ago`;
-    return `${Math.floor(ms / 86400000)}d ago`;
+  let _refreshTimer = null;
+  let _activeChannel = null;
+  let _identity = null;
+  let _activeSubtab = 'channels'; // channels | quarantine | gossip
+
+  // ─── API helper ───
+
+  async function commsApi(path) {
+    const res = await fetch(`${BASE}${path}`, { headers: HEADERS });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return res.json();
   }
+
+  async function commsPost(path, body = {}) {
+    const res = await fetch(`${BASE}${path}`, {
+      method: 'POST',
+      headers: HEADERS,
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return res.json();
+  }
+
+  // ─── Helpers ───
 
   function esc(s) {
     const d = document.createElement('div');
@@ -22,423 +40,273 @@
     return d.innerHTML;
   }
 
-  async function fapi(path, opts = {}) {
-    const timeout = opts.timeout || 8000;
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeout);
+  function timeAgo(iso) {
+    if (!iso) return '';
+    const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 60000) return `${Math.floor(ms / 1000)}s ago`;
+    if (ms < 3600000) return `${Math.floor(ms / 60000)}m ago`;
+    if (ms < 86400000) return `${Math.floor(ms / 3600000)}h ago`;
+    return `${Math.floor(ms / 86400000)}d ago`;
+  }
+
+  function $(id) { return document.getElementById(id); }
+
+  // ─── Identity bar ───
+
+  async function loadIdentity() {
+    const bar = $('comms-identity-bar');
+    if (!bar) return;
     try {
-      const res = await fetch(`${API}${path}`, {
-        signal: ctrl.signal,
-        method: opts.method || 'GET',
-        headers: opts.headers || (opts.body ? { 'Content-Type': 'application/json' } : {}),
-        body: opts.body ? JSON.stringify(opts.body) : undefined,
-      });
-      clearTimeout(timer);
-      if (!res.ok) throw new Error(`${res.status}`);
-      return await res.json();
+      const data = await commsApi('/identity');
+      _identity = data;
+      const trustedData = await commsApi('/trusted');
+      const trusted = trustedData.trusted || trustedData.agents || [];
+      const trustedCount = Array.isArray(trusted) ? trusted.length : 0;
+      bar.innerHTML = `
+        <span class="comms-id-label">Identity</span>
+        <span class="comms-id-name">${esc(data.name || data.agentId || data.id || '—')}</span>
+        <span class="comms-id-sep">│</span>
+        <span class="comms-id-label">Role</span>
+        <span class="comms-id-role">${esc(data.role || '—')}</span>
+        <span class="comms-id-sep">│</span>
+        <span class="comms-id-label">Trusted</span>
+        <span class="comms-id-trusted">${trustedCount} agents</span>
+      `;
     } catch (e) {
-      clearTimeout(timer);
-      throw e;
+      bar.innerHTML = `<span class="comms-id-error">⚠ Identity unavailable: ${esc(e.message)}</span>`;
     }
   }
 
-  // ─── Fleet Chat: Channels ───
+  // ─── Channel list ───
 
   async function loadChannels() {
-    const el = document.getElementById('comms-channel-list');
+    const list = $('comms-channel-list');
+    if (!list) return;
     try {
-      const data = await fapi('/fleet-chat/channels');
-      const channels = data.channels || [];
+      const data = await commsApi('/channels');
+      const channels = data.channels || data || [];
       if (!channels.length) {
-        el.innerHTML = '<div class="empty">No channels yet</div>';
+        list.innerHTML = '<div class="comms-empty">No channels</div>';
         return;
       }
       let html = '';
       for (const ch of channels) {
-        const active = activeChannel === ch.id ? ' comms-ch-active' : '';
-        const statusCls = ch.status === 'active' ? 'comms-ch-ok' : 'comms-ch-dim';
-        html += `<div class="comms-ch-item${active}" data-id="${esc(ch.id)}">
-          <div class="comms-ch-name">${esc(ch.remoteFleet?.name || ch.id)}</div>
-          <div class="comms-ch-meta">
-            <span class="${statusCls}">${esc(ch.status)}</span>
-            <span>${timeAgo(ch.createdAt)}</span>
+        const id = ch.id || ch.name;
+        const active = _activeChannel === id ? ' active' : '';
+        const unread = ch.unread ? `<span class="comms-ch-unread">${ch.unread}</span>` : '';
+        const lastMsg = ch.lastMessage ? `<div class="comms-ch-preview">${esc(ch.lastMessage)}</div>` : '';
+        const time = ch.lastActivity ? `<span class="comms-ch-time">${timeAgo(ch.lastActivity)}</span>` : '';
+        html += `<div class="comms-channel${active}" data-channel="${esc(id)}" onclick="window._commsSelectChannel('${esc(id)}')">
+          <div class="comms-ch-header">
+            <span class="comms-ch-name"># ${esc(ch.name || id)}</span>
+            ${time}
           </div>
+          ${lastMsg}
+          ${unread}
         </div>`;
       }
-      el.innerHTML = html;
-      el.querySelectorAll('.comms-ch-item').forEach(item => {
-        item.addEventListener('click', () => selectChannel(item.dataset.id));
-      });
+      list.innerHTML = html;
     } catch (e) {
-      el.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
+      list.innerHTML = `<div class="comms-empty">⚠ ${esc(e.message)}</div>`;
     }
   }
 
-  function selectChannel(id) {
-    activeChannel = id;
-    document.querySelectorAll('.comms-ch-item').forEach(el => {
-      el.classList.toggle('comms-ch-active', el.dataset.id === id);
-    });
-    document.getElementById('comms-compose').style.display = 'flex';
-    loadMessages(id);
-    startChannelSSE(id);
-  }
-
-  // ─── Fleet Chat: Messages ───
+  // ─── Messages ───
 
   async function loadMessages(channelId) {
-    const el = document.getElementById('comms-messages');
-    const header = document.getElementById('comms-thread-header');
-    try {
-      const data = await fapi(`/fleet-chat/channels/${channelId}/messages?limit=100`);
-      const msgs = data.messages || [];
-
-      // Update header
-      try {
-        const ch = await fapi(`/fleet-chat/channels/${channelId}`);
-        header.innerHTML = `<span class="comms-thread-title">${esc(ch.remoteFleet?.name || channelId)}</span>
-          <span class="comms-thread-meta">${esc(ch.status)} · ${msgs.length} messages</span>`;
-      } catch {
-        header.innerHTML = `<span class="comms-thread-title">${esc(channelId)}</span>`;
-      }
-
-      renderMessages(el, msgs);
-    } catch (e) {
-      el.innerHTML = `<div class="empty">Error loading messages: ${esc(e.message)}</div>`;
-    }
-  }
-
-  function renderMessages(el, msgs) {
-    if (!msgs.length) {
-      el.innerHTML = '<div class="comms-empty-state"><div>No messages in this channel yet</div></div>';
+    const msgArea = $('comms-messages');
+    if (!msgArea) return;
+    if (!channelId) {
+      msgArea.innerHTML = '<div class="comms-empty">Select a channel</div>';
       return;
     }
-    let html = '';
-    for (const m of msgs) {
-      const dir = m.direction === 'outbound' ? 'comms-msg-out' : 'comms-msg-in';
-      const fromName = m.from?.name || m.from || 'unknown';
-      html += `<div class="comms-msg ${dir}">
-        <div class="comms-msg-header">
-          <span class="comms-msg-from">${esc(fromName)}</span>
-          <span class="comms-msg-type">${esc(m.type)}</span>
-          <span class="comms-msg-time">${timeAgo(m.timestamp)}</span>
-        </div>
-        <div class="comms-msg-body">${esc(m.content)}</div>
-      </div>`;
-    }
-    el.innerHTML = html;
-    el.scrollTop = el.scrollHeight;
-  }
-
-  function appendMessage(msg) {
-    const el = document.getElementById('comms-messages');
-    // Remove empty state if present
-    const empty = el.querySelector('.comms-empty-state');
-    if (empty) empty.remove();
-
-    const dir = msg.direction === 'outbound' ? 'comms-msg-out' : 'comms-msg-in';
-    const fromName = msg.from?.name || msg.from || 'unknown';
-    const div = document.createElement('div');
-    div.className = `comms-msg ${dir}`;
-    div.innerHTML = `<div class="comms-msg-header">
-      <span class="comms-msg-from">${esc(fromName)}</span>
-      <span class="comms-msg-type">${esc(msg.type)}</span>
-      <span class="comms-msg-time">just now</span>
-    </div>
-    <div class="comms-msg-body">${esc(msg.content)}</div>`;
-    el.appendChild(div);
-    el.scrollTop = el.scrollHeight;
-  }
-
-  // ─── Fleet Chat: SSE ───
-
-  function startChannelSSE(channelId) {
-    stopChannelSSE();
     try {
-      channelSSE = new EventSource(`${API}/fleet-chat/inbox/stream`);
-      channelSSE.addEventListener('message', (e) => {
-        try {
-          const msg = JSON.parse(e.data);
-          if (msg.channelId === channelId) {
-            appendMessage(msg);
-          }
-          // Refresh quarantine badge in case of new quarantined items
-          loadQuarantine();
-        } catch {}
-      });
-      channelSSE.onerror = () => {
-        // Will auto-reconnect via EventSource
-      };
-    } catch {}
-  }
-
-  function stopChannelSSE() {
-    if (channelSSE) {
-      try { channelSSE.close(); } catch {}
-      channelSSE = null;
-    }
-  }
-
-  // ─── Fleet Chat: Send message ───
-
-  async function sendFleetMessage() {
-    if (!activeChannel) return;
-    const input = document.getElementById('comms-msg-input');
-    const typeEl = document.getElementById('comms-msg-type');
-    const content = input.value.trim();
-    if (!content) return;
-    input.value = '';
-    try {
-      await fapi(`/fleet-chat/channels/${activeChannel}/messages`, {
-        method: 'POST',
-        body: { content, type: typeEl.value },
-      });
-      // SSE or manual reload will show it
-      loadMessages(activeChannel);
+      const data = await commsApi(`/channels/${encodeURIComponent(channelId)}/messages`);
+      const messages = data.messages || data || [];
+      if (!messages.length) {
+        msgArea.innerHTML = '<div class="comms-empty">No messages yet</div>';
+        return;
+      }
+      let html = '';
+      for (const m of messages) {
+        const isSelf = _identity && (m.from === _identity.name || m.from === _identity.agentId || m.from === _identity.id);
+        const cls = isSelf ? 'comms-msg self' : 'comms-msg other';
+        html += `<div class="${cls}">
+          <div class="comms-msg-header">
+            <span class="comms-msg-from">${esc(m.from || m.agent || m.author || '—')}</span>
+            <span class="comms-msg-time">${timeAgo(m.timestamp || m.createdAt)}</span>
+          </div>
+          <div class="comms-msg-body">${esc(m.text || m.content || m.body || '')}</div>
+        </div>`;
+      }
+      msgArea.innerHTML = html;
+      msgArea.scrollTop = msgArea.scrollHeight;
     } catch (e) {
-      input.value = content;
-      console.error('Send failed:', e);
+      msgArea.innerHTML = `<div class="comms-empty">⚠ ${esc(e.message)}</div>`;
     }
   }
 
-  // ─── Fleet Chat: Quarantine ───
+  function selectChannel(channelId) {
+    _activeChannel = channelId;
+    // Highlight active in list
+    document.querySelectorAll('.comms-channel').forEach(el => {
+      el.classList.toggle('active', el.dataset.channel === channelId);
+    });
+    // Update header
+    const hdr = $('comms-msg-channel-name');
+    if (hdr) hdr.textContent = `# ${channelId}`;
+    loadMessages(channelId);
+  }
+
+  // ─── Quarantine ───
 
   async function loadQuarantine() {
-    const el = document.getElementById('comms-quarantine-list');
-    const badge = document.getElementById('comms-quarantine-count');
+    const container = $('comms-quarantine-list');
+    if (!container) return;
     try {
-      const data = await fapi('/fleet-chat/quarantine');
-      const items = data.quarantine || [];
-      badge.textContent = items.length;
-      badge.style.display = items.length ? 'inline' : 'none';
-      if (!items.length) {
-        el.innerHTML = '<div class="empty" style="padding:6px 8px;font-size:11px">Clean</div>';
+      const data = await commsApi('/quarantine');
+      const items = data.quarantined || data.agents || data || [];
+      if (!Array.isArray(items) || !items.length) {
+        container.innerHTML = '<div class="comms-empty">No quarantined agents</div>';
         return;
       }
       let html = '';
-      for (const q of items) {
-        const from = q.rawMessage?.from?.name || 'unknown';
-        html += `<div class="comms-q-item" data-id="${esc(q.id)}">
-          <div class="comms-q-from">${esc(from)}</div>
-          <div class="comms-q-reason">${esc(q.reason)}</div>
-          <div class="comms-q-preview">${esc((q.rawMessage?.content || '').slice(0, 80))}</div>
+      for (const item of items) {
+        const id = item.id || item.agentId || item.name || '—';
+        const reason = item.reason || 'No reason given';
+        const since = item.quarantinedAt || item.since || item.timestamp;
+        html += `<div class="comms-quarantine-card">
+          <div class="comms-q-header">
+            <span class="comms-q-name">${esc(id)}</span>
+            <span class="comms-q-time">${since ? timeAgo(since) : ''}</span>
+          </div>
+          <div class="comms-q-reason">${esc(reason)}</div>
           <div class="comms-q-actions">
-            <button class="comms-q-approve" data-id="${esc(q.id)}">✓</button>
-            <button class="comms-q-reject" data-id="${esc(q.id)}">✗</button>
+            <button class="comms-btn comms-btn-approve" onclick="window._commsApproveAgent('${esc(id)}')">✓ Approve</button>
+            <button class="comms-btn comms-btn-reject" onclick="window._commsRejectAgent('${esc(id)}')">✗ Reject</button>
           </div>
         </div>`;
       }
-      el.innerHTML = html;
-      el.querySelectorAll('.comms-q-approve').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          try {
-            await fapi(`/fleet-chat/quarantine/${btn.dataset.id}/approve`, { method: 'POST' });
-            loadQuarantine();
-            if (activeChannel) loadMessages(activeChannel);
-          } catch (e) { console.error('Approve failed:', e); }
-        });
-      });
-      el.querySelectorAll('.comms-q-reject').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          try {
-            await fapi(`/fleet-chat/quarantine/${btn.dataset.id}/reject`, { method: 'POST' });
-            loadQuarantine();
-          } catch (e) { console.error('Reject failed:', e); }
-        });
-      });
+      container.innerHTML = html;
     } catch (e) {
-      el.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+      container.innerHTML = `<div class="comms-empty">⚠ ${esc(e.message)}</div>`;
     }
   }
 
-  // ─── Fleet Chat: Trusted Endpoints ───
-
-  async function loadTrusted() {
-    const el = document.getElementById('comms-trusted-list');
+  async function approveAgent(agentId) {
     try {
-      const data = await fapi('/fleet-chat/trusted');
-      const endpoints = data.endpoints || [];
-      if (!endpoints.length) {
-        el.innerHTML = '<div class="empty" style="padding:6px 8px;font-size:11px">None</div>';
-        return;
-      }
-      let html = '';
-      for (const ep of endpoints) {
-        const endpoint = typeof ep === 'string' ? ep : (ep.endpoint || ep.url || JSON.stringify(ep));
-        html += `<div class="comms-trusted-item">
-          <span class="comms-trusted-url">${esc(endpoint)}</span>
-        </div>`;
-      }
-      el.innerHTML = html;
+      await commsPost(`/quarantine/${encodeURIComponent(agentId)}/approve`);
+      loadQuarantine();
+      loadIdentity(); // refresh trusted count
     } catch (e) {
-      el.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+      alert('Approve failed: ' + e.message);
     }
   }
 
-  // ─── Fleet Chat: New Channel ───
-
-  function promptNewChannel() {
-    const name = prompt('Remote fleet name:');
-    if (!name) return;
-    const endpoint = prompt('Remote fleet endpoint (URL):');
-    if (!endpoint) return;
-    fapi('/fleet-chat/channels', {
-      method: 'POST',
-      body: { remoteFleet: { name, endpoint } },
-    }).then(() => loadChannels()).catch(e => alert('Error: ' + e.message));
+  async function rejectAgent(agentId) {
+    try {
+      await commsPost(`/quarantine/${encodeURIComponent(agentId)}/reject`);
+      loadQuarantine();
+    } catch (e) {
+      alert('Reject failed: ' + e.message);
+    }
   }
 
-  // ─── Fleet Chat: Add Trusted ───
+  // ─── Gossip ───
 
-  function promptAddTrusted() {
-    const endpoint = prompt('Trusted endpoint URL:');
-    if (!endpoint) return;
-    const name = prompt('Name (optional):') || undefined;
-    fapi('/fleet-chat/trusted', {
-      method: 'POST',
-      body: { endpoint, name },
-    }).then(() => loadTrusted()).catch(e => alert('Error: ' + e.message));
-  }
-
-  // ─── Gossip: Load Feed ───
-
-  async function loadGossipFeed() {
-    const el = document.getElementById('comms-gossip-feed');
-    const to = document.getElementById('gossip-to-filter').value.trim();
-    if (!to) {
-      el.innerHTML = '<div class="empty">Enter an agent name above</div>';
+  async function loadGossip() {
+    const container = $('comms-gossip-list');
+    const input = $('comms-gossip-agent');
+    if (!container) return;
+    const agentName = input ? input.value.trim() : '';
+    if (!agentName) {
+      container.innerHTML = '<div class="comms-empty">Enter an agent name to view gossip messages</div>';
       return;
     }
-    const unread = document.getElementById('gossip-unread-only').checked;
     try {
-      let path = `/gossip/messages?to=${encodeURIComponent(to)}&limit=100`;
-      if (unread) path += '&unread=true';
-      const data = await fapi(path);
-      const msgs = data.messages || [];
-      if (!msgs.length) {
-        el.innerHTML = '<div class="empty">No messages</div>';
+      const data = await commsApi(`/gossip/messages?to=${encodeURIComponent(agentName)}`);
+      const messages = data.messages || data || [];
+      if (!Array.isArray(messages) || !messages.length) {
+        container.innerHTML = `<div class="comms-empty">No gossip messages for ${esc(agentName)}</div>`;
         return;
       }
       let html = '';
-      for (const m of msgs) {
-        const priorityCls = m.priority === 'urgent' ? 'comms-g-urgent'
-          : m.priority === 'high' ? 'comms-g-high' : '';
-        const readCls = m.read ? 'comms-g-read' : 'comms-g-unread';
-        html += `<div class="comms-g-msg ${priorityCls} ${readCls}">
-          <div class="comms-g-header">
-            <span class="comms-g-from">${esc(m.from)}</span>
-            <span class="comms-g-arrow">→</span>
-            <span class="comms-g-to">${esc(m.to)}</span>
-            <span class="comms-g-type">${esc(m.type)}</span>
-            ${m.priority && m.priority !== 'normal' ? `<span class="comms-g-priority">${esc(m.priority)}</span>` : ''}
-            <span class="comms-g-time">${timeAgo(m.timestamp)}</span>
+      for (const m of messages) {
+        html += `<div class="comms-gossip-msg">
+          <div class="comms-gossip-header">
+            <span class="comms-gossip-from">${esc(m.from || m.agent || '—')}</span>
+            <span class="comms-gossip-arrow">→</span>
+            <span class="comms-gossip-to">${esc(m.to || agentName)}</span>
+            <span class="comms-gossip-time">${timeAgo(m.timestamp || m.createdAt)}</span>
           </div>
-          <div class="comms-g-subject">${esc(m.subject)}</div>
-          <div class="comms-g-body">${esc(m.body)}</div>
+          <div class="comms-gossip-body">${esc(m.text || m.content || m.body || '')}</div>
         </div>`;
       }
-      el.innerHTML = html;
+      container.innerHTML = html;
     } catch (e) {
-      el.innerHTML = `<div class="empty">Error: ${esc(e.message)}</div>`;
-    }
-  }
-
-  // ─── Gossip: Send ───
-
-  async function sendGossip() {
-    const from = document.getElementById('gossip-from').value.trim();
-    const to = document.getElementById('gossip-to').value.trim();
-    const type = document.getElementById('gossip-type').value;
-    const priority = document.getElementById('gossip-priority').value;
-    const subject = document.getElementById('gossip-subject').value.trim();
-    const body = document.getElementById('gossip-body').value.trim();
-    if (!from || !to || !subject || !body) {
-      alert('All fields required: from, to, subject, body');
-      return;
-    }
-    try {
-      await fapi('/gossip/messages', {
-        method: 'POST',
-        body: { from, to, type, priority, subject, body },
-      });
-      document.getElementById('gossip-subject').value = '';
-      document.getElementById('gossip-body').value = '';
-      loadGossipFeed();
-    } catch (e) {
-      alert('Send failed: ' + e.message);
+      container.innerHTML = `<div class="comms-empty">⚠ ${esc(e.message)}</div>`;
     }
   }
 
   // ─── Sub-tab switching ───
 
-  function switchCommsSubview(name) {
-    activeCommsSubview = name;
-    document.querySelectorAll('.comms-subtab').forEach(t => t.classList.remove('active'));
-    document.querySelector(`.comms-subtab[data-comms="${name}"]`)?.classList.add('active');
-    document.querySelectorAll('.comms-subview').forEach(v => v.classList.remove('active'));
-    document.getElementById(`comms-${name}`)?.classList.add('active');
+  function switchSubtab(name) {
+    _activeSubtab = name;
+    document.querySelectorAll('.comms-subtab').forEach(t => t.classList.toggle('active', t.dataset.subview === name));
+    document.querySelectorAll('.comms-subview').forEach(v => v.classList.toggle('active', v.id === `comms-subview-${name}`));
+    if (name === 'channels') {
+      loadChannels();
+      if (_activeChannel) loadMessages(_activeChannel);
+    } else if (name === 'quarantine') {
+      loadQuarantine();
+    } else if (name === 'gossip') {
+      loadGossip();
+    }
   }
 
   // ─── Lifecycle ───
 
-  function commsInit() {
+  function init() {
+    // Wire sub-tab clicks
+    document.querySelectorAll('.comms-subtab').forEach(tab => {
+      tab.addEventListener('click', () => switchSubtab(tab.dataset.subview));
+    });
+
+    // Wire gossip search
+    const gossipInput = $('comms-gossip-agent');
+    if (gossipInput) {
+      gossipInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') loadGossip();
+      });
+      const gossipBtn = $('comms-gossip-search');
+      if (gossipBtn) gossipBtn.addEventListener('click', loadGossip);
+    }
+
+    loadIdentity();
     loadChannels();
-    loadQuarantine();
-    loadTrusted();
-    if (activeCommsSubview === 'gossip') loadGossipFeed();
-    commsRefreshTimer = setInterval(() => {
-      if (activeCommsSubview === 'fleet-chat') {
+
+    _refreshTimer = setInterval(() => {
+      if (_activeSubtab === 'channels') {
         loadChannels();
+        if (_activeChannel) loadMessages(_activeChannel);
+      } else if (_activeSubtab === 'quarantine') {
         loadQuarantine();
-        loadTrusted();
-        if (activeChannel) loadMessages(activeChannel);
-      } else {
-        loadGossipFeed();
       }
-    }, 30000);
+    }, 15000);
   }
 
-  function commsDestroy() {
-    stopChannelSSE();
-    if (commsRefreshTimer) {
-      clearInterval(commsRefreshTimer);
-      commsRefreshTimer = null;
+  function destroy() {
+    if (_refreshTimer) {
+      clearInterval(_refreshTimer);
+      _refreshTimer = null;
     }
   }
 
-  // ─── Wire up DOM ───
+  // ─── Expose ───
 
-  document.addEventListener('DOMContentLoaded', () => {
-    // Sub-tabs
-    document.querySelectorAll('.comms-subtab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        switchCommsSubview(tab.dataset.comms);
-        if (tab.dataset.comms === 'gossip') loadGossipFeed();
-      });
-    });
-
-    // Fleet chat send
-    document.getElementById('comms-send-btn')?.addEventListener('click', sendFleetMessage);
-    document.getElementById('comms-msg-input')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') sendFleetMessage();
-    });
-
-    // New channel / add trusted
-    document.getElementById('comms-new-channel')?.addEventListener('click', promptNewChannel);
-    document.getElementById('comms-add-trusted')?.addEventListener('click', promptAddTrusted);
-
-    // Gossip
-    document.getElementById('gossip-send-btn')?.addEventListener('click', sendGossip);
-    document.getElementById('gossip-body')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') sendGossip();
-    });
-    document.getElementById('gossip-refresh-btn')?.addEventListener('click', loadGossipFeed);
-    document.getElementById('gossip-to-filter')?.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') loadGossipFeed();
-    });
-  });
-
-  // Expose lifecycle for app.js
-  window._commsInit = commsInit;
-  window._commsDestroy = commsDestroy;
+  window._commsInit = init;
+  window._commsDestroy = destroy;
+  window._commsSelectChannel = selectChannel;
+  window._commsApproveAgent = approveAgent;
+  window._commsRejectAgent = rejectAgent;
 })();
