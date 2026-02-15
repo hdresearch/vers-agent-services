@@ -48,23 +48,32 @@
   }
 
   // ─── API helper ───
+  function checkSessionExpiry(res) {
+    if (res.status === 401 || res.status === 403) {
+      window.location.href = '/ui/login';
+      throw new Error('Session expired');
+    }
+    if (res.redirected && res.url.includes('/login')) {
+      window.location.href = '/ui/login';
+      throw new Error('Session expired');
+    }
+  }
+
   async function fapi(path, opts = {}) {
     const timeout = opts.timeout || 8000;
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), timeout);
     try {
-      const res = await fetch(`${API}${path}`, { signal: ctrl.signal });
+      const fetchOpts = { signal: ctrl.signal };
+      if (opts.method) fetchOpts.method = opts.method;
+      if (opts.headers) fetchOpts.headers = opts.headers;
+      if (opts.body) fetchOpts.body = opts.body;
+
+      const res = await fetch(`${API}${path}`, fetchOpts);
       clearTimeout(t);
 
       // Handle session expiry — redirect to login
-      if (res.status === 401 || res.status === 403) {
-        window.location.href = '/ui/login';
-        throw new Error('Session expired');
-      }
-      if (res.redirected && res.url.includes('/login')) {
-        window.location.href = '/ui/login';
-        throw new Error('Session expired');
-      }
+      checkSessionExpiry(res);
       if (!res.ok) throw new Error(`${res.status}`);
 
       const ct = res.headers.get('content-type') || '';
@@ -572,6 +581,8 @@
 
   function startFleetSSE() {
     if (fleetSSE) { try { fleetSSE.close(); } catch {} }
+    // Clear any stale fallback poll timer from a previous SSE attempt
+    if (fleetStreamPollTimer) { clearInterval(fleetStreamPollTimer); fleetStreamPollTimer = null; }
 
     try {
       fleetSSE = new EventSource(`${API}/feed/stream`);
@@ -611,44 +622,61 @@
 
   // ─── Quick actions ───
 
+  let actionsInitialized = false;
+
+  function onNewTask() {
+    const title = prompt('Task title:');
+    if (!title) return;
+    fapi('/board/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, createdBy: 'dashboard-user' }),
+    }).then(() => loadVitals())
+      .catch(e => {
+        if (e.message !== 'Session expired') alert('Failed to create task: ' + e.message);
+      });
+  }
+
+  function onWakeAgent() {
+    const choices = nodes.filter(n => n.status === 'hibernating' || n.status === 'stopped' || n.status === 'idle');
+    if (!choices.length) { alert('No idle/hibernating agents to wake.'); return; }
+    const list = choices.map(n => n.name).join(', ');
+    const name = prompt(`Wake which agent?\nAvailable: ${list}`);
+    if (!name) return;
+    const target = choices.find(n => n.name.toLowerCase().includes(name.toLowerCase()));
+    if (!target) { alert('Agent not found.'); return; }
+    alert(`Wake signal sent to ${target.name}.\n(Requires vers CLI integration for actual VM resume.)`);
+  }
+
+  function onJumpChat() {
+    const chatTab = document.querySelector('.tab[data-view="chat"]');
+    if (chatTab) chatTab.click();
+  }
+
+  function onDetailClose(e) {
+    e.stopPropagation();
+    selectedNode = null;
+    hideDetail();
+  }
+
   function initActions() {
-    document.getElementById('fleet-new-task')?.addEventListener('click', async () => {
-      const title = prompt('Task title:');
-      if (!title) return;
-      try {
-        await fetch(`${API}/board/tasks`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title, createdBy: 'dashboard-user' }),
-        });
-        loadVitals();
-      } catch (e) {
-        alert('Failed to create task: ' + e.message);
-      }
-    });
+    if (actionsInitialized) return; // prevent duplicate listeners on re-init
+    actionsInitialized = true;
 
-    document.getElementById('fleet-wake-agent')?.addEventListener('click', () => {
-      const choices = nodes.filter(n => n.status === 'hibernating' || n.status === 'stopped' || n.status === 'idle');
-      if (!choices.length) { alert('No idle/hibernating agents to wake.'); return; }
-      const list = choices.map(n => n.name).join(', ');
-      const name = prompt(`Wake which agent?\nAvailable: ${list}`);
-      if (!name) return;
-      const target = choices.find(n => n.name.toLowerCase().includes(name.toLowerCase()));
-      if (!target) { alert('Agent not found.'); return; }
-      alert(`Wake signal sent to ${target.name}.\n(Requires vers CLI integration for actual VM resume.)`);
-    });
+    document.getElementById('fleet-new-task')?.addEventListener('click', onNewTask);
+    document.getElementById('fleet-wake-agent')?.addEventListener('click', onWakeAgent);
+    document.getElementById('fleet-jump-chat')?.addEventListener('click', onJumpChat);
+    document.getElementById('fleet-detail-close')?.addEventListener('click', onDetailClose);
+  }
 
-    document.getElementById('fleet-jump-chat')?.addEventListener('click', () => {
-      // Switch to chat tab
-      const chatTab = document.querySelector('.tab[data-view="chat"]');
-      if (chatTab) chatTab.click();
-    });
+  function destroyActions() {
+    if (!actionsInitialized) return;
+    actionsInitialized = false;
 
-    document.getElementById('fleet-detail-close')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      selectedNode = null;
-      hideDetail();
-    });
+    document.getElementById('fleet-new-task')?.removeEventListener('click', onNewTask);
+    document.getElementById('fleet-wake-agent')?.removeEventListener('click', onWakeAgent);
+    document.getElementById('fleet-jump-chat')?.removeEventListener('click', onJumpChat);
+    document.getElementById('fleet-detail-close')?.removeEventListener('click', onDetailClose);
   }
 
   // ─── Lifecycle ───
@@ -673,8 +701,14 @@
 
   window._fleetDestroy = function () {
     fleetActive = false;
+
+    // Cancel animation frame
     if (fleetRAF) { cancelAnimationFrame(fleetRAF); fleetRAF = null; }
+
+    // Close SSE connection
     if (fleetSSE) { try { fleetSSE.close(); } catch {} fleetSSE = null; }
+
+    // Clear all timers
     if (fleetPollTimer) { clearInterval(fleetPollTimer); fleetPollTimer = null; }
     if (fleetStreamPollTimer) { clearInterval(fleetStreamPollTimer); fleetStreamPollTimer = null; }
 
@@ -688,5 +722,16 @@
       canvas.removeEventListener('touchend', onTouchEnd);
     }
     window.removeEventListener('resize', resizeCanvas);
+
+    // Remove quick-action button listeners
+    destroyActions();
+
+    // Release DOM and state references so GC can collect
+    canvas = null;
+    ctx = null;
+    nodes = [];
+    hoveredNode = null;
+    selectedNode = null;
+    streamEvents = [];
   };
 })();
