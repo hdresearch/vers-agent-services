@@ -31,6 +31,7 @@ import { loopRoutes, loopStore as loopRunnerStore } from "./loop/routes.js";
 import { routerRoutes } from "./router/routes.js";
 import { couchRoutes, couchPublicRoutes, couchStore } from "./couch/routes.js";
 import { fleetChatRoutes, fleetChatPublicRoutes } from "./fleet-chat/routes.js";
+import { kbRoutes, kbStore } from "./kb/routes.js";
 
 const app = new Hono();
 
@@ -83,6 +84,7 @@ app.use("/fleet-chat/trusted/*", bearerAuth());
 app.use("/fleet-chat/trusted", bearerAuth());
 app.use("/fleet-chat/quarantine/*", bearerAuth());
 app.use("/fleet-chat/quarantine", bearerAuth());
+app.use("/kb/*", bearerAuth());
 
 // ETag for polling-heavy GET endpoints (board, registry, reports, feed)
 // Returns 304 Not Modified when data hasn't changed — saves bandwidth on 10-30s polling
@@ -117,6 +119,7 @@ app.route("/events", eventRoutes);
 app.route("/personas", personaRoutes);
 app.route("/cryo", cryoRoutes);
 app.route("/gossip", gossipRoutes);
+app.route("/kb", kbRoutes);
 app.route("/loop", loopRoutes);
 app.route("/couch", couchRoutes);
 app.route("/fleet-chat", fleetChatRoutes);
@@ -164,6 +167,8 @@ function gracefulShutdown(signal: string) {
   gossipStore.flush();
   // Flush couch store
   couchStore.flush();
+  // Flush KB store
+  kbStore.flush();
   // Stop loop runner timers
   if (loopRunnerStore.isRunning) {
     try { loopRunnerStore.stop(); } catch {}
@@ -183,6 +188,10 @@ process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
 export { app };
+
+
+
+
 
 
 
