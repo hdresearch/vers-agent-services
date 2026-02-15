@@ -32,6 +32,7 @@ import { routerRoutes } from "./router/routes.js";
 import { couchRoutes, couchPublicRoutes, couchStore } from "./couch/routes.js";
 import { fleetChatRoutes, fleetChatPublicRoutes } from "./fleet-chat/routes.js";
 import { kbRoutes, kbStore } from "./kb/routes.js";
+import { daemonRoutes, daemonEngine, daemonStore } from "./daemon/routes.js";
 
 const app = new Hono();
 
@@ -85,6 +86,7 @@ app.use("/fleet-chat/trusted", bearerAuth());
 app.use("/fleet-chat/quarantine/*", bearerAuth());
 app.use("/fleet-chat/quarantine", bearerAuth());
 app.use("/kb/*", bearerAuth());
+app.use("/daemon/*", bearerAuth());
 
 // ETag for polling-heavy GET endpoints (board, registry, reports, feed)
 // Returns 304 Not Modified when data hasn't changed — saves bandwidth on 10-30s polling
@@ -123,6 +125,7 @@ app.route("/kb", kbRoutes);
 app.route("/loop", loopRoutes);
 app.route("/couch", couchRoutes);
 app.route("/fleet-chat", fleetChatRoutes);
+app.route("/daemon", daemonRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
@@ -172,6 +175,10 @@ function gracefulShutdown(signal: string) {
   // Stop loop runner timers
   if (loopRunnerStore.isRunning) {
     try { loopRunnerStore.stop(); } catch {}
+  }
+  // Stop daemon event loop
+  if (daemonEngine.isRunning) {
+    try { daemonEngine.stop(); } catch {}
   }
   server.close(() => {
     console.log("All connections closed. Exiting.");
