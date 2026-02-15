@@ -54,6 +54,7 @@ export interface PublishInput {
 export interface FilterOptions {
   agent?: string;
   type?: string;
+  exclude?: string[]; // event types to exclude from results
   since?: string; // ISO timestamp or ULID
   limit?: number;
 }
@@ -143,6 +144,10 @@ export class FeedStore {
     }
     if (opts.type) {
       result = result.filter((e) => e.type === opts.type);
+    }
+    if (opts.exclude && opts.exclude.length > 0) {
+      const excludeSet = new Set(opts.exclude);
+      result = result.filter((e) => !excludeSet.has(e.type));
     }
     if (opts.since) {
       const since = opts.since;

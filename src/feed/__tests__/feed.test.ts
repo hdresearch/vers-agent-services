@@ -127,6 +127,28 @@ describe("Feed Service", () => {
       expect(events.every((e: any) => e.type === "task_started")).toBe(true);
     });
 
+    it("excludes event types with ?exclude param", async () => {
+      await publishEvent({ type: "task_started", summary: "start" });
+      await publishEvent({ type: "cost_update", summary: "cost noise" });
+      await publishEvent({ type: "token_update", summary: "token noise" });
+      await publishEvent({ type: "task_completed", summary: "done" });
+      const res = await req("/events?exclude=cost_update,token_update");
+      const { events, count } = await res.json();
+      expect(count).toBe(2);
+      expect(events[0].summary).toBe("start");
+      expect(events[1].summary).toBe("done");
+      expect(events.every((e: any) => e.type !== "cost_update" && e.type !== "token_update")).toBe(true);
+    });
+
+    it("exclude param with single type", async () => {
+      await publishEvent({ type: "task_started", summary: "keep" });
+      await publishEvent({ type: "cost_update", summary: "noise" });
+      const res = await req("/events?exclude=cost_update");
+      const { events } = await res.json();
+      expect(events).toHaveLength(1);
+      expect(events[0].summary).toBe("keep");
+    });
+
     it("filters by since (ISO timestamp)", async () => {
       await publishEvent({ summary: "old" });
       const cutoff = new Date().toISOString();
