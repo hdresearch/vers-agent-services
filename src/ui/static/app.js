@@ -774,6 +774,193 @@ function stopSkillsRefresh() {
   }
 }
 
+// ─── Knowledge Base ───
+
+let kbRefreshTimer = null;
+let allKbEntries = [];
+
+async function loadKbBriefing() {
+  const el = document.getElementById('kb-briefing');
+  try {
+    const data = await api('/kb/briefing/session');
+    const md = data.briefing || '';
+    el.innerHTML = renderMarkdown(md);
+    // Update stats from briefing response
+    if (data.stats) {
+      setText('kb-stat-total', data.stats.total || 0);
+      setText('kb-stat-active', data.stats.active || 0);
+      setText('kb-stat-expired', data.stats.expired || 0);
+      const byType = data.stats.byType || {};
+      setText('kb-stat-warning', byType.warning || 0);
+      setText('kb-stat-convention', byType.convention || 0);
+      setText('kb-stat-lesson', byType.lesson || 0);
+      setText('kb-stat-context', byType.context || 0);
+    }
+  } catch (e) {
+    showError(el, e.message, loadKbBriefing);
+  }
+}
+
+function renderMarkdown(md) {
+  // Minimal markdown → HTML: headers, lists, bold, code, paragraphs
+  return md
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/s, (match) => '<ul>' + match + '</ul>')
+    .replace(/(?:^|\n)(<li>)/g, '$1')
+    // Group consecutive <li> into <ul>
+    .replace(/(<\/li>\n?)(?!<li>)/g, '$1</ul>')
+    .replace(/(?<!<\/ul>)(<li>)/g, '<ul>$1')
+    // Fix double wrapping
+    .replace(/<ul><ul>/g, '<ul>')
+    .replace(/<\/ul><\/ul>/g, '</ul>')
+    .replace(/\n{2,}/g, '<br><br>')
+    .replace(/\n/g, '\n');
+}
+
+async function loadKbEntries() {
+  const container = document.getElementById('kb-entries-list');
+  try {
+    const typeFilter = document.getElementById('kb-type-filter').value;
+    const search = document.getElementById('kb-search').value.trim();
+    let path = '/kb/entries';
+    const params = [];
+    if (typeFilter) params.push(`type=${typeFilter}`);
+    if (search) params.push(`search=${encodeURIComponent(search)}`);
+    if (params.length) path += '?' + params.join('&');
+
+    const data = await api(path);
+    allKbEntries = data.entries || [];
+    renderKbEntries();
+  } catch (e) {
+    showError(container, e.message, loadKbEntries);
+  }
+}
+
+function renderKbEntries() {
+  const container = document.getElementById('kb-entries-list');
+  const entries = allKbEntries;
+
+  if (!entries.length) {
+    container.innerHTML = '<div class="empty">No entries found</div>';
+    return;
+  }
+
+  const now = Date.now();
+  let html = '';
+  for (const e of entries) {
+    const reinforced = new Date(e.lastReinforced || e.createdAt).getTime();
+    const expiresAt = reinforced + (e.decayDays || 60) * 86400000;
+    const daysRemaining = Math.ceil((expiresAt - now) / 86400000);
+    const isExpired = daysRemaining <= 0;
+
+    const expiredCls = isExpired ? ' kb-expired' : '';
+    let decayCls = '';
+    let decayLabel = '';
+    if (isExpired) {
+      decayCls = 'kb-decay-expired';
+      decayLabel = 'expired';
+    } else if (daysRemaining <= 7) {
+      decayCls = 'kb-decay-low';
+      decayLabel = `${daysRemaining}d left`;
+    } else {
+      decayLabel = `${daysRemaining}d left`;
+    }
+
+    const typeIcon = { warning: '⚠️', convention: '📐', lesson: '💡', context: '📋' }[e.type] || '';
+    const tags = (e.tags || []).map(t => `<span class="kb-entry-tag">${esc(t)}</span>`).join('');
+
+    html += `<div class="kb-entry kb-type-${esc(e.type)}${expiredCls}">
+      <div class="kb-entry-header">
+        <span class="kb-entry-type t-${esc(e.type)}">${typeIcon} ${esc(e.type)}</span>
+        <span class="kb-entry-decay ${decayCls}">${decayLabel}</span>
+      </div>
+      <div class="kb-entry-content">${esc(e.content)}</div>
+      <div class="kb-entry-meta">
+        ${e.source ? `<span class="kb-entry-source">${esc(e.source)}</span>` : ''}
+        ${tags}
+        <button class="kb-reinforce-btn" onclick="reinforceKbEntry('${e.id}')">🔄 Reinforce</button>
+      </div>
+    </div>`;
+  }
+  container.innerHTML = html;
+}
+
+async function reinforceKbEntry(id) {
+  try {
+    await fetch(`${API}/kb/entries/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reinforce: true }),
+    });
+    loadKbEntries();
+    loadKbBriefing();
+  } catch (e) {
+    console.error('Reinforce failed:', e);
+  }
+}
+
+async function addKbEntry() {
+  const btn = document.getElementById('kb-submit-btn');
+  const content = document.getElementById('kb-add-content').value.trim();
+  if (!content) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+
+  try {
+    const tagsRaw = document.getElementById('kb-add-tags').value.trim();
+    const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
+
+    await fetch(`${API}/kb/entries`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: document.getElementById('kb-add-type').value,
+        content,
+        source: document.getElementById('kb-add-source').value.trim() || 'dashboard',
+        tags,
+        decayDays: parseInt(document.getElementById('kb-add-decay').value) || 60,
+      }),
+    });
+
+    // Clear form
+    document.getElementById('kb-add-content').value = '';
+    document.getElementById('kb-add-source').value = '';
+    document.getElementById('kb-add-tags').value = '';
+    document.getElementById('kb-add-form').style.display = 'none';
+
+    loadKbEntries();
+    loadKbBriefing();
+  } catch (e) {
+    alert('Failed to add entry: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save Entry';
+  }
+}
+
+function startKbRefresh() {
+  if (kbRefreshTimer) return;
+  loadKbBriefing();
+  loadKbEntries();
+  kbRefreshTimer = setInterval(() => {
+    loadKbBriefing();
+    loadKbEntries();
+  }, 30000);
+}
+
+function stopKbRefresh() {
+  if (kbRefreshTimer) {
+    clearInterval(kbRefreshTimer);
+    kbRefreshTimer = null;
+  }
+}
+
 // ─── Tabs — Lazy loading ───
 
 let activeView = 'dashboard';
@@ -818,6 +1005,11 @@ function switchView(viewName) {
     startSkillsRefresh();
   } else {
     stopSkillsRefresh();
+  }
+  if (viewName === 'knowledge') {
+    startKbRefresh();
+  } else {
+    stopKbRefresh();
   }
 
   // Chat: initialize on first visit, cleanup on leave
@@ -910,6 +1102,18 @@ async function init() {
     window._skillsFilterTimeout = setTimeout(renderSkills, 300);
   });
   document.getElementById('skills-status-filter').addEventListener('change', renderSkills);
+
+  // Knowledge Base controls
+  document.getElementById('kb-type-filter').addEventListener('change', loadKbEntries);
+  document.getElementById('kb-search').addEventListener('input', () => {
+    clearTimeout(window._kbSearchTimeout);
+    window._kbSearchTimeout = setTimeout(loadKbEntries, 300);
+  });
+  document.getElementById('kb-add-toggle').addEventListener('click', () => {
+    const form = document.getElementById('kb-add-form');
+    form.style.display = form.style.display === 'none' ? 'flex' : 'none';
+  });
+  document.getElementById('kb-submit-btn').addEventListener('click', addKbEntry);
 
   // Load all dashboard panels independently — each succeeds or fails on its own
   // Use allSettled so one failure doesn't block others
