@@ -1033,6 +1033,13 @@ function switchView(viewName) {
   } else if (prevView === 'fleet') {
     if (typeof window._fleetDestroy === 'function') window._fleetDestroy();
   }
+
+  // Couch: init/destroy
+  if (viewName === 'couch') {
+    if (typeof window._couchInit === 'function') window._couchInit();
+  } else if (prevView === 'couch') {
+    if (typeof window._couchDestroy === 'function') window._couchDestroy();
+  }
 }
 
 // ─── Metrics Sub-tabs ───
