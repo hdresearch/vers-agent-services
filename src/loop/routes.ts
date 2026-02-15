@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { LoopStore, type RoleConfig } from "./store.js";
 import { ValidationError, NotFoundError } from "../errors.js";
 import { emit } from "../events/emit.js";
+import { scribeTick } from "./scribe.js";
 
 /** Sentinel: check infra health */
 async function sentinelTick(): Promise<void> {
@@ -36,22 +37,7 @@ async function quartermasterTick(): Promise<void> {
   } catch { /* silent */ }
 }
 
-/** Scribe: summarize recent log activity */
-async function scribeTick(): Promise<void> {
-  try {
-    const res = await fetch("http://localhost:3000/log?last=6h&limit=50", {
-      headers: { Authorization: `Bearer ${process.env.VERS_AUTH_TOKEN || ""}` },
-    });
-    if (!res.ok) return;
-    const data = await res.json() as { entries: any[] };
-    if (data.entries.length > 0) {
-      emit("loop", "scribe.activity_summary", {
-        entriesLast6h: data.entries.length,
-        agents: [...new Set(data.entries.map((e: any) => e.agent).filter(Boolean))],
-      });
-    }
-  } catch { /* silent */ }
-}
+// Scribe tick handler imported from ./scribe.ts — extracts knowledge to KB + decays stale entries
 
 /** Auditor: detect stale in-progress tasks (>24h no update) */
 async function auditorTick(): Promise<void> {
