@@ -107,6 +107,8 @@ app.use("/registry/vms", etag());
 app.use("/reports", etag());
 app.use("/feed/events", etag());
 app.use("/feed/stats", etag());
+app.use("/kb/entries", etag());
+app.use("/kb/briefing", etag());
 app.use("/gossip/*", bearerAuth());
 app.use("/loop/*", bearerAuth());
 
@@ -179,7 +181,7 @@ const server = serve({ fetch: app.fetch, port, hostname: "::" }, () => {
 function gracefulShutdown(signal: string) {
   console.log(`\n${signal} received — shutting down gracefully...`);
   watchdogStore.stop();
-  // Flush gossip store to prevent data loss from debounced writes
+  // Flush stores to prevent data loss from debounced writes
   gossipStore.flush();
   // Flush couch store
   couchStore.flush();
