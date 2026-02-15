@@ -3,8 +3,14 @@ import { streamSSE } from "hono/streaming";
 import { FleetChatStore } from "./store.js";
 import { ValidationError, NotFoundError } from "../errors.js";
 import { emit } from "../events/emit.js";
+import { signContent, encryptContent } from "./crypto.js";
 
-export const fleetChatStore = new FleetChatStore();
+const PRIVATE_KEY_PATH = process.env.FLEET_PRIVATE_KEY_PATH || "/root/.ssh/fleet-identity";
+
+export const fleetChatStore = new FleetChatStore("data/fleet-chat.json", undefined, {
+  privateKeyPath: PRIVATE_KEY_PATH,
+  requireSignatures: process.env.REQUIRE_SIGNATURES === "true",
+});
 
 // ── Authenticated routes (bearer auth applied externally) ──────────────────
 
@@ -89,7 +95,7 @@ fleetChatRoutes.post("/channels/:id/messages", async (c) => {
 
   try {
     const input = body as Record<string, unknown>;
-    const msg = fleetChatStore.sendMessage({
+    const msg = await fleetChatStore.sendMessage({
       channelId: c.req.param("id"),
       content: input.content as string,
       type: input.type as any,
@@ -182,6 +188,128 @@ fleetChatRoutes.get("/channels/:id/messages", (c) => {
   }
 });
 
+// POST /send — Outbox: sign, optionally encrypt, and deliver to remote fleet
+fleetChatRoutes.post("/send", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  try {
+    const input = body as Record<string, unknown>;
+    const to = input.to as { name: string; endpoint: string; publicKey: string };
+    const content = input.content as string;
+    const encrypt = input.encrypt === true;
+    const type = (input.type as string) || "text";
+
+    if (!to?.name || !to?.endpoint || !to?.publicKey) {
+      return c.json({ error: "to.name, to.endpoint, and to.publicKey are required" }, 400);
+    }
+    if (!content?.trim()) {
+      return c.json({ error: "content is required" }, 400);
+    }
+
+    const localIdentity = fleetChatStore.getLocalIdentity();
+    if (!localIdentity) {
+      return c.json({ error: "Local identity not set. POST /fleet-chat/identity first." }, 400);
+    }
+
+    // Determine final content and type
+    let finalContent = content;
+    let finalType = type;
+
+    if (encrypt) {
+      // age-encrypt with recipient's SSH public key
+      finalContent = await encryptContent(content, to.publicKey);
+      finalType = "encrypted";
+    }
+
+    // Sign the content (what gets sent, encrypted or not) with our private key
+    let signature = "unsigned";
+    const keyPath = fleetChatStore.getPrivateKeyPath() || PRIVATE_KEY_PATH;
+    try {
+      signature = await signContent(finalContent, keyPath);
+    } catch (err) {
+      console.warn("[fleet-chat] signing failed, sending unsigned:", (err as Error).message);
+    }
+
+    const timestamp = new Date().toISOString();
+
+    // Build envelope
+    const envelope = {
+      id: undefined as string | undefined,
+      from: localIdentity,
+      to: { name: to.name, endpoint: to.endpoint, publicKey: to.publicKey },
+      type: finalType,
+      content: finalContent,
+      timestamp,
+      signature,
+      metadata: input.metadata as Record<string, unknown> | undefined,
+    };
+
+    // Also store locally: find or create channel, record message
+    let channel = fleetChatStore.findChannelByRemote(to.endpoint, to.publicKey);
+    if (!channel) {
+      channel = fleetChatStore.createChannel({ remoteFleet: to });
+    }
+
+    const localMsg = await fleetChatStore.sendMessage({
+      channelId: channel.id,
+      content: encrypt ? `[encrypted] ${content.substring(0, 50)}...` : content,
+      type: type as any,
+      metadata: {
+        ...(input.metadata as Record<string, unknown> || {}),
+        sentViaOutbox: true,
+        encrypted: encrypt,
+      },
+    });
+
+    envelope.id = localMsg.id;
+
+    // Deliver to remote endpoint
+    const inboxUrl = `${to.endpoint}/fleet-chat/inbox`;
+    let deliveryResult: { ok: boolean; status?: number; error?: string };
+    try {
+      const resp = await fetch(inboxUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(envelope),
+      });
+      const respBody = await resp.json().catch(() => ({}));
+      deliveryResult = { ok: resp.ok, status: resp.status, ...(respBody as object) };
+
+      if (resp.ok) {
+        fleetChatStore.updateDelivery(localMsg.id, "delivered");
+      } else {
+        fleetChatStore.updateDelivery(localMsg.id, "failed");
+      }
+    } catch (err) {
+      deliveryResult = { ok: false, error: (err as Error).message };
+      fleetChatStore.updateDelivery(localMsg.id, "failed");
+    }
+
+    emit("fleet-chat", "fleet-chat.message.sent", {
+      messageId: localMsg.id,
+      channelId: channel.id,
+      to: to.name,
+      encrypted: encrypt,
+      delivered: deliveryResult.ok,
+    }, localIdentity.name);
+
+    return c.json({
+      message: localMsg,
+      delivery: deliveryResult,
+      envelope: { id: envelope.id, type: envelope.type, signature: signature !== "unsigned" },
+    }, deliveryResult.ok ? 200 : 502);
+  } catch (err) {
+    if (err instanceof ValidationError) return c.json({ error: err.message }, 400);
+    if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
+    throw err;
+  }
+});
+
 // GET /identity — Get local fleet identity
 fleetChatRoutes.get("/identity", (c) => {
   const identity = fleetChatStore.getLocalIdentity();
@@ -246,9 +374,9 @@ fleetChatRoutes.get("/quarantine", (c) => {
 });
 
 // POST /quarantine/:id/approve — Approve a quarantined message
-fleetChatRoutes.post("/quarantine/:id/approve", (c) => {
+fleetChatRoutes.post("/quarantine/:id/approve", async (c) => {
   try {
-    const msg = fleetChatStore.approveQuarantined(c.req.param("id"));
+    const msg = await fleetChatStore.approveQuarantined(c.req.param("id"));
     return c.json(msg);
   } catch (err) {
     if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
@@ -291,7 +419,7 @@ fleetChatPublicRoutes.post("/inbox", async (c) => {
     if (!input.to && input.recipient) {
       input.to = input.recipient;
     }
-    const result = fleetChatStore.receiveInbound(input as any);
+    const result = await fleetChatStore.receiveInbound(input as any);
 
     if (result.quarantined) {
       emit("fleet-chat", "fleet-chat.message.quarantined", {
