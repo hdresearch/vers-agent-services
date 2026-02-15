@@ -1035,6 +1035,7 @@ function switchView(viewName) {
   }
 
 <<<<<<< HEAD
+<<<<<<< HEAD
   // Couch: init/destroy
   if (viewName === 'couch') {
     if (typeof window._couchInit === 'function') window._couchInit();
@@ -1047,6 +1048,13 @@ function switchView(viewName) {
   } else if (prevView === 'agents') {
     if (typeof window._agentsDestroy === 'function') window._agentsDestroy();
 >>>>>>> origin/feat/ui-agents
+=======
+  // Comms: init/destroy
+  if (viewName === 'comms') {
+    if (typeof window._commsInit === 'function') window._commsInit();
+  } else if (prevView === 'comms') {
+    if (typeof window._commsDestroy === 'function') window._commsDestroy();
+>>>>>>> origin/feat/ui-comms
   }
 }
 
