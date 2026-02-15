@@ -138,4 +138,56 @@ describe("LoopStore", () => {
       expect(sentinel.intervalMs).toBe(60000);
     });
   });
+
+  describe("shutdown", () => {
+    it("waits for active ticks to drain before resolving", async () => {
+      let resolveSlowTick!: () => void;
+      const slowTickPromise = new Promise<void>((resolve) => { resolveSlowTick = resolve; });
+      const slowStore = new LoopStore(TEST_FILE + ".shutdown", async (role) => {
+        if (role.name === "Sentinel") await slowTickPromise;
+      });
+
+      slowStore.start();
+      expect(slowStore.activeTickCount).toBeGreaterThan(0);
+
+      // Start shutdown — should not resolve yet because Sentinel tick is still running
+      let shutdownDone = false;
+      const shutdownPromise = slowStore.shutdown().then(() => { shutdownDone = true; });
+
+      // Give microtasks a chance to run
+      await new Promise((r) => setTimeout(r, 50));
+      expect(shutdownDone).toBe(false);
+
+      // Release the slow tick
+      resolveSlowTick();
+      await shutdownPromise;
+      expect(shutdownDone).toBe(true);
+      expect(slowStore.isRunning).toBe(false);
+      expect(slowStore.activeTickCount).toBe(0);
+
+      try { unlinkSync(TEST_FILE + ".shutdown"); } catch {}
+    });
+
+    it("does not fire new ticks after shutdown starts", async () => {
+      vi.useFakeTimers();
+      const ticks: string[] = [];
+      const fastStore = new LoopStore(TEST_FILE + ".notick", (role) => {
+        ticks.push(role.name);
+      });
+
+      fastStore.start();
+      const initialTicks = ticks.length;
+
+      // Begin shutdown (clears timers)
+      const p = fastStore.shutdown();
+
+      // Advance time well past any interval — no new ticks should fire
+      vi.advanceTimersByTime(60 * 60 * 1000);
+      await p;
+      expect(ticks.length).toBe(initialTicks);
+
+      vi.useRealTimers();
+      try { unlinkSync(TEST_FILE + ".notick"); } catch {}
+    });
+  });
 });

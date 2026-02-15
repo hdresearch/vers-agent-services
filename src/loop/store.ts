@@ -70,6 +70,8 @@ export class LoopStore {
   private running = false;
   private startedAt?: string;
   private timers: Map<string, ReturnType<typeof setInterval>> = new Map();
+  private activeTicks: Map<string, Promise<void>> = new Map();
+  private shuttingDown = false;
   private runs: RunRecord[] = [];
   private filePath: string;
   private onTick?: (role: RoleConfig) => void | Promise<void>;
@@ -148,7 +150,21 @@ export class LoopStore {
     this.timers.set(role.name, timer);
   }
 
-  private async tickRole(role: RoleConfig): Promise<void> {
+  private tickRole(role: RoleConfig): void {
+    // Don't start new ticks during shutdown
+    if (this.shuttingDown) return;
+
+    const promise = this.executeTickRole(role);
+    this.activeTicks.set(role.name, promise);
+    promise.finally(() => {
+      // Only delete if this is still the tracked promise (not replaced by a newer tick)
+      if (this.activeTicks.get(role.name) === promise) {
+        this.activeTicks.delete(role.name);
+      }
+    });
+  }
+
+  private async executeTickRole(role: RoleConfig): Promise<void> {
     const run: RunRecord = {
       id: ulid(),
       role: role.name,
@@ -217,7 +233,38 @@ export class LoopStore {
     return result.slice(-limit);
   }
 
+  /**
+   * Graceful shutdown: clear all intervals, wait for in-flight ticks to complete.
+   * Returns a promise that resolves when all active ticks have drained.
+   */
+  async shutdown(): Promise<LoopStatus> {
+    this.shuttingDown = true;
+
+    // Clear all interval timers so no new ticks fire
+    for (const [, timer] of this.timers) {
+      clearInterval(timer);
+    }
+    this.timers.clear();
+
+    // Wait for any in-flight ticks to complete
+    const active = [...this.activeTicks.entries()];
+    if (active.length > 0) {
+      console.log(`Loop shutdown: waiting for ${active.length} active tick(s) [${active.map(([name]) => name).join(", ")}]...`);
+      await Promise.allSettled(active.map(([, p]) => p));
+      console.log("Loop shutdown: all active ticks drained.");
+    }
+
+    this.running = false;
+    this.shuttingDown = false;
+    this.saveConfig();
+    return this.getStatus();
+  }
+
   get isRunning(): boolean {
     return this.running;
+  }
+
+  get activeTickCount(): number {
+    return this.activeTicks.size;
   }
 }
