@@ -1158,6 +1158,16 @@ async function init() {
   }, 30000);
 }
 
+// ─── Expose functions used by inline onclick handlers ───
+// app.js is loaded as type="module", so all top-level declarations are
+// module-scoped and invisible to HTML onclick attributes. Attach them
+// to window so dynamically-generated onclick="" handlers can call them.
+window.bumpTask = bumpTask;
+window.approveTask = approveTask;
+window.rejectTask = rejectTask;
+window.reinforceKbEntry = reinforceKbEntry;
+window.addKbEntry = addKbEntry;
+
 init();
 
 

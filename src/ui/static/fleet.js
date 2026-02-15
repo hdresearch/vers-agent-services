@@ -130,14 +130,27 @@
         setText('fv-tasks-done', done);
       }
 
-      // Usage — API returns { totals: { tokens, cost, sessions, vms }, byAgent }
+      // Usage — API returns { range, totals: { tokens, cost, sessions, vms }, byAgent }
+      // Guard against error responses ({ error: "..." }) and legacy flat shapes.
       if (usageData.status === 'fulfilled') {
         const u = usageData.value;
-        const totals = u.totals || {};
-        const totalTokens = totals.tokens || 0;
-        const totalCost = totals.cost || 0;
-        setText('fv-tokens', totalTokens > 1000000 ? (totalTokens / 1000000).toFixed(1) + 'M' : totalTokens > 1000 ? (totalTokens / 1000).toFixed(0) + 'K' : totalTokens);
-        setText('fv-cost', '$' + (typeof totalCost === 'number' ? totalCost.toFixed(2) : totalCost));
+        if (u && !u.error) {
+          // Prefer nested totals shape; fall back to flat properties for compat
+          const totals = u.totals || {};
+          let totalTokens = Number(totals.tokens) || 0;
+          let totalCost   = Number(totals.cost)   || 0;
+
+          // Fallback: sum from byAgent if totals came back empty but agents exist
+          if (!totalTokens && !totalCost && u.byAgent) {
+            for (const a of Object.values(u.byAgent)) {
+              totalTokens += Number(a.tokens) || 0;
+              totalCost   += Number(a.cost)   || 0;
+            }
+          }
+
+          setText('fv-tokens', totalTokens > 1000000 ? (totalTokens / 1000000).toFixed(1) + 'M' : totalTokens > 1000 ? (totalTokens / 1000).toFixed(0) + 'K' : totalTokens || '—');
+          setText('fv-cost', totalCost ? '$' + totalCost.toFixed(2) : '—');
+        }
       }
 
       // Last deploy from feed
