@@ -10,6 +10,7 @@ import {
 } from "./store.js";
 import { emit } from "../events/emit.js";
 import { registryStore } from "../registry/routes.js";
+import { store as personaStore } from "../personas/routes.js";
 
 export const cryoStore = new CryoStore();
 
@@ -19,6 +20,15 @@ export const cryoRoutes = new Hono();
 cryoRoutes.post("/agents", async (c) => {
   try {
     const body = await c.req.json();
+
+    // Validate persona exists in persona store before creating
+    if (body.persona && typeof body.persona === "string") {
+      const persona = personaStore.getPersona(body.persona);
+      if (!persona) {
+        return c.json({ error: `persona '${body.persona}' not found — register it first via /personas` }, 400);
+      }
+    }
+
     const agent = cryoStore.createAgent(body);
     emit("cryo", "cryo.agent.created", { name: agent.name, persona: agent.persona, status: agent.status }, agent.name);
     return c.json(agent, 201);
@@ -94,22 +104,35 @@ cryoRoutes.post("/agents/:name/wake", async (c) => {
 
     // Auto-register in service registry so the agent is discoverable
     if (agent.currentVmId) {
+      const address = body.address || `${agent.currentVmId}.vm.vers.sh`;
+      const role = body.role || "worker";
       try {
         registryStore.register({
           id: agent.currentVmId,
           name: agent.name,
-          role: (agent as any).role || "worker",
-          address: (body as any).address || (agent as any).address || "",
+          role,
+          address,
           registeredBy: "cryo",
-          services: (body as any).services || [],
+          services: body.services || [],
         });
+        emit("cryo", "cryo.registry.registered", { name: agent.name, vmId: agent.currentVmId, role, address }, agent.name);
       } catch (regErr: any) {
-        // If already registered (conflict), update heartbeat instead
+        // If already registered (conflict), upsert to refresh fields + heartbeat
         if (regErr?.message?.includes?.("already registered") || regErr?.constructor?.name === "ConflictError") {
-          try { registryStore.heartbeat(agent.currentVmId); } catch {}
+          try {
+            registryStore.upsert({
+              id: agent.currentVmId,
+              name: agent.name,
+              role,
+              address,
+              registeredBy: "cryo",
+              services: body.services || [],
+            });
+          } catch {}
+        } else {
+          // Don't fail the wake if registry fails — emit warning
+          emit("cryo", "cryo.registry.warn", { name: agent.name, error: regErr?.message || String(regErr) }, agent.name);
         }
-        // Don't fail the wake if registry fails — log it
-        emit("cryo", "cryo.registry.warn", { name: agent.name, error: regErr?.message || String(regErr) }, agent.name);
       }
     }
 
