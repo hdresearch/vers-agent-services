@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════
-// Fleet Chat — Mobile-friendly interface for fleet interaction
-// Posts to work log, creates board tasks with /task, streams feed
+// Fleet Chat v2 — Robust SSE, dedup, auth, lazy load, agent colors
+// Posts to work log, streams feed, commands: /task /board /reports /status /help
 // ═══════════════════════════════════════════════════════════════════
 
 (function () {
@@ -12,8 +12,67 @@
 
   let initialized = false;
   let autoScroll = true;
-  let lastEventId = null;
   let refreshTimer = null;
+  let sseSource = null;
+  let sseRetryCount = 0;
+  let sseRetryTimer = null;
+  let historyLoaded = false;
+
+  // ─── Dedup: content-based, bounded ───
+  const seenHashes = new Set();
+  const MAX_SEEN = 2000;
+
+  function hashMsg(str) {
+    // djb2 hash — fast, good enough for dedup
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) {
+      h = ((h << 5) + h + str.charCodeAt(i)) >>> 0;
+    }
+    return h.toString(36);
+  }
+
+  function dedupKey(type, agent, text, ts) {
+    return hashMsg(`${type}|${agent || ''}|${(text || '').slice(0, 120)}|${ts || ''}`);
+  }
+
+  function markSeen(key) {
+    if (seenHashes.size > MAX_SEEN) {
+      // Evict oldest half (Sets iterate in insertion order)
+      const arr = [...seenHashes];
+      for (let i = 0; i < arr.length / 2; i++) seenHashes.delete(arr[i]);
+    }
+    seenHashes.add(key);
+  }
+
+  // ─── Noise filter ───
+  const NOISE_TYPES = new Set([
+    'token_update', 'cost_update', 'heartbeat', 'ping',
+    'agent_heartbeat', 'registry_heartbeat',
+  ]);
+
+  function isNoise(evt) {
+    if (NOISE_TYPES.has(evt.type)) return true;
+    if (!evt.summary && !evt.detail && !evt.text) return true;
+    return false;
+  }
+
+  // ─── Agent identity: deterministic color per name ───
+  const AGENT_COLORS = [
+    '#4f9', '#5af', '#a7f', '#f93', '#fd0', '#f55',
+    '#9cf', '#fc6', '#c9f', '#6fc', '#f6c', '#cf6',
+  ];
+  const agentColorCache = {};
+
+  function agentColor(name) {
+    if (!name) return '#666';
+    const n = name.toLowerCase();
+    if (n === 'you' || n === 'noah') return '#4f9';
+    if (agentColorCache[n]) return agentColorCache[n];
+    let h = 0;
+    for (let i = 0; i < n.length; i++) h = ((h << 5) - h + n.charCodeAt(i)) | 0;
+    agentColorCache[n] = AGENT_COLORS[Math.abs(h) % AGENT_COLORS.length];
+    return agentColorCache[n];
+  }
 
   // ─── Time formatting ───
   function timeAgo(iso) {
@@ -26,44 +85,95 @@
     return `${Math.floor(ms / 86400000)}d`;
   }
 
+  function shortTime(iso) {
+    if (!iso) return '';
+    try {
+      const d = new Date(iso);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch { return timeAgo(iso); }
+  }
+
   function esc(s) {
     const d = document.createElement('div');
     d.textContent = s || '';
     return d.innerHTML;
   }
 
-  // ─── Safe fetch that handles auth redirects ───
-  async function safeFetch(url, opts) {
-    const res = await fetch(url, opts);
-    if (res.redirected || res.status === 302 || res.status === 401) {
-      throw new Error('Session expired — reload to re-authenticate');
+  // ─── Safe fetch with auth expiry → redirect ───
+  async function safeFetch(url, opts = {}) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), opts.timeout || 8000);
+    try {
+      const res = await fetch(url, { ...opts, signal: controller.signal });
+      clearTimeout(timeout);
+
+      if (res.status === 401 || res.status === 403) {
+        appendSystem('⚠ Session expired — redirecting to login…');
+        setTimeout(() => { window.location.href = '/ui/login'; }, 1500);
+        throw new Error('Session expired');
+      }
+      if (res.redirected && res.url.includes('/login')) {
+        appendSystem('⚠ Session expired — redirecting to login…');
+        setTimeout(() => { window.location.href = '/ui/login'; }, 1500);
+        throw new Error('Session expired');
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        // Could be HTML login page
+        if (ct.includes('text/html')) {
+          appendSystem('⚠ Session expired — redirecting to login…');
+          setTimeout(() => { window.location.href = '/ui/login'; }, 1500);
+          throw new Error('Session expired');
+        }
+        throw new Error('Unexpected response type');
+      }
+      return res.json();
+    } catch (e) {
+      clearTimeout(timeout);
+      if (e.name === 'AbortError') throw new Error('Request timed out');
+      throw e;
     }
-    if (!res.ok) {
-      throw new Error(`HTTP ${res.status}`);
-    }
-    // Check content-type to avoid parsing HTML as JSON
-    const ct = res.headers.get('content-type') || '';
-    if (!ct.includes('application/json')) {
-      throw new Error('Unexpected response type: ' + ct);
-    }
-    return res.json();
   }
 
   // ─── Render a message bubble ───
   function renderMsg(opts) {
-    // opts: { agent, body, time, type, cssClass, typeLabel }
     const div = document.createElement('div');
     div.className = `chat-msg ${opts.cssClass || 'feed'}`;
 
-    const header = opts.agent || opts.time ? `<div class="chat-msg-header">
-      <span class="chat-msg-agent">${esc(opts.agent || '')}</span>
-      <span class="chat-msg-time">${opts.time ? timeAgo(opts.time) : ''}</span>
+    const color = agentColor(opts.agent);
+    const header = (opts.agent || opts.time) ? `<div class="chat-msg-header">
+      <span class="chat-msg-agent" style="color:${color}">${esc(opts.agent || '')}</span>
+      <span class="chat-msg-time">${opts.time ? shortTime(opts.time) : ''}</span>
     </div>` : '';
 
-    const typeTag = opts.typeLabel ? `<span class="chat-msg-type">${esc(opts.typeLabel)}</span>` : '';
+    const typeTag = opts.typeLabel
+      ? `<span class="chat-msg-type">${esc(opts.typeLabel)}</span>`
+      : '';
 
     div.innerHTML = `${header}<div class="chat-msg-body">${typeTag}${esc(opts.body)}</div>`;
     return div;
+  }
+
+  // ─── Quick helpers ───
+  function appendSystem(text) {
+    const el = messagesEl();
+    if (!el) return;
+    checkAutoScroll();
+    el.appendChild(renderMsg({ body: text, cssClass: 'system' }));
+    maybeScroll();
+  }
+
+  function appendSelf(text) {
+    const el = messagesEl();
+    if (!el) return;
+    checkAutoScroll();
+    el.appendChild(renderMsg({
+      agent: 'noah', body: text,
+      time: new Date().toISOString(), cssClass: 'self',
+    }));
+    maybeScroll();
   }
 
   // ─── Scroll management ───
@@ -75,39 +185,44 @@
   function checkAutoScroll() {
     const el = messagesEl();
     if (!el) return;
-    autoScroll = (el.scrollHeight - el.scrollTop - el.clientHeight) < 100;
+    autoScroll = (el.scrollHeight - el.scrollTop - el.clientHeight) < 120;
   }
 
   function maybeScroll() {
     if (autoScroll) requestAnimationFrame(scrollToBottom);
   }
 
-  // ─── Dedup tracking ───
-  const seenIds = new Set();
-
-  // ─── Load initial data ───
+  // ─── Load history: last 6h, lazy (non-blocking) ───
   async function loadHistory() {
+    if (historyLoaded) return;
+    historyLoaded = true;
+
     const el = messagesEl();
     if (!el) return;
 
-    // Clear welcome message
+    // Show loading indicator
+    const loadingDiv = document.createElement('div');
+    loadingDiv.className = 'chat-msg system';
+    loadingDiv.innerHTML = '<div class="chat-msg-body">Loading history…</div>';
+    loadingDiv.id = 'chat-loading';
     const welcome = el.querySelector('.chat-welcome');
+    if (welcome) welcome.remove();
+    el.appendChild(loadingDiv);
 
-    try {
-      // Load recent log entries (use ?last=6h for reasonable volume)
-      // and feed events in parallel
-      const [logData, feedData] = await Promise.all([
-        safeFetch(`${API}/log?last=6h`),
-        safeFetch(`${API}/feed/events?limit=50`),
-      ]);
+    const items = [];
 
-      const items = [];
+    // Load log and feed independently — one can fail without blocking the other
+    const [logResult, feedResult] = await Promise.allSettled([
+      safeFetch(`${API}/log?last=6h`),
+      safeFetch(`${API}/feed/events?limit=50`),
+    ]);
 
-      // Log entries
-      const logs = logData.entries || [];
+    // Process log entries
+    if (logResult.status === 'fulfilled') {
+      const logs = logResult.value.entries || [];
       for (const entry of logs) {
-        const key = 'log:' + entry.timestamp + ':' + (entry.agent || '') + ':' + (entry.text || '').slice(0, 50);
-        seenIds.add(key);
+        const key = dedupKey('log', entry.agent, entry.text, entry.timestamp);
+        markSeen(key);
         items.push({
           time: entry.timestamp,
           agent: entry.agent || 'unknown',
@@ -116,12 +231,15 @@
           typeLabel: 'log',
         });
       }
+    }
 
-      // Feed events (skip noisy types)
-      const events = feedData.events || [];
+    // Process feed events (filter noise)
+    if (feedResult.status === 'fulfilled') {
+      const events = feedResult.value.events || [];
       for (const evt of events) {
-        if (evt.type === 'token_update' || evt.type === 'cost_update') continue;
-        seenIds.add(evt.id);
+        if (isNoise(evt)) continue;
+        const key = evt.id || dedupKey(evt.type, evt.agent, evt.summary, evt.timestamp);
+        markSeen(key);
         items.push({
           time: evt.timestamp,
           agent: evt.agent || 'unknown',
@@ -129,52 +247,132 @@
           cssClass: 'feed',
           typeLabel: evt.type,
         });
-        if (!lastEventId || evt.id > lastEventId) lastEventId = evt.id;
       }
+    }
 
-      // Sort by time ascending
-      items.sort((a, b) => new Date(a.time) - new Date(b.time));
+    // Remove loading indicator
+    const loader = document.getElementById('chat-loading');
+    if (loader) loader.remove();
 
-      // Remove welcome, add items
-      if (welcome) welcome.remove();
+    // Sort ascending, show last 80
+    items.sort((a, b) => new Date(a.time) - new Date(b.time));
+    const recent = items.slice(-80);
 
-      // Only show last 60
-      const recent = items.slice(-60);
-      if (recent.length === 0) {
-        el.appendChild(renderMsg({
-          body: 'No recent activity. Send a message to get started!',
-          cssClass: 'system',
-        }));
+    if (recent.length === 0) {
+      const bothFailed = logResult.status === 'rejected' && feedResult.status === 'rejected';
+      if (bothFailed) {
+        appendSystem('⚠ Failed to load history. Will stream new events.');
       } else {
-        for (const item of recent) {
-          el.appendChild(renderMsg(item));
-        }
+        appendSystem('No recent activity. Send a message or use /help.');
       }
+    } else {
+      for (const item of recent) {
+        el.appendChild(renderMsg(item));
+      }
+    }
 
-      scrollToBottom();
-    } catch (e) {
-      console.error('Chat: failed to load history', e);
-      if (welcome) welcome.remove();
-      el.appendChild(renderMsg({
-        body: `⚠ Failed to load history: ${e.message}`,
-        cssClass: 'system',
-      }));
+    scrollToBottom();
+  }
+
+  // ─── SSE: own connection with reconnect + exponential backoff ───
+  function startSSE() {
+    stopSSE();
+
+    try {
+      const evtSource = new EventSource(`${API}/feed/stream`);
+      sseSource = evtSource;
+
+      // Connection timeout
+      const sseTimeout = setTimeout(() => {
+        if (evtSource.readyState !== EventSource.OPEN) {
+          evtSource.close();
+          scheduleSSERetry();
+        }
+      }, 12000);
+
+      evtSource.onopen = () => {
+        clearTimeout(sseTimeout);
+        sseRetryCount = 0;
+        updateConnDot(true);
+      };
+
+      evtSource.onmessage = (e) => {
+        try {
+          const evt = JSON.parse(e.data);
+          if (isNoise(evt)) return;
+
+          const key = evt.id || dedupKey(evt.type, evt.agent, evt.summary, evt.timestamp);
+          if (seenHashes.has(key)) return;
+          markSeen(key);
+
+          const el = messagesEl();
+          if (!el) return;
+
+          checkAutoScroll();
+          el.appendChild(renderMsg({
+            agent: evt.agent || 'unknown',
+            body: evt.summary || evt.detail || '',
+            time: evt.timestamp || new Date().toISOString(),
+            cssClass: 'feed',
+            typeLabel: evt.type,
+          }));
+          maybeScroll();
+        } catch {}
+      };
+
+      evtSource.onerror = () => {
+        clearTimeout(sseTimeout);
+        updateConnDot(false);
+        evtSource.close();
+        sseSource = null;
+        scheduleSSERetry();
+      };
+    } catch {
+      scheduleSSERetry();
     }
   }
 
-  // ─── SSE integration ───
-  // Hook into app.js SSE by exposing a global callback
+  function stopSSE() {
+    if (sseSource) {
+      try { sseSource.close(); } catch {}
+      sseSource = null;
+    }
+    if (sseRetryTimer) {
+      clearTimeout(sseRetryTimer);
+      sseRetryTimer = null;
+    }
+  }
+
+  function scheduleSSERetry() {
+    sseRetryCount++;
+    // Exponential backoff: 2s, 4s, 8s, 16s, cap at 30s
+    const delay = Math.min(2000 * Math.pow(2, sseRetryCount - 1), 30000);
+    sseRetryTimer = setTimeout(startSSE, delay);
+  }
+
+  function updateConnDot(connected) {
+    const dot = document.getElementById('conn-dot');
+    const label = document.getElementById('conn-label');
+    if (dot) {
+      dot.classList.toggle('connected', connected);
+      dot.classList.toggle('polling', !connected && sseRetryCount > 3);
+    }
+    if (label) {
+      label.textContent = connected ? 'connected' : (sseRetryCount > 3 ? 'reconnecting…' : 'connecting');
+    }
+  }
+
+  // ─── Also hook into app.js SSE for redundancy ───
   window._chatOnFeedEvent = function (evt) {
     if (!initialized) return;
-    if (evt.type === 'token_update' || evt.type === 'cost_update') return;
-    if (evt.id && seenIds.has(evt.id)) return;
-    if (evt.id) seenIds.add(evt.id);
+    if (isNoise(evt)) return;
+    const key = evt.id || dedupKey(evt.type, evt.agent, evt.summary, evt.timestamp);
+    if (seenHashes.has(key)) return;
+    markSeen(key);
 
     const el = messagesEl();
     if (!el) return;
-
     checkAutoScroll();
-
     el.appendChild(renderMsg({
       agent: evt.agent || 'unknown',
       body: evt.summary || evt.detail || '',
@@ -182,174 +380,11 @@
       cssClass: 'feed',
       typeLabel: evt.type,
     }));
-
     maybeScroll();
   };
 
-  // ─── Send message ───
-  async function sendMessage() {
-    const input = inputEl();
-    if (!input) return;
-
-    const text = input.value.trim();
-    if (!text) return;
-
-    input.value = '';
-    const el = messagesEl();
-    checkAutoScroll();
-
-    // Handle /task command
-    if (text.startsWith('/task ')) {
-      const title = text.slice(6).trim();
-      if (!title) return;
-
-      el.appendChild(renderMsg({
-        agent: 'you',
-        body: `Creating task: ${title}`,
-        time: new Date().toISOString(),
-        cssClass: 'self',
-      }));
-      maybeScroll();
-
-      try {
-        const data = await safeFetch(`${API}/board/tasks`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title, createdBy: 'noah', tags: ['from-chat'] }),
-        });
-
-        el.appendChild(renderMsg({
-          body: `✓ Task created: ${data.id || 'ok'}`,
-          cssClass: 'system',
-        }));
-      } catch (e) {
-        el.appendChild(renderMsg({
-          body: `✗ Failed to create task: ${e.message}`,
-          cssClass: 'system',
-        }));
-      }
-      maybeScroll();
-      return;
-    }
-
-    // Handle /reports command
-    if (text === '/reports' || text === '/reports ') {
-      el.appendChild(renderMsg({
-        body: 'Loading recent reports…',
-        cssClass: 'system',
-      }));
-      maybeScroll();
-
-      try {
-        const data = await safeFetch(`${API}/reports`);
-        const reports = (data.reports || []).slice(0, 10);
-
-        if (reports.length === 0) {
-          el.appendChild(renderMsg({
-            body: 'No reports found.',
-            cssClass: 'system',
-          }));
-        } else {
-          for (const r of reports) {
-            el.appendChild(renderMsg({
-              agent: r.author || 'unknown',
-              body: r.title,
-              time: r.createdAt,
-              cssClass: 'feed',
-              typeLabel: 'report',
-            }));
-          }
-        }
-      } catch (e) {
-        el.appendChild(renderMsg({
-          body: `✗ Failed to load reports: ${e.message}`,
-          cssClass: 'system',
-        }));
-      }
-      maybeScroll();
-      return;
-    }
-
-    // Handle /board command
-    if (text === '/board' || text === '/board ') {
-      el.appendChild(renderMsg({
-        body: 'Loading board summary…',
-        cssClass: 'system',
-      }));
-      maybeScroll();
-
-      try {
-        const data = await safeFetch(`${API}/board/tasks`);
-        const tasks = data.tasks || [];
-        const open = tasks.filter(t => t.status === 'open').length;
-        const inProg = tasks.filter(t => t.status === 'in_progress').length;
-        const review = tasks.filter(t => t.status === 'in_review').length;
-        const blocked = tasks.filter(t => t.status === 'blocked').length;
-        const done = tasks.filter(t => t.status === 'done').length;
-
-        el.appendChild(renderMsg({
-          body: `Board: ${tasks.length} total — ${open} open, ${inProg} in progress, ${review} in review, ${blocked} blocked, ${done} done`,
-          cssClass: 'system',
-        }));
-
-        // Show top 5 non-done tasks by score
-        const topOpen = tasks
-          .filter(t => t.status !== 'done')
-          .sort((a, b) => (b.score || 0) - (a.score || 0))
-          .slice(0, 5);
-        for (const t of topOpen) {
-          el.appendChild(renderMsg({
-            body: `[${t.status}] ${t.title}`,
-            cssClass: 'feed',
-            typeLabel: t.status,
-          }));
-        }
-      } catch (e) {
-        el.appendChild(renderMsg({
-          body: `✗ Failed: ${e.message}`,
-          cssClass: 'system',
-        }));
-      }
-      maybeScroll();
-      return;
-    }
-
-    // Handle /help command
-    if (text === '/help') {
-      el.appendChild(renderMsg({
-        body: 'Commands:\n/task <title> — create a board task\n/board — show board summary\n/reports — show recent reports\n/help — this message\n\nAnything else posts to the work log.',
-        cssClass: 'system',
-      }));
-      maybeScroll();
-      return;
-    }
-
-    // Default: post to work log
-    el.appendChild(renderMsg({
-      agent: 'noah',
-      body: text,
-      time: new Date().toISOString(),
-      cssClass: 'self',
-    }));
-    maybeScroll();
-
-    try {
-      await safeFetch(`${API}/log`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, agent: 'noah' }),
-      });
-    } catch (e) {
-      el.appendChild(renderMsg({
-        body: `✗ Failed to post: ${e.message}`,
-        cssClass: 'system',
-      }));
-      maybeScroll();
-    }
-  }
-
-  // ─── Periodic refresh for new log entries ───
-  async function pollNewEntries() {
+  // ─── Poll for new log entries (SSE only covers feed events) ───
+  async function pollNewLogs() {
     if (!initialized) return;
     try {
       const data = await safeFetch(`${API}/log?last=2m`);
@@ -359,11 +394,11 @@
 
       let added = false;
       for (const entry of entries) {
-        const key = 'log:' + entry.timestamp + ':' + (entry.agent || '') + ':' + (entry.text || '').slice(0, 50);
-        if (seenIds.has(key)) continue;
-        seenIds.add(key);
+        const key = dedupKey('log', entry.agent, entry.text, entry.timestamp);
+        if (seenHashes.has(key)) continue;
+        markSeen(key);
 
-        // Don't show our own messages (already rendered optimistically)
+        // Skip own messages (rendered optimistically)
         if ((entry.agent || '').toLowerCase() === 'noah') continue;
 
         checkAutoScroll();
@@ -377,12 +412,191 @@
         added = true;
       }
       if (added) maybeScroll();
-    } catch (e) {
+    } catch {
       // Silent — don't spam errors on poll
     }
   }
 
-  // ─── Init ───
+  // ─── Commands ───
+
+  async function handleCommand(text) {
+    const el = messagesEl();
+    if (!el) return true;
+
+    // /help
+    if (text === '/help') {
+      appendSystem(
+        'Commands:\n' +
+        '  /task <title>  — create a board task\n' +
+        '  /board         — board summary + top tasks\n' +
+        '  /reports       — recent reports\n' +
+        '  /status        — fleet status (VMs, SSE, agents)\n' +
+        '  /help          — this message\n' +
+        '\nAnything else posts to the work log.'
+      );
+      return true;
+    }
+
+    // /task <title>
+    if (text.startsWith('/task ')) {
+      const title = text.slice(6).trim();
+      if (!title) { appendSystem('Usage: /task <title>'); return true; }
+
+      appendSelf(`/task ${title}`);
+
+      try {
+        const data = await safeFetch(`${API}/board/tasks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, createdBy: 'noah', tags: ['from-chat'] }),
+        });
+        appendSystem(`✓ Task created: ${data.id || data.title || 'ok'}`);
+      } catch (e) {
+        appendSystem(`✗ Failed to create task: ${e.message}`);
+      }
+      return true;
+    }
+
+    // /board
+    if (text === '/board' || text === '/board ') {
+      appendSelf('/board');
+      try {
+        const data = await safeFetch(`${API}/board/tasks`);
+        const tasks = data.tasks || [];
+        const counts = {};
+        for (const t of tasks) counts[t.status] = (counts[t.status] || 0) + 1;
+
+        appendSystem(
+          `Board: ${tasks.length} total — ` +
+          `${counts.open || 0} open, ${counts.in_progress || 0} in progress, ` +
+          `${counts.in_review || 0} in review, ${counts.blocked || 0} blocked, ` +
+          `${counts.done || 0} done`
+        );
+
+        const top = tasks
+          .filter(t => t.status !== 'done')
+          .sort((a, b) => (b.score || 0) - (a.score || 0))
+          .slice(0, 5);
+
+        for (const t of top) {
+          checkAutoScroll();
+          el.appendChild(renderMsg({
+            body: `[${t.status}] ${t.title}${t.assignee ? ` → @${t.assignee}` : ''}`,
+            agent: t.assignee || t.createdBy,
+            cssClass: 'feed',
+            typeLabel: t.status,
+          }));
+        }
+        maybeScroll();
+      } catch (e) {
+        appendSystem(`✗ ${e.message}`);
+      }
+      return true;
+    }
+
+    // /reports
+    if (text === '/reports' || text === '/reports ') {
+      appendSelf('/reports');
+      try {
+        const data = await safeFetch(`${API}/reports`);
+        const reports = (data.reports || []).slice(0, 10);
+        if (reports.length === 0) {
+          appendSystem('No reports found.');
+        } else {
+          for (const r of reports) {
+            checkAutoScroll();
+            el.appendChild(renderMsg({
+              agent: r.author || 'unknown',
+              body: r.title,
+              time: r.createdAt,
+              cssClass: 'feed',
+              typeLabel: 'report',
+            }));
+          }
+          maybeScroll();
+        }
+      } catch (e) {
+        appendSystem(`✗ ${e.message}`);
+      }
+      return true;
+    }
+
+    // /status — fleet status
+    if (text === '/status' || text === '/status ') {
+      appendSelf('/status');
+      const parts = [];
+
+      // SSE status
+      parts.push(`SSE: ${sseSource && sseSource.readyState === EventSource.OPEN ? '🟢 connected' : '🔴 disconnected'}`);
+      parts.push(`Retries: ${sseRetryCount}`);
+      parts.push(`Dedup cache: ${seenHashes.size} entries`);
+
+      // VMs
+      try {
+        const vmData = await safeFetch(`${API}/registry/vms`);
+        const vms = vmData.vms || [];
+        parts.push(`VMs: ${vms.length} registered`);
+        for (const vm of vms.slice(0, 5)) {
+          const staleMs = Date.now() - new Date(vm.lastSeen || vm.registeredAt).getTime();
+          const stale = staleMs > 120000 ? ' ⚠ stale' : '';
+          parts.push(`  ${vm.name || vm.id} [${vm.role}] seen ${timeAgo(vm.lastSeen || vm.registeredAt)}${stale}`);
+        }
+      } catch {
+        parts.push('VMs: failed to fetch');
+      }
+
+      // Usage
+      try {
+        const usage = await safeFetch(`${API}/usage/summary?range=24h`);
+        if (usage.totalCost != null) {
+          parts.push(`Cost (24h): $${Number(usage.totalCost).toFixed(4)}`);
+        }
+        if (usage.totalTokens != null) {
+          parts.push(`Tokens (24h): ${Number(usage.totalTokens).toLocaleString()}`);
+        }
+      } catch {}
+
+      appendSystem(parts.join('\n'));
+      return true;
+    }
+
+    return false; // not a command
+  }
+
+  // ─── Send message ───
+  async function sendMessage() {
+    const input = inputEl();
+    if (!input) return;
+
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = '';
+
+    // Handle commands
+    if (text.startsWith('/')) {
+      const handled = await handleCommand(text);
+      if (handled) return;
+    }
+
+    // Default: post to work log
+    appendSelf(text);
+
+    // Mark as seen so poll doesn't re-add
+    const selfKey = dedupKey('log', 'noah', text, '');
+    markSeen(selfKey);
+
+    try {
+      await safeFetch(`${API}/log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, agent: 'noah' }),
+      });
+    } catch (e) {
+      appendSystem(`✗ Failed to post: ${e.message}`);
+    }
+  }
+
+  // ─── Init: immediate, lazy history load ───
   function init() {
     if (initialized) return;
     initialized = true;
@@ -397,12 +611,12 @@
           sendMessage();
         }
       });
-      // Focus input on mobile for quick typing
-      // (delay to avoid interfering with tab switch animation)
-      setTimeout(() => input.focus(), 300);
+      // Delay focus to avoid interfering with tab switch
+      setTimeout(() => input.focus(), 200);
     }
 
     if (sendBtn) {
+      // Use touchend for faster mobile response, with click fallback
       sendBtn.addEventListener('click', (e) => {
         e.preventDefault();
         sendMessage();
@@ -414,10 +628,14 @@
       msgs.addEventListener('scroll', checkAutoScroll);
     }
 
+    // Lazy: load history without blocking UI
     loadHistory();
 
-    // Poll for new log entries every 15s (feed events come via SSE)
-    refreshTimer = setInterval(pollNewEntries, 15000);
+    // Start own SSE connection for feed events
+    startSSE();
+
+    // Poll for log entries every 12s (SSE only covers feed)
+    refreshTimer = setInterval(pollNewLogs, 12000);
   }
 
   // ─── Cleanup when leaving tab ───
@@ -426,6 +644,8 @@
       clearInterval(refreshTimer);
       refreshTimer = null;
     }
+    // Keep SSE alive even when not on chat tab — it's cheap
+    // and ensures we don't miss events
   };
 
   // ─── Tab activation hook ───
@@ -433,12 +653,20 @@
     if (!initialized) {
       init();
     } else {
-      // Re-entering chat tab — restart polling
+      // Re-entering: restart poll if stopped
       if (!refreshTimer) {
-        refreshTimer = setInterval(pollNewEntries, 15000);
+        refreshTimer = setInterval(pollNewLogs, 12000);
       }
-      // Scroll to bottom on re-entry
+      // Reconnect SSE if dead
+      if (!sseSource || sseSource.readyState === EventSource.CLOSED) {
+        startSSE();
+      }
       scrollToBottom();
+      // Re-focus input
+      setTimeout(() => {
+        const input = inputEl();
+        if (input) input.focus();
+      }, 200);
     }
   };
 
