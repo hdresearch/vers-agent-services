@@ -176,7 +176,7 @@ const server = serve({ fetch: app.fetch, port, hostname: "::" }, () => {
 // Graceful shutdown — let in-flight requests drain before exiting.
 // This is critical for zero-downtime deploys: Caddy retries during the brief
 // window between SIGTERM and the new process starting.
-function gracefulShutdown(signal: string) {
+async function gracefulShutdown(signal: string) {
   console.log(`\n${signal} received — shutting down gracefully...`);
   watchdogStore.stop();
   // Flush gossip store to prevent data loss from debounced writes
@@ -187,9 +187,14 @@ function gracefulShutdown(signal: string) {
   kbStore.flush();
   // Flush fleet-chat store
   fleetChatStore.flush();
-  // Stop loop runner timers
+  // Graceful loop shutdown — clear timers and wait for active ticks to drain
   if (loopRunnerStore.isRunning) {
-    try { loopRunnerStore.stop(); } catch {}
+    try {
+      await loopRunnerStore.shutdown();
+      console.log("Loop runner shut down cleanly.");
+    } catch (err) {
+      console.warn("Loop runner shutdown error:", err);
+    }
   }
   // Close contacts DB
   try { contactsStore.close(); } catch {}
