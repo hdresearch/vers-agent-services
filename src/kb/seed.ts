@@ -156,7 +156,7 @@ const seeds: CreateEntryInput[] = [
   // === FACTS ===
   {
     type: "fact",
-    content: "Infra VM ID: e0e2bf05-93fd-4a30-b4c6-4476b45beb16. Runs agent-services (port 3000), Caddy (HTTPS), Gitea (port 3001).",
+    content: "Infra VM ID: a9a83d7f-c092-404a-bf44-cf21b96a2170. Runs agent-services (port 3000), Caddy (HTTPS), Gitea (port 3001).",
     source: "infrastructure registry",
     tags: ["infra", "vm", "infrastructure"],
     confidence: 10,
