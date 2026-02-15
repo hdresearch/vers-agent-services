@@ -249,18 +249,42 @@ function buildTree() {
     modelMap[s.agent] = s.model;
   }
 
-  // Infer hierarchy from naming when parentAgent isn't in the data
-  // lt-* and worker-* are children of orchestrator (or the first non-lt agent)
+  // Infer hierarchy when parentAgent data is missing
   const allNames = Object.keys(agents);
   const hasAnyParent = Object.keys(parentMap).length > 0;
   if (!hasAnyParent && allNames.length > 1) {
-    // Find the root — prefer "orchestrator", else the agent with most tokens, else first non-lt
+    // Find the root — prefer "orchestrator", else the agent with most tokens
     const root = allNames.find(a => a === 'orchestrator')
-      || allNames.find(a => !a.startsWith('lt-') && !a.startsWith('worker-') && !a.startsWith('sub-'))
       || allNames.reduce((best, a) => (agents[a]?.tokens || 0) > (agents[best]?.tokens || 0) ? a : best, allNames[0]);
-    for (const name of allNames) {
-      if (name !== root && (name.startsWith('lt-') || name.startsWith('worker-') || name.startsWith('sub-'))) {
+
+    // Assign children: named prefixes (lt-*, worker-*, sub-*) OR
+    // all non-root agents when no naming convention is detected
+    const namedChildren = allNames.filter(a =>
+      a !== root && (a.startsWith('lt-') || a.startsWith('worker-') || a.startsWith('sub-'))
+    );
+
+    if (namedChildren.length > 0) {
+      // Use naming convention
+      for (const name of namedChildren) {
         parentMap[name] = root;
+      }
+    } else {
+      // No naming convention — create a tiered hierarchy based on cost/tokens
+      // Top agents (top 20% by cost) become direct children of root ("lieutenants")
+      // Remaining agents become children of the nearest lieutenant
+      const nonRoot = allNames.filter(a => a !== root)
+        .sort((a, b) => (agents[b]?.cost || 0) - (agents[a]?.cost || 0));
+
+      const ltCount = Math.max(1, Math.min(8, Math.ceil(nonRoot.length * 0.2)));
+      const lieutenants = nonRoot.slice(0, ltCount);
+      const workers = nonRoot.slice(ltCount);
+
+      for (const lt of lieutenants) {
+        parentMap[lt] = root;
+      }
+      // Distribute workers round-robin among lieutenants
+      for (let i = 0; i < workers.length; i++) {
+        parentMap[workers[i]] = lieutenants[i % lieutenants.length];
       }
     }
   }
@@ -412,6 +436,10 @@ function buildTree() {
 function layoutTree(roots, nodeIndex) {
   if (treeNodes.length === 0) return;
 
+  // Use sensible fallback dimensions if canvas isn't sized yet
+  const effectiveW = canvasW > 100 ? canvasW : 1200;
+  const effectiveH = canvasH > 100 ? canvasH : 700;
+
   // BFS to assign levels
   const levels = {};
   const queue = [];
@@ -437,6 +465,9 @@ function layoutTree(roots, nodeIndex) {
     if (levels[node.name] === undefined) levels[node.name] = 1;
   }
 
+  // Count max depth for spacing calculation
+  const maxLevel = Math.max(...Object.values(levels), 0);
+
   // Use a tree-aware layout: position children centered under their parent
   // First, count subtree widths for proper spacing
   function subtreeWidth(name) {
@@ -449,11 +480,15 @@ function layoutTree(roots, nodeIndex) {
     return Math.max(w, 1);
   }
 
-  const cx = canvasW / 2;
-  const cy = canvasH * 0.12;
-  const levelSpacing = Math.min(canvasH * 0.25, 160);
-  // Min horizontal spacing between leaf nodes
-  const minLeafSpacing = Math.max(90, canvasW / (treeNodes.length + 4));
+  const cx = effectiveW / 2;
+  const cy = effectiveH * 0.10;
+  // Adapt level spacing to fit the tree depth in the available height
+  const levelSpacing = maxLevel > 0
+    ? Math.min(160, (effectiveH * 0.70) / (maxLevel + 1))
+    : 160;
+  // Min horizontal spacing — scale down for large node counts
+  const totalLeaves = treeNodes.filter(n => n.children.length === 0).length || treeNodes.length;
+  const minLeafSpacing = Math.max(60, Math.min(120, (effectiveW * 0.9) / (totalLeaves + 2)));
 
   function positionSubtree(name, xCenter, level) {
     const node = nodeIndex[name];
@@ -485,7 +520,7 @@ function layoutTree(roots, nodeIndex) {
     positionSubtree(rootNodes[0], cx, 0);
   } else {
     const totalRootWidth = rootNodes.reduce((s, r) => s + subtreeWidth(r), 0);
-    const rootSpacing = Math.max(minLeafSpacing, canvasW * 0.8 / totalRootWidth);
+    const rootSpacing = Math.max(minLeafSpacing, effectiveW * 0.8 / totalRootWidth);
     let xStart = cx - (totalRootWidth * rootSpacing) / 2;
     for (const r of rootNodes) {
       const w = subtreeWidth(r) * rootSpacing;
@@ -497,8 +532,8 @@ function layoutTree(roots, nodeIndex) {
   // Orphan nodes (no parent, not a root) — position them at the bottom
   for (const node of treeNodes) {
     if (levels[node.name] === undefined || (node.x === 0 && node.y === 0)) {
-      node.x = cx + (Math.random() - 0.5) * canvasW * 0.4;
-      node.y = canvasH * 0.7 + (Math.random() - 0.5) * 40;
+      node.x = cx + (Math.random() - 0.5) * effectiveW * 0.4;
+      node.y = effectiveH * 0.7 + (Math.random() - 0.5) * 40;
       node.homeX = node.x;
       node.homeY = node.y;
     }
@@ -703,9 +738,11 @@ function tickForces() {
     node.x += node.vx;
     node.y += node.vy;
 
-    // Keep in bounds
-    node.x = Math.max(node.radius + 20, Math.min(canvasW - node.radius - 20, node.x));
-    node.y = Math.max(node.radius + 20, Math.min(canvasH - node.radius - 20, node.y));
+    // Keep in bounds (skip if canvas not sized yet)
+    if (canvasW > 100 && canvasH > 100) {
+      node.x = Math.max(node.radius + 20, Math.min(canvasW - node.radius - 20, node.x));
+      node.y = Math.max(node.radius + 20, Math.min(canvasH - node.radius - 20, node.y));
+    }
   }
 }
 
@@ -1561,16 +1598,25 @@ function resizeCanvases() {
   const treeContainer = treeCanvas.parentElement;
   const timeContainer = timelineCanvas.parentElement;
 
-  canvasW = treeContainer.clientWidth;
-  canvasH = treeContainer.clientHeight;
+  const newW = treeContainer.clientWidth;
+  const newH = treeContainer.clientHeight;
+
+  // If container has no dimensions yet (hidden tab), retry after a frame
+  if (newW < 10 || newH < 10) {
+    requestAnimationFrame(resizeCanvases);
+    return;
+  }
+
+  canvasW = newW;
+  canvasH = newH;
   treeCanvas.width = canvasW;
   treeCanvas.height = canvasH;
   treeCtx = treeCanvas.getContext('2d');
 
   const tw = timeContainer.clientWidth;
   const th = timeContainer.clientHeight;
-  timelineCanvas.width = tw;
-  timelineCanvas.height = th;
+  timelineCanvas.width = Math.max(tw, 10);
+  timelineCanvas.height = Math.max(th, 10);
   timelineCtx = timelineCanvas.getContext('2d');
 
   // DON'T re-layout on resize — just let force simulation adapt.
