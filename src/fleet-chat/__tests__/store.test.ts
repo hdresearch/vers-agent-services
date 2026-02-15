@@ -412,6 +412,186 @@ describe("FleetChatStore", () => {
     });
   });
 
+  // ── Bug fixes: trusted bypass, approve flow, sender alias ─────────
+  describe("trusted sender bypass (Bug #2 fix)", () => {
+    it("trusted sender with placeholder key bypasses sig verification", () => {
+      const store = makeStore();
+      const joseph: FleetIdentity = {
+        name: "joseph",
+        endpoint: "https://joseph.vm.vers.sh:3000",
+        publicKey: "joseph-placeholder-key",
+      };
+      store.addTrustedEndpoint(joseph);
+
+      // Send with a garbage signature — should still go through
+      const result = store.receiveInbound({
+        from: joseph,
+        to: LOCAL_FLEET,
+        type: "text",
+        content: "hey noah, it's joseph",
+        timestamp: new Date().toISOString(),
+        signature: "totally-not-a-real-signature",
+      });
+
+      expect(result.message).toBeTruthy();
+      expect(result.quarantined).toBeUndefined();
+      expect(result.message!.content).toBe("hey noah, it's joseph");
+      expect(result.message!.delivery).toBe("delivered");
+    });
+
+    it("untrusted sender with bad sig is still quarantined", () => {
+      const store = makeStore();
+      const stranger: FleetIdentity = {
+        name: "stranger",
+        endpoint: "https://stranger.vm.vers.sh:3000",
+        publicKey: "stranger-key",
+      };
+
+      const result = store.receiveInbound({
+        from: stranger,
+        to: LOCAL_FLEET,
+        type: "text",
+        content: "let me in",
+        timestamp: new Date().toISOString(),
+        signature: "bad-sig",
+      });
+
+      expect(result.quarantined).toBeTruthy();
+      expect(result.message).toBeUndefined();
+    });
+  });
+
+  describe("quarantine approve → channel creation (Bug #1 fix)", () => {
+    it("approving quarantined message creates channel and adds message", () => {
+      const store = makeStore();
+      const newFleet: FleetIdentity = {
+        name: "new-friend",
+        endpoint: "https://new-friend.vm.vers.sh:3000",
+        publicKey: "new-friend-placeholder-key",
+      };
+
+      // Message arrives from unknown sender → quarantined
+      const result = store.receiveInbound({
+        from: newFleet,
+        to: LOCAL_FLEET,
+        type: "text",
+        content: "hey, want to connect?",
+        timestamp: new Date().toISOString(),
+        signature: "some-sig",
+      });
+      expect(result.quarantined).toBeTruthy();
+      expect(store.quarantineCount).toBe(1);
+      expect(store.channelCount).toBe(0);
+
+      // Approve it
+      const msg = store.approveQuarantined(result.quarantined!.id);
+
+      // Message should be in a channel now
+      expect(msg.content).toBe("hey, want to connect?");
+      expect(msg.channelId).toBeTruthy();
+      expect(store.channelCount).toBe(1);
+      expect(store.quarantineCount).toBe(0);
+      expect(store.messageCount).toBe(1);
+
+      // Sender should be trusted
+      expect(store.isTrusted(newFleet.endpoint, newFleet.publicKey)).toBe(true);
+
+      // Channel messages should include the approved message
+      const messages = store.getMessages(msg.channelId);
+      expect(messages).toHaveLength(1);
+      expect(messages[0].content).toBe("hey, want to connect?");
+    });
+
+    it("approving multiple quarantined messages from same sender reuses channel", () => {
+      const store = makeStore();
+      const fleet: FleetIdentity = {
+        name: "multi-msg",
+        endpoint: "https://multi.vm.vers.sh:3000",
+        publicKey: "multi-placeholder-key",
+      };
+
+      const r1 = store.receiveInbound({
+        from: fleet,
+        to: LOCAL_FLEET,
+        type: "text",
+        content: "message 1",
+        timestamp: new Date().toISOString(),
+        signature: "sig1",
+      });
+      const r2 = store.receiveInbound({
+        from: fleet,
+        to: LOCAL_FLEET,
+        type: "text",
+        content: "message 2",
+        timestamp: new Date().toISOString(),
+        signature: "sig2",
+      });
+
+      expect(store.quarantineCount).toBe(2);
+
+      const msg1 = store.approveQuarantined(r1.quarantined!.id);
+      const msg2 = store.approveQuarantined(r2.quarantined!.id);
+
+      expect(msg1.channelId).toBe(msg2.channelId);
+      expect(store.channelCount).toBe(1);
+      expect(store.messageCount).toBe(2);
+      expect(store.quarantineCount).toBe(0);
+    });
+  });
+
+  describe("message format flexibility (Bug #3 fix)", () => {
+    it("accepts 'sender' field as alias for 'from'", () => {
+      const store = makeStore();
+      store.addTrustedEndpoint(REMOTE_FLEET);
+
+      const timestamp = new Date().toISOString();
+      const result = store.receiveInbound({
+        sender: REMOTE_FLEET,
+        to: LOCAL_FLEET,
+        type: "text",
+        content: "sent with sender field",
+        timestamp,
+        signature: "any-sig",
+      } as any);
+
+      expect(result.message).toBeTruthy();
+      expect(result.message!.content).toBe("sent with sender field");
+    });
+
+    it("prefers 'from' over 'sender' when both present", () => {
+      const store = makeStore();
+      store.addTrustedEndpoint(REMOTE_FLEET);
+
+      const otherFleet = { ...REMOTE_FLEET, name: "other-name" };
+      const timestamp = new Date().toISOString();
+      const result = store.receiveInbound({
+        from: REMOTE_FLEET,
+        sender: otherFleet,
+        to: LOCAL_FLEET,
+        type: "text",
+        content: "both fields",
+        timestamp,
+        signature: "any-sig",
+      } as any);
+
+      expect(result.message).toBeTruthy();
+      expect(result.message!.from.name).toBe("ty-fleet");
+    });
+
+    it("rejects message with neither 'from' nor 'sender'", () => {
+      const store = makeStore();
+      expect(() =>
+        store.receiveInbound({
+          to: LOCAL_FLEET,
+          type: "text",
+          content: "no sender",
+          timestamp: new Date().toISOString(),
+          signature: "sig",
+        } as any),
+      ).toThrow("from must be an object");
+    });
+  });
+
   // ── Crypto ───────────────────────────────────────────────────────────
   describe("crypto", () => {
     it("generates key pairs", () => {

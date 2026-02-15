@@ -282,7 +282,16 @@ fleetChatPublicRoutes.post("/inbox", async (c) => {
   }
 
   try {
-    const result = fleetChatStore.receiveInbound(body as any);
+    // Normalize sender field: accept both "from" and "sender"
+    const input = body as Record<string, unknown>;
+    if (!input.from && input.sender) {
+      input.from = input.sender;
+    }
+    // Normalize recipient field: accept both "to" and "recipient"
+    if (!input.to && input.recipient) {
+      input.to = input.recipient;
+    }
+    const result = fleetChatStore.receiveInbound(input as any);
 
     if (result.quarantined) {
       emit("fleet-chat", "fleet-chat.message.quarantined", {
