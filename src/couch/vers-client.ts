@@ -17,7 +17,9 @@ export class VersClient {
   ) {}
 
   private async request(method: string, path: string, body?: unknown): Promise<any> {
-    const res = await fetch(`${VERS_API_BASE}${path}`, {
+    const url = `${VERS_API_BASE}${path}`;
+    console.log(`[vers-client] ${method} ${url} body=${JSON.stringify(body)}`);
+    const res = await fetch(url, {
       method,
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
@@ -25,6 +27,7 @@ export class VersClient {
       },
       body: body ? JSON.stringify(body) : undefined,
     });
+    console.log(`[vers-client] Response: ${res.status} ${res.statusText}`);
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Vers API error ${res.status}: ${text}`);
@@ -60,6 +63,7 @@ export class VersClient {
     throw new Error(`VM ${vmId} did not reach running state within ${timeoutMs}ms`);
   }
 }
+
 
 
 

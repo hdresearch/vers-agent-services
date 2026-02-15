@@ -34,13 +34,10 @@ async function provisionGuestVM(guestId: string, guestName: string): Promise<voi
   try {
     // Spawn VM from golden commit
     const vm = await client.restoreFromCommit(goldenCommit);
-    emit("couch", "couch.provision.vm_created", { guestId, vmId: vm.vm_id });
-
-    // Wait for it to boot
-    await client.waitForRunning(vm.vm_id, 120_000);
-
-    // Activate the guest with the VM endpoint
     const endpoint = `https://${vm.vm_id}.vm.vers.sh`;
+
+    // Vers VMs from commits boot in ~2s — activate immediately
+    // The guest can poll /couch/status until SSH responds
     couchStore.activateGuest(guestId, vm.vm_id, endpoint);
 
     emit("couch", "couch.guest.activated", {
@@ -295,6 +292,8 @@ couchRoutes.put("/guests/:id/usage", async (c) => {
     throw e;
   }
 });
+
+
 
 
 
