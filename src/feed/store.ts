@@ -1,4 +1,6 @@
-import { ulid } from "ulid";
+import { monotonicFactory } from "ulid";
+
+const ulid = monotonicFactory();
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
 import { atomicWriteFileSync, recoverTmpFile } from "../utils/atomic-write.js";

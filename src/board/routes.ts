@@ -8,8 +8,9 @@ import {
   type TaskEffort,
   type AddArtifactInput,
 } from "./store.js";
+import { boardStore } from "./shared-store.js";
 
-export const store = new BoardStore();
+export const store = boardStore;
 
 export const boardRoutes = new Hono();
 
