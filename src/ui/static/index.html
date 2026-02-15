@@ -18,6 +18,7 @@
       <button class="tab" data-view="metrics">Metrics</button>
       <button class="tab" data-view="chat">Chat</button>
       <button class="tab" data-view="fleet">Fleet</button>
+      <button class="tab" data-view="knowledge">Knowledge</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -338,6 +339,72 @@
           <button class="fleet-action-btn" id="fleet-new-task" title="New Task">+ Task</button>
           <button class="fleet-action-btn" id="fleet-wake-agent" title="Wake Agent">⚡ Wake</button>
           <button class="fleet-action-btn" id="fleet-jump-chat" title="Jump to Chat">💬 Chat</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Knowledge Base View -->
+  <div class="view" id="view-knowledge">
+    <!-- Stats bar -->
+    <div class="kb-stats" id="kb-stats">
+      <div class="kb-stat">Total <span class="kb-stat-val" id="kb-stat-total">—</span></div>
+      <div class="kb-stat">Active <span class="kb-stat-val kb-stat-green" id="kb-stat-active">—</span></div>
+      <div class="kb-stat">Expired <span class="kb-stat-val kb-stat-red" id="kb-stat-expired">—</span></div>
+      <div class="kb-stat-sep"></div>
+      <div class="kb-stat">⚠️ Warnings <span class="kb-stat-val kb-stat-orange" id="kb-stat-warning">—</span></div>
+      <div class="kb-stat">📐 Conventions <span class="kb-stat-val kb-stat-blue" id="kb-stat-convention">—</span></div>
+      <div class="kb-stat">💡 Lessons <span class="kb-stat-val kb-stat-yellow" id="kb-stat-lesson">—</span></div>
+      <div class="kb-stat">📋 Context <span class="kb-stat-val kb-stat-purple" id="kb-stat-context">—</span></div>
+    </div>
+
+    <div class="kb-layout">
+      <!-- Session Briefing -->
+      <div class="kb-briefing-panel">
+        <div class="kb-panel-header">Session Briefing</div>
+        <div class="kb-briefing-body" id="kb-briefing">
+          <div class="empty">Loading briefing…</div>
+        </div>
+      </div>
+
+      <!-- Entries list + form -->
+      <div class="kb-entries-panel">
+        <div class="kb-panel-header">
+          Entries
+          <button class="kb-add-toggle" id="kb-add-toggle" title="Add entry">+ Add</button>
+        </div>
+
+        <!-- Add entry form (hidden by default) -->
+        <div class="kb-add-form" id="kb-add-form" style="display:none">
+          <select id="kb-add-type">
+            <option value="warning">⚠️ Warning</option>
+            <option value="convention">📐 Convention</option>
+            <option value="lesson">💡 Lesson</option>
+            <option value="context">📋 Context</option>
+          </select>
+          <textarea id="kb-add-content" placeholder="Entry content…" rows="3"></textarea>
+          <input type="text" id="kb-add-source" placeholder="Source (e.g. debugging session)">
+          <input type="text" id="kb-add-tags" placeholder="Tags (comma-separated)">
+          <div class="kb-add-row">
+            <label>Decay days: <input type="number" id="kb-add-decay" value="60" min="1" max="365" style="width:60px"></label>
+            <button class="kb-submit-btn" id="kb-submit-btn">Save Entry</button>
+          </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="kb-filters">
+          <select id="kb-type-filter">
+            <option value="">All types</option>
+            <option value="warning">⚠️ Warning</option>
+            <option value="convention">📐 Convention</option>
+            <option value="lesson">💡 Lesson</option>
+            <option value="context">📋 Context</option>
+          </select>
+          <input type="text" id="kb-search" placeholder="Search entries…">
+        </div>
+
+        <div class="kb-entries-list" id="kb-entries-list">
+          <div class="empty">Loading entries…</div>
         </div>
       </div>
     </div>
