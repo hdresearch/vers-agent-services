@@ -146,10 +146,10 @@ describe("FleetChatStore", () => {
 
   // ── Messages ─────────────────────────────────────────────────────────
   describe("messages", () => {
-    it("sends a message", () => {
+    it("sends a message", async () => {
       const store = makeStore();
       const ch = store.createChannel({ remoteFleet: REMOTE_FLEET });
-      const msg = store.sendMessage({ channelId: ch.id, content: "Hello fleet!" });
+      const msg = await store.sendMessage({ channelId: ch.id, content: "Hello fleet!" });
       expect(msg.id).toBeTruthy();
       expect(msg.content).toBe("Hello fleet!");
       expect(msg.type).toBe("text");
@@ -157,39 +157,39 @@ describe("FleetChatStore", () => {
       expect(msg.signature).toBeTruthy();
     });
 
-    it("supports different message types", () => {
+    it("supports different message types", async () => {
       const store = makeStore();
       const ch = store.createChannel({ remoteFleet: REMOTE_FLEET });
-      const msg = store.sendMessage({ channelId: ch.id, content: "task data", type: "task" });
+      const msg = await store.sendMessage({ channelId: ch.id, content: "task data", type: "task" });
       expect(msg.type).toBe("task");
     });
 
-    it("rejects invalid message type", () => {
+    it("rejects invalid message type", async () => {
       const store = makeStore();
       const ch = store.createChannel({ remoteFleet: REMOTE_FLEET });
-      expect(() => store.sendMessage({ channelId: ch.id, content: "hi", type: "invalid" as any })).toThrow();
+      await expect(store.sendMessage({ channelId: ch.id, content: "hi", type: "invalid" as any })).rejects.toThrow();
     });
 
-    it("rejects empty content", () => {
+    it("rejects empty content", async () => {
       const store = makeStore();
       const ch = store.createChannel({ remoteFleet: REMOTE_FLEET });
-      expect(() => store.sendMessage({ channelId: ch.id, content: "" })).toThrow("content is required");
+      await expect(store.sendMessage({ channelId: ch.id, content: "" })).rejects.toThrow("content is required");
     });
 
-    it("creates threads via replyTo", () => {
+    it("creates threads via replyTo", async () => {
       const store = makeStore();
       const ch = store.createChannel({ remoteFleet: REMOTE_FLEET });
-      const msg1 = store.sendMessage({ channelId: ch.id, content: "first" });
-      const msg2 = store.sendMessage({ channelId: ch.id, content: "reply", replyTo: msg1.id });
+      const msg1 = await store.sendMessage({ channelId: ch.id, content: "first" });
+      const msg2 = await store.sendMessage({ channelId: ch.id, content: "reply", replyTo: msg1.id });
       expect(msg2.threadId).toBe(msg1.threadId);
     });
 
-    it("gets messages with filtering", () => {
+    it("gets messages with filtering", async () => {
       const store = makeStore();
       const ch = store.createChannel({ remoteFleet: REMOTE_FLEET });
-      store.sendMessage({ channelId: ch.id, content: "msg 1" });
-      store.sendMessage({ channelId: ch.id, content: "msg 2" });
-      store.sendMessage({ channelId: ch.id, content: "msg 3" });
+      await store.sendMessage({ channelId: ch.id, content: "msg 1" });
+      await store.sendMessage({ channelId: ch.id, content: "msg 2" });
+      await store.sendMessage({ channelId: ch.id, content: "msg 3" });
 
       const all = store.getMessages(ch.id);
       expect(all).toHaveLength(3);
@@ -199,44 +199,44 @@ describe("FleetChatStore", () => {
       expect(limited[1].content).toBe("msg 3"); // Last 2
     });
 
-    it("filters by threadId", () => {
+    it("filters by threadId", async () => {
       const store = makeStore();
       const ch = store.createChannel({ remoteFleet: REMOTE_FLEET });
-      const msg1 = store.sendMessage({ channelId: ch.id, content: "thread 1" });
-      store.sendMessage({ channelId: ch.id, content: "standalone" });
-      store.sendMessage({ channelId: ch.id, content: "reply to 1", replyTo: msg1.id });
+      const msg1 = await store.sendMessage({ channelId: ch.id, content: "thread 1" });
+      await store.sendMessage({ channelId: ch.id, content: "standalone" });
+      await store.sendMessage({ channelId: ch.id, content: "reply to 1", replyTo: msg1.id });
 
       const threaded = store.getMessages(ch.id, { threadId: msg1.threadId });
       expect(threaded).toHaveLength(2);
     });
 
-    it("updates delivery status", () => {
+    it("updates delivery status", async () => {
       const store = makeStore();
       const ch = store.createChannel({ remoteFleet: REMOTE_FLEET });
-      const msg = store.sendMessage({ channelId: ch.id, content: "hello" });
+      const msg = await store.sendMessage({ channelId: ch.id, content: "hello" });
       const updated = store.updateDelivery(msg.id, "delivered");
       expect(updated.delivery).toBe("delivered");
       expect(updated.deliveredAt).toBeTruthy();
     });
 
-    it("rejects messages on closed channel", () => {
+    it("rejects messages on closed channel", async () => {
       const store = makeStore();
       const ch = store.createChannel({ remoteFleet: REMOTE_FLEET });
       store.updateChannelStatus(ch.id, "closed");
-      expect(() => store.sendMessage({ channelId: ch.id, content: "hello" })).toThrow("closed");
+      await expect(store.sendMessage({ channelId: ch.id, content: "hello" })).rejects.toThrow("closed");
     });
   });
 
   // ── Inbound (Public Inbox) ───────────────────────────────────────────
   describe("inbound", () => {
-    it("receives message from trusted sender", () => {
+    it("receives message from trusted sender", async () => {
       const store = makeStore();
       store.addTrustedEndpoint(REMOTE_FLEET);
 
       const timestamp = new Date().toISOString();
       const sig = signMessage("hello from ty", timestamp);
 
-      const result = store.receiveInbound({
+      const result = await store.receiveInbound({
         from: REMOTE_FLEET,
         to: LOCAL_FLEET,
         type: "text",
@@ -250,13 +250,13 @@ describe("FleetChatStore", () => {
       expect(result.message!.delivery).toBe("delivered");
     });
 
-    it("quarantines message from unknown sender", () => {
+    it("quarantines message from unknown sender", async () => {
       const store = makeStore();
 
       const timestamp = new Date().toISOString();
       const sig = signMessage("hello from stranger", timestamp);
 
-      const result = store.receiveInbound({
+      const result = await store.receiveInbound({
         from: UNKNOWN_FLEET,
         to: LOCAL_FLEET,
         type: "text",
@@ -270,7 +270,7 @@ describe("FleetChatStore", () => {
       expect(store.quarantineCount).toBe(1);
     });
 
-    it("deduplicates by message ID", () => {
+    it("deduplicates by message ID", async () => {
       const store = makeStore();
       store.addTrustedEndpoint(REMOTE_FLEET);
 
@@ -286,19 +286,19 @@ describe("FleetChatStore", () => {
         signature: sig,
       };
 
-      store.receiveInbound(inbound);
-      store.receiveInbound(inbound); // Duplicate
+      await store.receiveInbound(inbound);
+      await store.receiveInbound(inbound); // Duplicate
       expect(store.messageCount).toBe(1);
     });
 
-    it("auto-creates channel for trusted sender", () => {
+    it("auto-creates channel for trusted sender", async () => {
       const store = makeStore();
       store.addTrustedEndpoint(REMOTE_FLEET);
 
       const timestamp = new Date().toISOString();
       const sig = signMessage("hi", timestamp);
 
-      store.receiveInbound({
+      await store.receiveInbound({
         from: REMOTE_FLEET,
         to: LOCAL_FLEET,
         type: "text",
@@ -310,9 +310,9 @@ describe("FleetChatStore", () => {
       expect(store.channelCount).toBe(1);
     });
 
-    it("rejects messages without signature", () => {
+    it("rejects messages without signature", async () => {
       const store = makeStore();
-      expect(() =>
+      await expect(
         store.receiveInbound({
           from: REMOTE_FLEET,
           to: LOCAL_FLEET,
@@ -321,19 +321,19 @@ describe("FleetChatStore", () => {
           timestamp: new Date().toISOString(),
           signature: "",
         }),
-      ).toThrow("signature is required");
+      ).rejects.toThrow("signature is required");
     });
   });
 
   // ── Quarantine ───────────────────────────────────────────────────────
   describe("quarantine", () => {
-    it("approves quarantined message — adds sender to trusted", () => {
+    it("approves quarantined message — adds sender to trusted", async () => {
       const store = makeStore();
 
       const timestamp = new Date().toISOString();
       const sig = signMessage("let me in", timestamp);
 
-      const result = store.receiveInbound({
+      const result = await store.receiveInbound({
         from: UNKNOWN_FLEET,
         to: LOCAL_FLEET,
         type: "text",
@@ -344,19 +344,19 @@ describe("FleetChatStore", () => {
 
       expect(result.quarantined).toBeTruthy();
 
-      const msg = store.approveQuarantined(result.quarantined!.id);
+      const msg = await store.approveQuarantined(result.quarantined!.id);
       expect(msg.content).toBe("let me in");
       expect(store.isTrusted(UNKNOWN_FLEET.endpoint)).toBe(true);
       expect(store.quarantineCount).toBe(0);
     });
 
-    it("rejects quarantined message", () => {
+    it("rejects quarantined message", async () => {
       const store = makeStore();
 
       const timestamp = new Date().toISOString();
       const sig = signMessage("spam", timestamp);
 
-      const result = store.receiveInbound({
+      const result = await store.receiveInbound({
         from: UNKNOWN_FLEET,
         to: LOCAL_FLEET,
         type: "text",
@@ -372,7 +372,7 @@ describe("FleetChatStore", () => {
 
   // ── SSE Listeners ────────────────────────────────────────────────────
   describe("SSE listeners", () => {
-    it("notifies listeners on inbound message", () => {
+    it("notifies listeners on inbound message", async () => {
       const store = makeStore();
       store.addTrustedEndpoint(REMOTE_FLEET);
 
@@ -382,7 +382,7 @@ describe("FleetChatStore", () => {
       const timestamp = new Date().toISOString();
       const sig = signMessage("live!", timestamp);
 
-      store.receiveInbound({
+      await store.receiveInbound({
         from: REMOTE_FLEET,
         to: LOCAL_FLEET,
         type: "text",
@@ -399,7 +399,7 @@ describe("FleetChatStore", () => {
       // After removing, no more notifications
       const timestamp2 = new Date().toISOString();
       const sig2 = signMessage("second", timestamp2);
-      store.receiveInbound({
+      await store.receiveInbound({
         from: REMOTE_FLEET,
         to: LOCAL_FLEET,
         type: "text",
@@ -414,7 +414,7 @@ describe("FleetChatStore", () => {
 
   // ── Bug fixes: trusted bypass, approve flow, sender alias ─────────
   describe("trusted sender bypass (Bug #2 fix)", () => {
-    it("trusted sender with placeholder key bypasses sig verification", () => {
+    it("trusted sender with placeholder key bypasses sig verification", async () => {
       const store = makeStore();
       const joseph: FleetIdentity = {
         name: "joseph",
@@ -423,8 +423,8 @@ describe("FleetChatStore", () => {
       };
       store.addTrustedEndpoint(joseph);
 
-      // Send with a garbage signature — should still go through
-      const result = store.receiveInbound({
+      // Send with a garbage signature — should still go through (Phase 1 tolerance)
+      const result = await store.receiveInbound({
         from: joseph,
         to: LOCAL_FLEET,
         type: "text",
@@ -439,7 +439,7 @@ describe("FleetChatStore", () => {
       expect(result.message!.delivery).toBe("delivered");
     });
 
-    it("untrusted sender with bad sig is still quarantined", () => {
+    it("untrusted sender with bad sig is still quarantined", async () => {
       const store = makeStore();
       const stranger: FleetIdentity = {
         name: "stranger",
@@ -447,7 +447,7 @@ describe("FleetChatStore", () => {
         publicKey: "stranger-key",
       };
 
-      const result = store.receiveInbound({
+      const result = await store.receiveInbound({
         from: stranger,
         to: LOCAL_FLEET,
         type: "text",
@@ -462,7 +462,7 @@ describe("FleetChatStore", () => {
   });
 
   describe("quarantine approve → channel creation (Bug #1 fix)", () => {
-    it("approving quarantined message creates channel and adds message", () => {
+    it("approving quarantined message creates channel and adds message", async () => {
       const store = makeStore();
       const newFleet: FleetIdentity = {
         name: "new-friend",
@@ -471,7 +471,7 @@ describe("FleetChatStore", () => {
       };
 
       // Message arrives from unknown sender → quarantined
-      const result = store.receiveInbound({
+      const result = await store.receiveInbound({
         from: newFleet,
         to: LOCAL_FLEET,
         type: "text",
@@ -484,7 +484,7 @@ describe("FleetChatStore", () => {
       expect(store.channelCount).toBe(0);
 
       // Approve it
-      const msg = store.approveQuarantined(result.quarantined!.id);
+      const msg = await store.approveQuarantined(result.quarantined!.id);
 
       // Message should be in a channel now
       expect(msg.content).toBe("hey, want to connect?");
@@ -502,7 +502,7 @@ describe("FleetChatStore", () => {
       expect(messages[0].content).toBe("hey, want to connect?");
     });
 
-    it("approving multiple quarantined messages from same sender reuses channel", () => {
+    it("approving multiple quarantined messages from same sender reuses channel", async () => {
       const store = makeStore();
       const fleet: FleetIdentity = {
         name: "multi-msg",
@@ -510,7 +510,7 @@ describe("FleetChatStore", () => {
         publicKey: "multi-placeholder-key",
       };
 
-      const r1 = store.receiveInbound({
+      const r1 = await store.receiveInbound({
         from: fleet,
         to: LOCAL_FLEET,
         type: "text",
@@ -518,7 +518,7 @@ describe("FleetChatStore", () => {
         timestamp: new Date().toISOString(),
         signature: "sig1",
       });
-      const r2 = store.receiveInbound({
+      const r2 = await store.receiveInbound({
         from: fleet,
         to: LOCAL_FLEET,
         type: "text",
@@ -529,8 +529,8 @@ describe("FleetChatStore", () => {
 
       expect(store.quarantineCount).toBe(2);
 
-      const msg1 = store.approveQuarantined(r1.quarantined!.id);
-      const msg2 = store.approveQuarantined(r2.quarantined!.id);
+      const msg1 = await store.approveQuarantined(r1.quarantined!.id);
+      const msg2 = await store.approveQuarantined(r2.quarantined!.id);
 
       expect(msg1.channelId).toBe(msg2.channelId);
       expect(store.channelCount).toBe(1);
@@ -540,12 +540,12 @@ describe("FleetChatStore", () => {
   });
 
   describe("message format flexibility (Bug #3 fix)", () => {
-    it("accepts 'sender' field as alias for 'from'", () => {
+    it("accepts 'sender' field as alias for 'from'", async () => {
       const store = makeStore();
       store.addTrustedEndpoint(REMOTE_FLEET);
 
       const timestamp = new Date().toISOString();
-      const result = store.receiveInbound({
+      const result = await store.receiveInbound({
         sender: REMOTE_FLEET,
         to: LOCAL_FLEET,
         type: "text",
@@ -558,13 +558,13 @@ describe("FleetChatStore", () => {
       expect(result.message!.content).toBe("sent with sender field");
     });
 
-    it("prefers 'from' over 'sender' when both present", () => {
+    it("prefers 'from' over 'sender' when both present", async () => {
       const store = makeStore();
       store.addTrustedEndpoint(REMOTE_FLEET);
 
       const otherFleet = { ...REMOTE_FLEET, name: "other-name" };
       const timestamp = new Date().toISOString();
-      const result = store.receiveInbound({
+      const result = await store.receiveInbound({
         from: REMOTE_FLEET,
         sender: otherFleet,
         to: LOCAL_FLEET,
@@ -578,9 +578,9 @@ describe("FleetChatStore", () => {
       expect(result.message!.from.name).toBe("ty-fleet");
     });
 
-    it("rejects message with neither 'from' nor 'sender'", () => {
+    it("rejects message with neither 'from' nor 'sender'", async () => {
       const store = makeStore();
-      expect(() =>
+      await expect(
         store.receiveInbound({
           to: LOCAL_FLEET,
           type: "text",
@@ -588,12 +588,93 @@ describe("FleetChatStore", () => {
           timestamp: new Date().toISOString(),
           signature: "sig",
         } as any),
-      ).toThrow("from must be an object");
+      ).rejects.toThrow("from must be an object");
     });
   });
 
-  // ── Crypto ───────────────────────────────────────────────────────────
-  describe("crypto", () => {
+  // ── Signature Verification (new crypto) ──────────────────────────────
+  describe("signature verification on inbound", () => {
+    it("quarantines trusted sender with invalid Ed25519 signature", async () => {
+      const { execSync } = await import("node:child_process");
+      const { readFileSync } = await import("node:fs");
+      const { signContent } = await import("../crypto.js");
+
+      // Generate a key pair for the test
+      const keyPath = `/tmp/fleet-sig-test-${Date.now()}`;
+      execSync(`ssh-keygen -t ed25519 -f ${keyPath} -N "" -C "sig-test" -q`);
+      const pubKey = readFileSync(`${keyPath}.pub`, "utf-8").trim();
+
+      const store = makeStore();
+      const trustedFleet: FleetIdentity = {
+        name: "sig-test-fleet",
+        endpoint: "https://sig-test.vm.vers.sh:3000",
+        publicKey: pubKey,
+      };
+      store.addTrustedEndpoint(trustedFleet);
+
+      // Sign content with the key
+      const content = "verified message";
+      const sig = await signContent(content, keyPath);
+
+      // Valid signature should work
+      const result = await store.receiveInbound({
+        from: trustedFleet,
+        to: LOCAL_FLEET,
+        type: "text",
+        content,
+        timestamp: new Date().toISOString(),
+        signature: sig,
+      });
+      expect(result.message).toBeTruthy();
+      expect(result.message!.content).toBe("verified message");
+
+      // Invalid Ed25519 sig (64 bytes but wrong) should be quarantined
+      const fakeSig = Buffer.alloc(64, 0).toString("base64");
+      const result2 = await store.receiveInbound({
+        from: trustedFleet,
+        to: LOCAL_FLEET,
+        type: "text",
+        content: "tampered",
+        timestamp: new Date().toISOString(),
+        signature: fakeSig,
+      });
+      expect(result2.quarantined).toBeTruthy();
+      expect(result2.quarantined!.reason).toContain("Invalid Ed25519 signature");
+
+      execSync(`rm -f ${keyPath} ${keyPath}.pub`);
+    });
+
+    it("with requireSignatures, rejects unsigned from trusted", async () => {
+      const store = new FleetChatStore(
+        `/tmp/fleet-chat-test-${Date.now()}.json`,
+        undefined,
+        { requireSignatures: true },
+      );
+      store.setLocalIdentity(LOCAL_FLEET);
+
+      const trustedFleet: FleetIdentity = {
+        name: "requires-sig",
+        endpoint: "https://requires-sig.vm.vers.sh:3000",
+        publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIECLWJulrdIzkLMbSt3n3fopUC5vMm2kEH9vQVQhSDEB test",
+      };
+      store.addTrustedEndpoint(trustedFleet);
+
+      // Non-Ed25519 (not 64 bytes) signature should be rejected
+      const result = await store.receiveInbound({
+        from: trustedFleet,
+        to: LOCAL_FLEET,
+        type: "text",
+        content: "no real sig",
+        timestamp: new Date().toISOString(),
+        signature: "hash-based-placeholder",
+      });
+      expect(result.quarantined).toBeTruthy();
+      expect(result.quarantined!.reason).toContain("Missing Ed25519 signature");
+    });
+  });
+
+  // ── Crypto (legacy) ─────────────────────────────────────────────────
+  describe("crypto (legacy helpers)", () => {
     it("generates key pairs", () => {
       const { publicKey, privateKey } = generateKeyPair();
       expect(publicKey).toContain("PUBLIC KEY");

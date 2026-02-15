@@ -30,7 +30,7 @@ import { gossipRoutes, gossipStore } from "./gossip/routes.js";
 import { loopRoutes, loopStore as loopRunnerStore } from "./loop/routes.js";
 import { routerRoutes } from "./router/routes.js";
 import { couchRoutes, couchPublicRoutes, couchStore } from "./couch/routes.js";
-import { fleetChatRoutes, fleetChatPublicRoutes } from "./fleet-chat/routes.js";
+import { fleetChatRoutes, fleetChatPublicRoutes, fleetChatStore } from "./fleet-chat/routes.js";
 import { kbRoutes, kbStore } from "./kb/routes.js";
 import { daemonRoutes, daemonEngine, daemonStore } from "./daemon/routes.js";
 
@@ -85,6 +85,7 @@ app.use("/fleet-chat/trusted/*", bearerAuth());
 app.use("/fleet-chat/trusted", bearerAuth());
 app.use("/fleet-chat/quarantine/*", bearerAuth());
 app.use("/fleet-chat/quarantine", bearerAuth());
+app.use("/fleet-chat/send", bearerAuth());
 app.use("/kb/*", bearerAuth());
 app.use("/daemon/*", bearerAuth());
 
@@ -172,6 +173,8 @@ function gracefulShutdown(signal: string) {
   couchStore.flush();
   // Flush KB store
   kbStore.flush();
+  // Flush fleet-chat store
+  fleetChatStore.flush();
   // Stop loop runner timers
   if (loopRunnerStore.isRunning) {
     try { loopRunnerStore.stop(); } catch {}

@@ -3,10 +3,11 @@ import { readFileSync, existsSync } from "node:fs";
 import { atomicWriteFileSync, recoverTmpFile } from "../utils/atomic-write.js";
 import { ValidationError, NotFoundError } from "../errors.js";
 import { createHash, createSign, createVerify, generateKeyPairSync } from "node:crypto";
+import { signContent, verifyContent, isRealSignature, decryptContent } from "./crypto.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-export type MessageType = "text" | "task" | "seed" | "announcement" | "ack" | "system";
+export type MessageType = "text" | "task" | "seed" | "announcement" | "ack" | "system" | "encrypted";
 export type DeliveryStatus = "pending" | "delivered" | "read" | "failed";
 export type ChannelStatus = "active" | "archived" | "closed";
 
@@ -153,7 +154,7 @@ export function generateKeyPair(): { publicKey: string; privateKey: string } {
 
 // ── Validation ─────────────────────────────────────────────────────────────
 
-const VALID_MESSAGE_TYPES: Set<string> = new Set(["text", "task", "seed", "announcement", "ack", "system"]);
+const VALID_MESSAGE_TYPES: Set<string> = new Set(["text", "task", "seed", "announcement", "ack", "system", "encrypted"]);
 const VALID_CHANNEL_STATUSES: Set<string> = new Set(["active", "archived", "closed"]);
 const MAX_CONTENT_LENGTH = 64 * 1024; // 64KB per message
 
@@ -181,11 +182,19 @@ export class FleetChatStore {
   private filePath: string;
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
   private privateKey?: string;
+  private privateKeyPath?: string;
+  private requireSignatures: boolean;
   private sseListeners: Set<(msg: ChatMessage) => void> = new Set();
 
-  constructor(filePath = "data/fleet-chat.json", privateKey?: string) {
+  constructor(
+    filePath = "data/fleet-chat.json",
+    privateKey?: string,
+    opts?: { privateKeyPath?: string; requireSignatures?: boolean },
+  ) {
     this.filePath = filePath;
     this.privateKey = privateKey;
+    this.privateKeyPath = opts?.privateKeyPath;
+    this.requireSignatures = opts?.requireSignatures ?? (process.env.REQUIRE_SIGNATURES === "true");
     this.load();
   }
 
@@ -230,6 +239,18 @@ export class FleetChatStore {
 
   setPrivateKey(key: string): void {
     this.privateKey = key;
+  }
+
+  setPrivateKeyPath(path: string): void {
+    this.privateKeyPath = path;
+  }
+
+  getPrivateKeyPath(): string | undefined {
+    return this.privateKeyPath;
+  }
+
+  setRequireSignatures(require: boolean): void {
+    this.requireSignatures = require;
   }
 
   // ── Trusted Endpoints (simple contacts substitute) ───────────────────────
@@ -355,7 +376,7 @@ export class FleetChatStore {
 
   // ── Messages ─────────────────────────────────────────────────────────────
 
-  sendMessage(input: SendMessageInput): ChatMessage {
+  async sendMessage(input: SendMessageInput): Promise<ChatMessage> {
     const channel = this.getChannel(input.channelId);
     if (channel.status !== "active") {
       throw new ValidationError(`Channel ${input.channelId} is ${channel.status}, cannot send messages`);
@@ -381,7 +402,15 @@ export class FleetChatStore {
     }
 
     const now = new Date().toISOString();
-    const sig = signMessage(input.content, now, this.privateKey);
+    const content = input.content.trim();
+
+    // Sign with real Ed25519 if privateKeyPath is available, else fallback
+    let sig: string;
+    if (this.privateKeyPath) {
+      sig = await signContent(content, this.privateKeyPath);
+    } else {
+      sig = signMessage(content, now, this.privateKey);
+    }
 
     const msg: ChatMessage = {
       id: ulid(),
@@ -390,7 +419,7 @@ export class FleetChatStore {
       from: { ...channel.localFleet },
       to: { ...channel.remoteFleet },
       type,
-      content: input.content.trim(),
+      content,
       timestamp: now,
       signature: sig,
       delivery: "pending",
@@ -450,7 +479,7 @@ export class FleetChatStore {
    * Verifies the sender against trusted endpoints.
    * Unknown senders go to quarantine.
    */
-  receiveInbound(inbound: InboundMessage): { message?: ChatMessage; quarantined?: QuarantinedMessage } {
+  async receiveInbound(inbound: InboundMessage): Promise<{ message?: ChatMessage; quarantined?: QuarantinedMessage }> {
     // Accept both "from" and "sender" field names for compatibility
     const rawFrom = inbound.from || (inbound as any).sender;
     const rawTo = inbound.to || (inbound as any).recipient;
@@ -488,12 +517,40 @@ export class FleetChatStore {
       return { quarantined };
     }
 
-    // Trusted senders bypass signature verification entirely.
-    // This allows placeholder keys during development — the trust list
-    // is the source of truth, not cryptographic signatures.
-    // For untrusted senders (shouldn't reach here), we'd still verify.
-    // In the future, real Ed25519 verification can be added as a
-    // defense-in-depth layer even for trusted senders.
+    // ── Signature verification for trusted senders ─────────────────────
+    const sig = inbound.signature;
+    const hasRealSig = sig && isRealSignature(sig);
+
+    if (hasRealSig) {
+      // Verify Ed25519 signature against sender's public key
+      const valid = verifyContent(inbound.content, sig, from.publicKey);
+      if (!valid) {
+        // Invalid signature → quarantine regardless of trust
+        const quarantined: QuarantinedMessage = {
+          id: ulid(),
+          rawMessage: inbound,
+          reason: `Invalid Ed25519 signature from trusted sender: ${from.name}`,
+          receivedAt: new Date().toISOString(),
+          reviewed: false,
+        };
+        this.data.quarantine.push(quarantined);
+        this.scheduleSave();
+        return { quarantined };
+      }
+    } else if (this.requireSignatures) {
+      // Phase 2: require signatures from trusted senders
+      const quarantined: QuarantinedMessage = {
+        id: ulid(),
+        rawMessage: inbound,
+        reason: `Missing Ed25519 signature from trusted sender: ${from.name} (signatures required)`,
+        receivedAt: new Date().toISOString(),
+        reviewed: false,
+      };
+      this.data.quarantine.push(quarantined);
+      this.scheduleSave();
+      return { quarantined };
+    }
+    // Phase 1: accept unsigned messages from trusted senders
 
     // Find or create channel for this sender
     let channel = this.findChannelByRemote(from.endpoint, from.publicKey);
@@ -516,20 +573,45 @@ export class FleetChatStore {
     }
 
     const now = new Date().toISOString();
+
+    // ── Decrypt encrypted messages ────────────────────────────────────
+    let finalContent = inbound.content.trim();
+    let finalType: MessageType = type;
+
+    if (type === "encrypted" && this.privateKeyPath) {
+      try {
+        finalContent = await decryptContent(inbound.content.trim(), this.privateKeyPath);
+        // After decryption, store as text (readable in the channel)
+        finalType = "text";
+      } catch (err) {
+        // Decryption failed — quarantine
+        const quarantined: QuarantinedMessage = {
+          id: ulid(),
+          rawMessage: inbound,
+          reason: `Decryption failed: ${(err as Error).message}`,
+          receivedAt: now,
+          reviewed: false,
+        };
+        this.data.quarantine.push(quarantined);
+        this.scheduleSave();
+        return { quarantined };
+      }
+    }
+
     const msg: ChatMessage = {
       id: inbound.id || ulid(),
       channelId: channel.id,
       threadId,
       from,
       to,
-      type,
-      content: inbound.content.trim(),
+      type: finalType,
+      content: finalContent,
       timestamp: inbound.timestamp,
       signature: inbound.signature,
       delivery: "delivered",
       deliveredAt: now,
       replyTo: inbound.replyTo,
-      metadata: inbound.metadata,
+      metadata: { ...inbound.metadata, ...(type === "encrypted" ? { wasEncrypted: true } : {}) },
     };
 
     // Deduplicate — if we already have this message ID, skip
@@ -558,7 +640,7 @@ export class FleetChatStore {
     return [...this.data.quarantine].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
   }
 
-  approveQuarantined(quarantineId: string): ChatMessage {
+  async approveQuarantined(quarantineId: string): Promise<ChatMessage> {
     const idx = this.data.quarantine.findIndex((q) => q.id === quarantineId);
     if (idx === -1) throw new NotFoundError(`Quarantined message ${quarantineId} not found`);
 
