@@ -25,11 +25,12 @@
     return `${Math.floor(ms / 86400000)}d`;
   }
 
-  function esc(s) {
+  // Delegate to shared utils (see utils.js)
+  const esc = window._utils ? window._utils.esc : function (s) {
     const d = document.createElement('div');
     d.textContent = s || '';
     return d.innerHTML;
-  }
+  };
 
   async function fapi(path, opts = {}) {
     const timeout = opts.timeout || 8000;
