@@ -175,6 +175,13 @@ uiRoutes.get("/ui/", async (c) => {
   return c.html(file.content);
 });
 
+// Fleet Command dashboard
+uiRoutes.get("/ui/command", async (c) => {
+  const file = await getStaticFile("command.html");
+  if (!file) return c.text("Command dashboard not found", 500);
+  return c.html(file.content);
+});
+
 // Report viewer
 uiRoutes.get("/ui/report/:id", async (c) => {
   const file = await getStaticFile("report.html");
