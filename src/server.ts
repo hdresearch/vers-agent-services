@@ -41,6 +41,7 @@ import { docsRoutes, docsPublicRoutes, docsStore } from "./docs/routes.js";
 import { chatRoutes, chatStore } from "./chat/routes.js";
 import { aegisRoutes, aegisStore } from "./aegis/routes.js";
 import { deployRoutes } from "./deploy/routes.js";
+import { backupRoutes, backupScheduler } from "./backup/routes.js";
 
 const app = new Hono();
 
@@ -133,6 +134,7 @@ app.use("/gossip/*", bearerAuth());
 app.use("/loop/*", bearerAuth());
 app.use("/aegis/*", bearerAuth());
 app.use("/deploy/*", bearerAuth());
+app.use("/backup/*", bearerAuth());
 
 // Rate limiting for write endpoints (applied after auth)
 app.post("/feed/events", rateLimit({ windowMs: 60_000, maxRequests: 60 }));
@@ -168,6 +170,7 @@ app.route("/notifications", notificationRoutes);
 app.route("/docs", docsRoutes);
 app.route("/aegis", aegisRoutes);
 app.route("/deploy", deployRoutes);
+app.route("/backup", backupRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
@@ -196,6 +199,10 @@ const server = serve({ fetch: app.fetch, port, hostname: "::" }, () => {
   // Auto-start zombie watchdog
   watchdogStore.start();
   console.log(`watchdog started — checking every 2min for zombie agents`);
+
+  // Auto-start backup scheduler (every 4 hours by default)
+  backupScheduler.start();
+  console.log("backup scheduler started — snapshots every 4h, retain 24");
 
   // Auto-register persistent VMs (infra, gitea, minio) and start heartbeat loop.
   // This ensures they survive TTL purging without manual intervention.
@@ -233,6 +240,8 @@ async function gracefulShutdown(signal: string) {
   try { chatStore.close(); } catch {}
   // Close aegis DB
   try { aegisStore.close(); } catch {}
+  // Stop backup scheduler
+  try { backupScheduler.stop(); } catch {}
   // Stop daemon event loop
   if (daemonEngine.isRunning) {
     try { daemonEngine.stop(); } catch {}
