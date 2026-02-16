@@ -1,3 +1,17 @@
+/**
+ * Monolith server — the original single-process mode.
+ *
+ * This file is the backward-compatible entrypoint. It runs ALL services
+ * in one process on one port. Set MONOLITH=true (or just run this file)
+ * to use monolith mode.
+ *
+ * For microservices mode, use the separate entrypoints:
+ *   src/gateway/main.ts    — port 3000 (public gateway)
+ *   src/core-api/main.ts   — port 3001
+ *   src/fleet-api/main.ts  — port 3002
+ *   src/autonomy-api/main.ts — port 3003
+ */
+
 import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { serve } from "@hono/node-server";
