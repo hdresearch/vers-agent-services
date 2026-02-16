@@ -1,5 +1,4 @@
-import { describe, it, before, after } from "node:test";
-import assert from "node:assert/strict";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Hono } from "hono";
 import { RouterStore } from "../router/store.js";
 import { rmSync, existsSync } from "node:fs";
@@ -18,12 +17,12 @@ function cleanup() {
 describe("RouterStore", () => {
   let store: RouterStore;
 
-  before(() => {
+  beforeAll(() => {
     cleanup();
     store = new RouterStore(TEST_DB);
   });
 
-  after(() => {
+  afterAll(() => {
     store.close();
     cleanup();
   });
@@ -31,31 +30,31 @@ describe("RouterStore", () => {
   describe("providers", () => {
     it("seeds default providers", () => {
       const providers = store.getAllProviders();
-      assert.ok(providers.length >= 2);
-      assert.ok(providers.find((p) => p.name === "anthropic"));
-      assert.ok(providers.find((p) => p.name === "openai"));
+      expect(providers.length).toBeGreaterThanOrEqual(2);
+      expect(providers.find((p) => p.name === "anthropic")).toBeTruthy();
+      expect(providers.find((p) => p.name === "openai")).toBeTruthy();
     });
 
     it("resolves claude models to anthropic", () => {
       const provider = store.resolveProvider("claude-sonnet-4-20250514");
-      assert.ok(provider);
-      assert.equal(provider.name, "anthropic");
+      expect(provider).toBeTruthy();
+      expect(provider!.name).toBe("anthropic");
     });
 
     it("resolves gpt models to openai", () => {
       const provider = store.resolveProvider("gpt-4o");
-      assert.ok(provider);
-      assert.equal(provider.name, "openai");
+      expect(provider).toBeTruthy();
+      expect(provider!.name).toBe("openai");
     });
 
     it("resolves o1/o3/o4 models to openai", () => {
-      assert.equal(store.resolveProvider("o1-preview")?.name, "openai");
-      assert.equal(store.resolveProvider("o3-mini")?.name, "openai");
-      assert.equal(store.resolveProvider("o4-mini")?.name, "openai");
+      expect(store.resolveProvider("o1-preview")?.name).toBe("openai");
+      expect(store.resolveProvider("o3-mini")?.name).toBe("openai");
+      expect(store.resolveProvider("o4-mini")?.name).toBe("openai");
     });
 
     it("returns null for unknown models", () => {
-      assert.equal(store.resolveProvider("llama-70b"), null);
+      expect(store.resolveProvider("llama-70b")).toBeNull();
     });
 
     it("allows adding custom providers", () => {
@@ -67,9 +66,9 @@ describe("RouterStore", () => {
       });
 
       const provider = store.resolveProvider("llama-70b");
-      assert.ok(provider);
-      assert.equal(provider.name, "custom");
-      assert.equal(provider.baseUrl, "https://my-llm.example.com");
+      expect(provider).toBeTruthy();
+      expect(provider!.name).toBe("custom");
+      expect(provider!.baseUrl).toBe("https://my-llm.example.com");
     });
 
     it("updates existing providers", () => {
@@ -81,8 +80,8 @@ describe("RouterStore", () => {
       });
 
       const provider = store.getProvider("anthropic");
-      assert.ok(provider);
-      assert.equal(provider.baseUrl, "https://custom-anthropic-proxy.example.com");
+      expect(provider).toBeTruthy();
+      expect(provider!.baseUrl).toBe("https://custom-anthropic-proxy.example.com");
 
       // Restore original
       store.setProvider({
@@ -98,8 +97,8 @@ describe("RouterStore", () => {
   describe("rate limits", () => {
     it("returns defaults for unknown agents", () => {
       const limit = store.getRateLimit("unknown-agent");
-      assert.equal(limit.requestsPerMinute, 60);
-      assert.equal(limit.tokensPerMinute, 1_000_000);
+      expect(limit.requestsPerMinute).toBe(60);
+      expect(limit.tokensPerMinute).toBe(1_000_000);
     });
 
     it("allows setting custom rate limits", () => {
@@ -110,8 +109,8 @@ describe("RouterStore", () => {
       });
 
       const limit = store.getRateLimit("heavy-agent");
-      assert.equal(limit.requestsPerMinute, 10);
-      assert.equal(limit.tokensPerMinute, 100_000);
+      expect(limit.requestsPerMinute).toBe(10);
+      expect(limit.tokensPerMinute).toBe(100_000);
     });
   });
 
@@ -142,19 +141,19 @@ describe("RouterStore", () => {
       });
 
       const stats = store.getRequestStats("1h");
-      assert.equal(stats.totalRequests, 2);
-      assert.equal(stats.totalInputTokens, 3000);
-      assert.equal(stats.totalOutputTokens, 1300);
-      assert.equal(stats.byAgent["agent-1"].requests, 1);
-      assert.equal(stats.byAgent["agent-2"].requests, 1);
-      assert.equal(stats.byModel["claude-sonnet-4-20250514"].requests, 1);
-      assert.equal(stats.byModel["gpt-4o"].requests, 1);
+      expect(stats.totalRequests).toBe(2);
+      expect(stats.totalInputTokens).toBe(3000);
+      expect(stats.totalOutputTokens).toBe(1300);
+      expect(stats.byAgent["agent-1"].requests).toBe(1);
+      expect(stats.byAgent["agent-2"].requests).toBe(1);
+      expect(stats.byModel["claude-sonnet-4-20250514"].requests).toBe(1);
+      expect(stats.byModel["gpt-4o"].requests).toBe(1);
     });
 
     it("prunes old logs", () => {
       // pruneOldLogs(-1) sets cutoff in the future, deleting everything
       const pruned = store.pruneOldLogs(-1);
-      assert.ok(pruned >= 2);
+      expect(pruned).toBeGreaterThanOrEqual(2);
     });
   });
 });
@@ -166,13 +165,13 @@ describe("Router Routes (integration)", () => {
     app.route("/v1", routerRoutes);
 
     const res = await app.request("/v1/health");
-    assert.equal(res.status, 200);
+    expect(res.status).toBe(200);
 
     const body = await res.json();
-    assert.ok(body.status);
-    assert.ok(body.providers);
-    assert.ok(body.providers.anthropic);
-    assert.ok(body.providers.openai);
+    expect(body.status).toBeTruthy();
+    expect(body.providers).toBeTruthy();
+    expect(body.providers.anthropic).toBeTruthy();
+    expect(body.providers.openai).toBeTruthy();
   });
 
   it("rejects requests without model", async () => {
@@ -186,9 +185,9 @@ describe("Router Routes (integration)", () => {
       body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
     });
 
-    assert.equal(res.status, 400);
+    expect(res.status).toBe(400);
     const body = await res.json();
-    assert.ok(body.error.message.includes("model is required"));
+    expect(body.error.message).toContain("model is required");
   });
 
   it("rejects requests with unknown model", async () => {
@@ -202,9 +201,9 @@ describe("Router Routes (integration)", () => {
       body: JSON.stringify({ model: "llama-70b", messages: [{ role: "user", content: "hi" }] }),
     });
 
-    assert.equal(res.status, 400);
+    expect(res.status).toBe(400);
     const body = await res.json();
-    assert.ok(body.error.message.includes("No provider configured"));
+    expect(body.error.message).toContain("No provider configured");
   });
 
   it("rejects invalid JSON", async () => {
@@ -218,7 +217,7 @@ describe("Router Routes (integration)", () => {
       body: "not json",
     });
 
-    assert.equal(res.status, 400);
+    expect(res.status).toBe(400);
   });
 
   it("lists providers", async () => {
@@ -227,10 +226,10 @@ describe("Router Routes (integration)", () => {
     app.route("/v1", routerRoutes);
 
     const res = await app.request("/v1/providers");
-    assert.equal(res.status, 200);
+    expect(res.status).toBe(200);
 
     const body = await res.json();
-    assert.ok(body.providers.length >= 2);
+    expect(body.providers.length).toBeGreaterThanOrEqual(2);
   });
 
   it("returns stats", async () => {
@@ -239,12 +238,12 @@ describe("Router Routes (integration)", () => {
     app.route("/v1", routerRoutes);
 
     const res = await app.request("/v1/stats");
-    assert.equal(res.status, 200);
+    expect(res.status).toBe(200);
 
     const body = await res.json();
-    assert.ok("totalRequests" in body);
-    assert.ok("byAgent" in body);
-    assert.ok("byModel" in body);
+    expect("totalRequests" in body).toBe(true);
+    expect("byAgent" in body).toBe(true);
+    expect("byModel" in body).toBe(true);
   });
 
   it("messages endpoint rejects without model", async () => {
@@ -258,6 +257,6 @@ describe("Router Routes (integration)", () => {
       body: JSON.stringify({ messages: [{ role: "user", content: "hi" }] }),
     });
 
-    assert.equal(res.status, 400);
+    expect(res.status).toBe(400);
   });
 });

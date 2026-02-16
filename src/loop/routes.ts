@@ -82,9 +82,11 @@ loopRoutes.get("/status", (c) => {
 });
 
 // POST /start — Start the loop
-loopRoutes.post("/start", (c) => {
+loopRoutes.post("/start", async (c) => {
   try {
     const status = loopStore.start();
+    // Wait for initial ticks to complete so /runs is immediately populated
+    await loopStore.waitForActiveTicks();
     emit("loop", "loop.started", { roles: status.roles.filter((r) => r.enabled).map((r) => r.name) }, "loop-runner");
     return c.json(status);
   } catch (err) {

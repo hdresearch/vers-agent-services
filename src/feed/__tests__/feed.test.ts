@@ -397,3 +397,28 @@ describe("Feed Service", () => {
     });
   });
 });
+
+// --- Route Alias Tests ---
+
+describe("Feed Route Aliases", () => {
+  it("GET /events/stream returns SSE stream (alias for /stream)", async () => {
+    const res = await req("/events/stream");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+    // Publish an event and verify it arrives through the alias
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+
+    feedStore.publish({
+      agent: "alias-test",
+      type: "task_started",
+      summary: "Test via events/stream alias",
+    });
+
+    const { value } = await reader.read();
+    const text = decoder.decode(value);
+    expect(text).toContain("alias-test");
+    reader.cancel();
+  });
+});

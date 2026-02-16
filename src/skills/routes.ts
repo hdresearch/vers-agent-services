@@ -185,6 +185,19 @@ skillsRoutes.get("/stream", (c) => {
   const sinceId = c.req.query("since");
 
   return streamSSE(c, async (stream) => {
+    // Track replayed event IDs to deduplicate (subscribe before replay prevents gaps)
+    const replayedIds = new Set<string>();
+
+    // Subscribe FIRST to avoid missing events between replay and subscribe
+    const unsubSkills = skillStore.subscribe((event: ChangeEvent) => {
+      if (replayedIds.has(event.id)) return; // Skip if already replayed
+      stream.writeSSE({ data: JSON.stringify(event) }).catch(() => {});
+    });
+    const unsubExtensions = extensionStore.subscribe((event: ChangeEvent) => {
+      if (replayedIds.has(event.id)) return; // Skip if already replayed
+      stream.writeSSE({ data: JSON.stringify(event) }).catch(() => {});
+    });
+
     // Replay events since a ULID if provided
     if (sinceId) {
       const missedSkills = skillStore.eventsSince(sinceId);
@@ -193,17 +206,10 @@ skillsRoutes.get("/stream", (c) => {
         a.id.localeCompare(b.id),
       );
       for (const event of all) {
+        replayedIds.add(event.id);
         await stream.writeSSE({ data: JSON.stringify(event) });
       }
     }
-
-    // Subscribe to new events from both stores
-    const unsubSkills = skillStore.subscribe((event: ChangeEvent) => {
-      stream.writeSSE({ data: JSON.stringify(event) }).catch(() => {});
-    });
-    const unsubExtensions = extensionStore.subscribe((event: ChangeEvent) => {
-      stream.writeSSE({ data: JSON.stringify(event) }).catch(() => {});
-    });
 
     // Heartbeat every 15s
     const heartbeat = setInterval(() => {

@@ -42,6 +42,9 @@ feedRoutes.post("/events", async (c) => {
   return c.json(event, 201);
 });
 
+// GET /events/stream — SSE route alias (must be before /events/:id to avoid matching as :id)
+feedRoutes.get("/events/stream", handleSSEStream);
+
 // GET /events — List events with optional filters
 feedRoutes.get("/events", (c) => {
   const agent = c.req.query("agent");
@@ -85,8 +88,8 @@ feedRoutes.get("/stats", (c) => {
   return c.json(feedStore.stats());
 });
 
-// GET /stream — SSE stream of real-time events
-feedRoutes.get("/stream", (c) => {
+// SSE stream handler — shared between /stream and /events/stream
+function handleSSEStream(c: any) {
   const agent = c.req.query("agent");
   const sinceId = c.req.query("since");
   const streamExclude = c.req.query("exclude");
@@ -95,6 +98,13 @@ feedRoutes.get("/stream", (c) => {
     : null;
 
   return streamSSE(c, async (stream) => {
+    // Subscribe FIRST to avoid missing events between replay and subscribe
+    const unsubscribe = feedStore.subscribe((event: FeedEvent) => {
+      if (agent && event.agent !== agent) return;
+      if (streamExcludeSet && streamExcludeSet.has(event.type)) return;
+      stream.writeSSE({ data: JSON.stringify(event) }).catch(() => {});
+    });
+
     // Replay events since a ULID if provided (for reconnection)
     if (sinceId) {
       const missed = feedStore.eventsSince(sinceId, agent);
@@ -103,13 +113,6 @@ feedRoutes.get("/stream", (c) => {
         await stream.writeSSE({ data: JSON.stringify(event) });
       }
     }
-
-    // Subscribe to new events
-    const unsubscribe = feedStore.subscribe((event: FeedEvent) => {
-      if (agent && event.agent !== agent) return;
-      if (streamExcludeSet && streamExcludeSet.has(event.type)) return;
-      stream.writeSSE({ data: JSON.stringify(event) }).catch(() => {});
-    });
 
     // Heartbeat every 15s
     const heartbeat = setInterval(() => {
@@ -130,4 +133,7 @@ feedRoutes.get("/stream", (c) => {
     unsubscribe();
     clearInterval(heartbeat);
   });
-});
+}
+
+// GET /stream — SSE stream of real-time events
+feedRoutes.get("/stream", handleSSEStream);
