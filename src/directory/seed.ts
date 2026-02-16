@@ -5,7 +5,7 @@
  * Or called automatically on first boot if the directory is empty.
  */
 
-import type { DirectoryStore, CreatePersonInput } from "./store.js";
+import type { DirectoryStore, CreatePersonInput, AddPublicKeyInput } from "./store.js";
 
 const SEED_PEOPLE: CreatePersonInput[] = [
   {
@@ -17,6 +17,7 @@ const SEED_PEOPLE: CreatePersonInput[] = [
     firstContact: "2026-01-01T00:00:00.000Z",
     tags: ["vers", "fleet-operator", "founder"],
     projects: ["vers", "noah-fleet", "agent-services"],
+    github: "nsluss",
     createdBy: "borges",
     notes: [
       {
@@ -211,6 +212,33 @@ export function seedDirectory(store: DirectoryStore): number {
   if (joseph && ben) {
     store.addRelationship(joseph.id, ben.id, "Associated — 'ben says hi' came from Joseph's fleet.");
     store.addRelationship(ben.id, joseph.id, "Associated with joseph-fleet.");
+  }
+
+  // Seed public keys for people we know keys for
+  if (noah) {
+    // Noah's GitHub keys (discovered from github.com/nsluss.keys)
+    store.addPublicKey(noah.id, {
+      type: "ssh-rsa",
+      key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCG84cK+rFO7O5fIBgUGuIi+JlvM+Qk7MIcq29GhN2Fh0qDvDa+CzxdVLfCXWSQ4ac7qaSR+vh1yWD2SNFL5lBMHwM7v7uXCDHWDt28TGwpsDlJFtpzS8jTdIBWmSvj5EANMjGl3iYHXcvoyES+OthUtw4UnRMdjbG8Aa2BN6ZJqQVxS3mjlZfV02gKiEwWT+uZkYSHED6XhRvnu8MJMHt8OrAmhTelu3RGNHdQV5YcaFWQQZP22mhqJz5QBUUWTuQ3S2QIM8v0jo0KfmIsR+/WogaFame1sroJCK+CzBpCKC8RWdWMp/8FBkR1vTMmqeUfuFTSlheEq8HCmbyRdMe8yt9FCUw8sO1pBaCuNnPqsVaAUtUD12E5jBUIIGY64p9NBsGe1z74RuweJziVdWQkz683I8kTKA4NNFtum5/Ma1qTA9Q6+CRi/TLEqQEcMuhyNvviQ+T0q/vUaCV3ZVrhen8iqXx3NxiT+SvZbtAIp2nSZXB51DCIO7HuVhZIskE=",
+      label: "github",
+      discoveredFrom: "github/nsluss",
+    });
+    store.addPublicKey(noah.id, {
+      type: "ssh-ed25519",
+      key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPpNz28CLJA9DUwKVFCxLi2pUWs6+P55DnNB4zEH5q0s",
+      label: "github",
+      discoveredFrom: "github/nsluss",
+    });
+  }
+
+  if (joseph) {
+    // Joseph's fleet identity key
+    store.addPublicKey(joseph.id, {
+      type: "ssh-ed25519",
+      key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAGvI0cLzTp4XrHHbbH4wR+083yCX+CxJM6GwjbUZzUb joseph-fleet",
+      label: "fleet identity",
+      discoveredFrom: "fleet/joseph-fleet",
+    });
   }
 
   return created.length;

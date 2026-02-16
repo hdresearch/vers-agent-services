@@ -24,6 +24,26 @@ export interface FleetIdentity {
   channelId?: string;
 }
 
+export type PublicKeyType = "ssh-ed25519" | "ssh-rsa" | "age" | "gpg" | "other";
+
+export interface PublicKey {
+  id: string;
+  type: PublicKeyType;
+  key: string;
+  fingerprint?: string;
+  label?: string;
+  discoveredFrom?: string;
+  addedAt: string;
+}
+
+export interface AddPublicKeyInput {
+  type: PublicKeyType;
+  key: string;
+  fingerprint?: string;
+  label?: string;
+  discoveredFrom?: string;
+}
+
 export interface Person {
   id: string;
   name: string;
@@ -38,6 +58,7 @@ export interface Person {
 
   // What we know
   notes: Note[];
+  publicKeys: PublicKey[];
 
   // Links to other systems
   fleetIdentity?: FleetIdentity;
@@ -239,6 +260,21 @@ export class DirectoryStore {
 
       CREATE INDEX IF NOT EXISTS idx_relationships_fromId ON relationships(fromId);
       CREATE INDEX IF NOT EXISTS idx_relationships_toId ON relationships(toId);
+
+      CREATE TABLE IF NOT EXISTS public_keys (
+        id TEXT PRIMARY KEY,
+        personId TEXT NOT NULL,
+        type TEXT NOT NULL,
+        key TEXT NOT NULL,
+        fingerprint TEXT,
+        label TEXT,
+        discoveredFrom TEXT,
+        addedAt TEXT NOT NULL,
+        FOREIGN KEY (personId) REFERENCES people(id) ON DELETE CASCADE,
+        UNIQUE(personId, key)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_public_keys_personId ON public_keys(personId);
     `);
   }
 
@@ -513,9 +549,101 @@ export class DirectoryStore {
     return { nodes, edges };
   }
 
+  // ── Public Keys ───────────────────────────────────────────────────────────
+
+  addPublicKey(personId: string, input: AddPublicKeyInput): PublicKey {
+    const row = this.db.prepare("SELECT id FROM people WHERE id = ?").get(personId) as any;
+    if (!row) throw new NotFoundError(`Person ${personId} not found`);
+
+    if (!input.key?.trim()) {
+      throw new ValidationError("key is required");
+    }
+    if (!input.type?.trim()) {
+      throw new ValidationError("type is required");
+    }
+
+    const VALID_KEY_TYPES = new Set(["ssh-ed25519", "ssh-rsa", "age", "gpg", "other"]);
+    if (!VALID_KEY_TYPES.has(input.type)) {
+      throw new ValidationError(`Invalid key type. Must be one of: ${[...VALID_KEY_TYPES].join(", ")}`);
+    }
+
+    const now = new Date().toISOString();
+    const id = ulid();
+
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO public_keys (id, personId, type, key, fingerprint, label, discoveredFrom, addedAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          id,
+          personId,
+          input.type,
+          input.key.trim(),
+          input.fingerprint?.trim() || null,
+          input.label?.trim() || null,
+          input.discoveredFrom?.trim() || null,
+          now
+        );
+    } catch (err: any) {
+      if (err.message?.includes("UNIQUE")) {
+        // Key already exists for this person, return existing
+        const existing = this.db
+          .prepare("SELECT * FROM public_keys WHERE personId = ? AND key = ?")
+          .get(personId, input.key.trim()) as any;
+        if (existing) {
+          return {
+            id: existing.id,
+            type: existing.type as PublicKeyType,
+            key: existing.key,
+            fingerprint: existing.fingerprint || undefined,
+            label: existing.label || undefined,
+            discoveredFrom: existing.discoveredFrom || undefined,
+            addedAt: existing.addedAt,
+          };
+        }
+      }
+      throw err;
+    }
+
+    this.db.prepare("UPDATE people SET updatedAt = ? WHERE id = ?").run(now, personId);
+
+    return {
+      id,
+      type: input.type,
+      key: input.key.trim(),
+      fingerprint: input.fingerprint?.trim() || undefined,
+      label: input.label?.trim() || undefined,
+      discoveredFrom: input.discoveredFrom?.trim() || undefined,
+      addedAt: now,
+    };
+  }
+
+  getPublicKeys(personId: string): PublicKey[] {
+    const rows = this.db
+      .prepare("SELECT * FROM public_keys WHERE personId = ? ORDER BY addedAt ASC")
+      .all(personId) as any[];
+    return rows.map((r) => ({
+      id: r.id,
+      type: r.type as PublicKeyType,
+      key: r.key,
+      fingerprint: r.fingerprint || undefined,
+      label: r.label || undefined,
+      discoveredFrom: r.discoveredFrom || undefined,
+      addedAt: r.addedAt,
+    }));
+  }
+
+  removePublicKey(personId: string, keyId: string): void {
+    const result = this.db.prepare("DELETE FROM public_keys WHERE id = ? AND personId = ?").run(keyId, personId);
+    if (result.changes === 0) throw new NotFoundError(`Key ${keyId} not found for person ${personId}`);
+  }
+
   // ── Helpers ──────────────────────────────────────────────────────────────
 
   private rowToPerson(row: any, notes: Note[]): Person {
+    const publicKeys = this.getPublicKeys(row.id);
     return {
       id: row.id,
       name: row.name,
@@ -526,6 +654,7 @@ export class DirectoryStore {
       firstContact: row.firstContact,
       lastContact: row.lastContact,
       notes,
+      publicKeys,
       fleetIdentity: row.fleetIdentity ? JSON.parse(row.fleetIdentity) : undefined,
       github: row.github || undefined,
       email: row.email || undefined,

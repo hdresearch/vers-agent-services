@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { DirectoryStore, ValidationError, NotFoundError } from "../directory/store.js";
+import { DirectoryStore } from "../directory/store.js";
+import { ValidationError, NotFoundError } from "../errors.js";
 import { seedDirectory } from "../directory/seed.js";
 
 function tmpDb(): string {
@@ -310,6 +311,85 @@ describe("DirectoryStore", () => {
     });
   });
 
+  describe("publicKeys", () => {
+    it("adds a public key to a person", () => {
+      const person = store.create({ name: "Alice" });
+      const key = store.addPublicKey(person.id, {
+        type: "ssh-ed25519",
+        key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAATEST alice@test",
+        label: "personal",
+        discoveredFrom: "manual",
+      });
+
+      expect(key.id).toBeTruthy();
+      expect(key.type).toBe("ssh-ed25519");
+      expect(key.key).toContain("ssh-ed25519");
+      expect(key.label).toBe("personal");
+    });
+
+    it("includes publicKeys in person object", () => {
+      const person = store.create({ name: "Alice" });
+      store.addPublicKey(person.id, {
+        type: "ssh-ed25519",
+        key: "ssh-ed25519 AAAA... alice@test",
+      });
+      store.addPublicKey(person.id, {
+        type: "ssh-rsa",
+        key: "ssh-rsa BBBB... alice@test",
+      });
+
+      const fetched = store.get(person.id);
+      expect(fetched.publicKeys).toHaveLength(2);
+      expect(fetched.publicKeys[0].type).toBe("ssh-ed25519");
+      expect(fetched.publicKeys[1].type).toBe("ssh-rsa");
+    });
+
+    it("deduplicates keys by (personId, key)", () => {
+      const person = store.create({ name: "Alice" });
+      const k1 = store.addPublicKey(person.id, {
+        type: "ssh-ed25519",
+        key: "ssh-ed25519 AAAA... alice@test",
+      });
+      const k2 = store.addPublicKey(person.id, {
+        type: "ssh-ed25519",
+        key: "ssh-ed25519 AAAA... alice@test",
+      });
+
+      expect(k2.id).toBe(k1.id); // same key returned
+      expect(store.getPublicKeys(person.id)).toHaveLength(1);
+    });
+
+    it("removes a public key", () => {
+      const person = store.create({ name: "Alice" });
+      const key = store.addPublicKey(person.id, {
+        type: "ssh-ed25519",
+        key: "ssh-ed25519 AAAA... alice@test",
+      });
+      store.removePublicKey(person.id, key.id);
+      expect(store.getPublicKeys(person.id)).toHaveLength(0);
+    });
+
+    it("rejects invalid key type", () => {
+      const person = store.create({ name: "Alice" });
+      expect(() =>
+        store.addPublicKey(person.id, { type: "invalid" as any, key: "test" })
+      ).toThrow(ValidationError);
+    });
+
+    it("rejects empty key", () => {
+      const person = store.create({ name: "Alice" });
+      expect(() =>
+        store.addPublicKey(person.id, { type: "ssh-ed25519", key: "" })
+      ).toThrow(ValidationError);
+    });
+
+    it("throws NotFoundError for missing person", () => {
+      expect(() =>
+        store.addPublicKey("nonexistent", { type: "ssh-ed25519", key: "test" })
+      ).toThrow(NotFoundError);
+    });
+  });
+
   describe("count", () => {
     it("counts people", () => {
       expect(store.count).toBe(0);
@@ -351,6 +431,16 @@ describe("seedDirectory", () => {
     // Noah->Joseph relationship should exist
     const noahJoseph = graph.edges.find((e) => e.from === noah!.id && e.to === joseph!.id);
     expect(noahJoseph).toBeDefined();
+
+    // Verify public keys were seeded
+    expect(noah!.publicKeys.length).toBeGreaterThanOrEqual(2);
+    expect(noah!.publicKeys.some((k) => k.type === "ssh-rsa")).toBe(true);
+    expect(noah!.publicKeys.some((k) => k.type === "ssh-ed25519")).toBe(true);
+    expect(noah!.publicKeys.every((k) => k.discoveredFrom?.startsWith("github/"))).toBe(true);
+
+    expect(joseph!.publicKeys.length).toBeGreaterThanOrEqual(1);
+    expect(joseph!.publicKeys[0].type).toBe("ssh-ed25519");
+    expect(joseph!.publicKeys[0].discoveredFrom).toBe("fleet/joseph-fleet");
 
     store.close();
   });

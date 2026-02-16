@@ -1,12 +1,35 @@
 import { Hono } from "hono";
 import { DirectoryStore } from "./store.js";
-import type { CreatePersonInput, UpdatePersonInput, AddNoteInput, PersonType, TrustLevel } from "./store.js";
+import type { CreatePersonInput, UpdatePersonInput, AddNoteInput, AddPublicKeyInput, PersonType, TrustLevel } from "./store.js";
 import { ValidationError, NotFoundError } from "../errors.js";
 import { emit } from "../events/emit.js";
 
 // ── Store singleton ────────────────────────────────────────────────────────
 
 export const directoryStore = new DirectoryStore();
+
+// ── Key discovery helpers ──────────────────────────────────────────────────
+
+function detectKeyType(keyLine: string): "ssh-ed25519" | "ssh-rsa" | "other" {
+  if (keyLine.startsWith("ssh-ed25519")) return "ssh-ed25519";
+  if (keyLine.startsWith("ssh-rsa")) return "ssh-rsa";
+  return "other";
+}
+
+async function discoverGitHubKeys(username: string): Promise<Array<{ type: "ssh-ed25519" | "ssh-rsa" | "other"; key: string }>> {
+  try {
+    const resp = await fetch(`https://github.com/${username}.keys`, { signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) return [];
+    const text = await resp.text();
+    return text
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0)
+      .map((key) => ({ type: detectKeyType(key), key }));
+  } catch {
+    return [];
+  }
+}
 
 // ── Routes ─────────────────────────────────────────────────────────────────
 
@@ -131,6 +154,113 @@ directoryRoutes.delete("/people/:id", (c) => {
     directoryStore.delete(c.req.param("id"));
     emit("directory", "directory.person.deleted", { personId: c.req.param("id") });
     return c.json({ deleted: true });
+  } catch (err) {
+    if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
+    throw err;
+  }
+});
+
+// GET /directory/people/:id/keys — List public keys
+directoryRoutes.get("/people/:id/keys", (c) => {
+  try {
+    const keys = directoryStore.getPublicKeys(c.req.param("id"));
+    return c.json({ keys, count: keys.length });
+  } catch (err) {
+    if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
+    throw err;
+  }
+});
+
+// POST /directory/people/:id/keys — Add a public key
+directoryRoutes.post("/people/:id/keys", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  try {
+    const key = directoryStore.addPublicKey(c.req.param("id"), body as AddPublicKeyInput);
+    emit("directory", "directory.key.added", {
+      personId: c.req.param("id"),
+      keyId: key.id,
+      type: key.type,
+    });
+    return c.json(key, 201);
+  } catch (err) {
+    if (err instanceof ValidationError) return c.json({ error: err.message }, 400);
+    if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
+    throw err;
+  }
+});
+
+// DELETE /directory/people/:id/keys/:keyId — Remove a public key
+directoryRoutes.delete("/people/:id/keys/:keyId", (c) => {
+  try {
+    directoryStore.removePublicKey(c.req.param("id"), c.req.param("keyId"));
+    return c.json({ deleted: true });
+  } catch (err) {
+    if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
+    throw err;
+  }
+});
+
+// POST /directory/people/:id/discover-keys — Auto-discover public keys
+directoryRoutes.post("/people/:id/discover-keys", async (c) => {
+  try {
+    const person = directoryStore.get(c.req.param("id"));
+    const discovered: Array<{ source: string; type: string; key: string }> = [];
+
+    // Discover from GitHub
+    if (person.github) {
+      const ghKeys = await discoverGitHubKeys(person.github);
+      for (const gk of ghKeys) {
+        try {
+          directoryStore.addPublicKey(person.id, {
+            type: gk.type,
+            key: gk.key,
+            label: "github",
+            discoveredFrom: `github/${person.github}`,
+          });
+          discovered.push({ source: `github/${person.github}`, type: gk.type, key: gk.key });
+        } catch {
+          // duplicate key, skip
+        }
+      }
+    }
+
+    // Import from fleet identity
+    if (person.fleetIdentity?.publicKey) {
+      const fk = person.fleetIdentity.publicKey;
+      const fkType = detectKeyType(fk);
+      try {
+        directoryStore.addPublicKey(person.id, {
+          type: fkType,
+          key: fk,
+          label: "fleet identity",
+          discoveredFrom: `fleet/${person.fleetIdentity.name}`,
+        });
+        discovered.push({ source: `fleet/${person.fleetIdentity.name}`, type: fkType, key: fk });
+      } catch {
+        // duplicate key, skip
+      }
+    }
+
+    if (discovered.length > 0) {
+      emit("directory", "directory.keys.discovered", {
+        personId: person.id,
+        name: person.name,
+        count: discovered.length,
+      });
+    }
+
+    return c.json({
+      personId: person.id,
+      name: person.name,
+      discovered,
+      totalKeys: directoryStore.getPublicKeys(person.id).length,
+    });
   } catch (err) {
     if (err instanceof NotFoundError) return c.json({ error: err.message }, 404);
     throw err;
