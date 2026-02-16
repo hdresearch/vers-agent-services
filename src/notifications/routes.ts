@@ -8,6 +8,7 @@ interface Notification {
   body: string;
   priority: string; // critical, high, normal, low
   source: string;
+  url?: string; // deep-link into dashboard (e.g. #review?id=xxx)
   read: boolean;
   dismissed: boolean;
   createdAt: string;
@@ -27,6 +28,7 @@ class NotificationStore {
       body: notif.body || "",
       priority: notif.priority || "normal",
       source: notif.source || "unknown",
+      url: notif.url,
       read: false,
       dismissed: false,
       createdAt: new Date().toISOString(),

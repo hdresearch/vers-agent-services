@@ -987,9 +987,9 @@ function switchView(viewName) {
 
   // Start/stop polling based on view
   if (viewName === 'review') {
-    startReviewRefresh();
+    if (typeof window._rqInit === 'function') window._rqInit();
   } else {
-    stopReviewRefresh();
+    if (typeof window._rqDestroy === 'function') window._rqDestroy();
   }
   if (viewName === 'log') {
     startLogRefresh();
@@ -1179,6 +1179,16 @@ async function init() {
     loadRegistry(),
     loadReports(),
   ]);
+
+  // Hash routing — support deep links like #review, #board, etc.
+  const hash = window.location.hash.replace('#', '').split('?')[0];
+  if (hash && document.getElementById(`view-${hash}`)) {
+    switchView(hash);
+  }
+  window.addEventListener('hashchange', () => {
+    const h = window.location.hash.replace('#', '').split('?')[0];
+    if (h && document.getElementById(`view-${h}`)) switchView(h);
+  });
 
   // SSE starts non-blocking AFTER initial data is painted
   startSSE();

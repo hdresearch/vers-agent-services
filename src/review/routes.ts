@@ -5,6 +5,8 @@ import {
   type AddArtifactInput,
 } from "../board/store.js";
 import { boardStore as store } from "../board/shared-store.js";
+import { reportsStore } from "../reports/shared-store.js";
+import { notificationStore } from "../notifications/routes.js";
 
 export const reviewRoutes = new Hono();
 
@@ -249,4 +251,212 @@ reviewRoutes.get("/queue", (c) => {
   });
 
   return c.json({ tasks: enriched, count: enriched.length });
+});
+
+// ─── Unified Review Queue ───
+// GET /review/unified — single prioritized feed of everything needing human attention
+
+interface ReviewItem {
+  id: string;
+  type: "task" | "report" | "notification";
+  title: string;
+  summary: string;
+  source: string; // agent name or system
+  sourceType: string; // agent persona or notification type
+  priority: number; // 0-100, higher = more urgent
+  priorityLabel: "critical" | "high" | "normal" | "low";
+  createdAt: string;
+  waitingSince: string; // when it entered the queue
+  waitingMs: number;
+  tags: string[];
+  artifacts: any[];
+  url?: string; // deep link
+  raw: any; // original object for frontend to inspect
+}
+
+function computePriority(item: {
+  tags?: string[];
+  priority?: string;
+  score?: number;
+  createdAt: string;
+  updatedAt?: string;
+}): { priority: number; priorityLabel: "critical" | "high" | "normal" | "low" } {
+  let score = 50; // baseline
+
+  // Tag-based priority
+  const tags = item.tags || [];
+  if (tags.includes("p0")) score += 30;
+  else if (tags.includes("p1")) score += 20;
+  else if (tags.includes("p2")) score += 10;
+  if (tags.includes("critical")) score += 25;
+  if (tags.includes("blocked") || tags.includes("blocker")) score += 15;
+  if (tags.includes("safety") || tags.includes("security")) score += 20;
+
+  // Explicit priority field (from notifications)
+  if (item.priority === "critical") score += 30;
+  else if (item.priority === "high") score += 20;
+  else if (item.priority === "low") score -= 15;
+
+  // Bump score from board
+  if (item.score && item.score > 0) score += Math.min(item.score * 5, 25);
+
+  // Time decay: items waiting longer get a boost (max +20 after 24h)
+  const waitMs = Date.now() - new Date(item.updatedAt || item.createdAt).getTime();
+  const waitHours = waitMs / 3600000;
+  score += Math.min(Math.floor(waitHours * 0.83), 20);
+
+  // Clamp
+  score = Math.max(0, Math.min(100, score));
+
+  let priorityLabel: "critical" | "high" | "normal" | "low";
+  if (score >= 80) priorityLabel = "critical";
+  else if (score >= 60) priorityLabel = "high";
+  else if (score >= 40) priorityLabel = "normal";
+  else priorityLabel = "low";
+
+  return { priority: score, priorityLabel };
+}
+
+reviewRoutes.get("/unified", (c) => {
+  const items: ReviewItem[] = [];
+  const now = Date.now();
+  const typeFilter = c.req.query("type"); // task, report, notification
+  const sourceFilter = c.req.query("source"); // agent name
+  const priorityFilter = c.req.query("priority"); // critical, high, normal, low
+  const seenIdsParam = c.req.query("seen"); // comma-separated IDs to mark as seen
+
+  // Parse seen IDs from query (client tracks what's been viewed)
+  const seenIds = new Set(seenIdsParam ? seenIdsParam.split(",") : []);
+
+  // 1. Board tasks in_review
+  if (!typeFilter || typeFilter === "task") {
+    const reviewTasks = store.listTasks({ status: "in_review" });
+    for (const t of reviewTasks) {
+      if (sourceFilter && t.assignee !== sourceFilter && t.createdBy !== sourceFilter) continue;
+
+      const lastNote = t.notes.length > 0 ? t.notes[t.notes.length - 1] : null;
+      const { priority, priorityLabel } = computePriority(t);
+
+      if (priorityFilter && priorityLabel !== priorityFilter) continue;
+
+      items.push({
+        id: `task:${t.id}`,
+        type: "task",
+        title: t.title,
+        summary: lastNote?.content || t.description || "",
+        source: t.assignee || t.createdBy || "unknown",
+        sourceType: "agent",
+        priority,
+        priorityLabel,
+        createdAt: t.createdAt,
+        waitingSince: t.updatedAt,
+        waitingMs: now - new Date(t.updatedAt).getTime(),
+        tags: t.tags || [],
+        artifacts: t.artifacts || [],
+        url: `#review?task=${t.id}`,
+        raw: t,
+      });
+    }
+  }
+
+  // 2. Recent reports (last 48h, not tagged 'reviewed')
+  if (!typeFilter || typeFilter === "report") {
+    const allReports = reportsStore.list();
+    const cutoff = new Date(now - 48 * 3600000).toISOString();
+    for (const r of allReports) {
+      if (r.createdAt < cutoff) continue;
+      if ((r.tags || []).includes("reviewed")) continue;
+      if (sourceFilter && r.author !== sourceFilter) continue;
+
+      const { priority, priorityLabel } = computePriority({
+        tags: r.tags,
+        createdAt: r.createdAt,
+        updatedAt: r.updatedAt,
+      });
+
+      if (priorityFilter && priorityLabel !== priorityFilter) continue;
+
+      items.push({
+        id: `report:${r.id}`,
+        type: "report",
+        title: r.title,
+        summary: `Report by @${r.author}`,
+        source: r.author,
+        sourceType: "report",
+        priority,
+        priorityLabel,
+        createdAt: r.createdAt,
+        waitingSince: r.createdAt,
+        waitingMs: now - new Date(r.createdAt).getTime(),
+        tags: r.tags || [],
+        artifacts: [{ type: "report", url: r.id, label: r.title }],
+        url: `/ui/report/${r.id}`,
+        raw: { id: r.id, title: r.title, author: r.author, tags: r.tags, createdAt: r.createdAt },
+      });
+    }
+  }
+
+  // 3. Pending notifications (not dismissed)
+  if (!typeFilter || typeFilter === "notification") {
+    const { notifications } = notificationStore.getPending();
+    for (const n of notifications) {
+      if (sourceFilter && n.source !== sourceFilter) continue;
+
+      const { priority, priorityLabel } = computePriority({
+        priority: n.priority,
+        createdAt: n.createdAt,
+      });
+
+      if (priorityFilter && priorityLabel !== priorityFilter) continue;
+
+      items.push({
+        id: `notif:${n.id}`,
+        type: "notification",
+        title: n.title,
+        summary: n.body,
+        source: n.source,
+        sourceType: n.type,
+        priority,
+        priorityLabel,
+        createdAt: n.createdAt,
+        waitingSince: n.createdAt,
+        waitingMs: now - new Date(n.createdAt).getTime(),
+        tags: [],
+        artifacts: [],
+        url: n.url,
+        raw: n,
+      });
+    }
+  }
+
+  // Sort by priority desc, then by waiting time desc
+  items.sort((a, b) => {
+    if (b.priority !== a.priority) return b.priority - a.priority;
+    return b.waitingMs - a.waitingMs;
+  });
+
+  // Mark which items are unseen
+  const enriched = items.map((item) => ({
+    ...item,
+    seen: seenIds.has(item.id),
+  }));
+
+  // Stats
+  const stats = {
+    total: enriched.length,
+    unseen: enriched.filter((i) => !i.seen).length,
+    byType: {
+      task: enriched.filter((i) => i.type === "task").length,
+      report: enriched.filter((i) => i.type === "report").length,
+      notification: enriched.filter((i) => i.type === "notification").length,
+    },
+    byPriority: {
+      critical: enriched.filter((i) => i.priorityLabel === "critical").length,
+      high: enriched.filter((i) => i.priorityLabel === "high").length,
+      normal: enriched.filter((i) => i.priorityLabel === "normal").length,
+      low: enriched.filter((i) => i.priorityLabel === "low").length,
+    },
+  };
+
+  return c.json({ items: enriched, stats });
 });

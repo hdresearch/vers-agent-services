@@ -11,7 +11,7 @@
     <h1>▸ Agent Services</h1>
     <nav class="tabs">
       <button class="tab active" data-view="dashboard">Dashboard</button>
-      <button class="tab" data-view="review">Review</button>
+      <button class="tab" data-view="review">Review <span class="tab-badge" id="review-tab-badge" style="display:none">0</span></button>
       <button class="tab" data-view="log">Log</button>
       <button class="tab" data-view="journal">Journal</button>
       <button class="tab" data-view="skills">Skills</button>
@@ -67,19 +67,71 @@
     </div>
   </div>
 
-  <!-- Review view -->
+  <!-- Review Queue view -->
   <div class="view" id="view-review">
-    <div class="log-toolbar">
-      <div class="log-filters">
-        <span style="color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:1px;">Tasks Awaiting Review</span>
+    <div class="rq-toolbar">
+      <div class="rq-toolbar-left">
+        <span class="rq-title">Review Queue</span>
+        <span class="rq-badge" id="rq-badge" title="Items needing attention">0</span>
       </div>
-      <div class="log-meta">
-        <span id="review-count">-</span> tasks
-        <span class="log-refresh-hint">auto-refresh 30s</span>
+      <div class="rq-filters">
+        <select id="rq-type-filter">
+          <option value="">All types</option>
+          <option value="task">Tasks</option>
+          <option value="report">Reports</option>
+          <option value="notification">Notifications</option>
+        </select>
+        <select id="rq-priority-filter">
+          <option value="">All priorities</option>
+          <option value="critical">🔴 Critical</option>
+          <option value="high">🟠 High</option>
+          <option value="normal">🟡 Normal</option>
+          <option value="low">⚪ Low</option>
+        </select>
+        <input type="text" id="rq-source-filter" placeholder="filter by agent…" class="rq-agent-input">
+      </div>
+      <div class="rq-toolbar-right">
+        <button class="rq-bulk-btn" id="rq-mark-all-seen" title="Mark all seen">👁 Mark seen</button>
+        <span class="rq-stats" id="rq-stats"></span>
+        <span class="rq-hint">j/k navigate · a approve · f feedback · d dismiss · ? help</span>
       </div>
     </div>
-    <div class="review-list" id="review-list">
+    <div class="rq-list" id="rq-list">
       <div class="empty">Loading review queue…</div>
+    </div>
+
+    <!-- Feedback modal -->
+    <div class="rq-modal-overlay" id="rq-modal" style="display:none">
+      <div class="rq-modal">
+        <div class="rq-modal-title" id="rq-modal-title">Feedback</div>
+        <textarea id="rq-modal-text" rows="4" placeholder="Your feedback…"></textarea>
+        <div class="rq-modal-actions">
+          <button class="btn" id="rq-modal-cancel">Cancel</button>
+          <button class="btn btn-approve" id="rq-modal-submit">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Keyboard help overlay -->
+    <div class="rq-modal-overlay" id="rq-help" style="display:none">
+      <div class="rq-modal" style="width:360px">
+        <div class="rq-modal-title">Keyboard Shortcuts</div>
+        <div class="rq-shortcuts">
+          <div><kbd>j</kbd> / <kbd>↓</kbd> — Next item</div>
+          <div><kbd>k</kbd> / <kbd>↑</kbd> — Previous item</div>
+          <div><kbd>Enter</kbd> / <kbd>o</kbd> — Expand/collapse</div>
+          <div><kbd>a</kbd> — Approve</div>
+          <div><kbd>f</kbd> — Leave feedback</div>
+          <div><kbd>r</kbd> — Request changes / send back</div>
+          <div><kbd>d</kbd> — Dismiss</div>
+          <div><kbd>v</kbd> — Open linked report/artifact</div>
+          <div><kbd>?</kbd> — Toggle this help</div>
+          <div><kbd>Esc</kbd> — Close modal</div>
+        </div>
+        <div class="rq-modal-actions">
+          <button class="btn" onclick="document.getElementById('rq-help').style.display='none'">Close</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -891,6 +943,7 @@
   <script src="/ui/static/metrics.js"></script>
   <script src="/ui/static/analytics.js"></script>
   <script src="/ui/static/agents.js"></script>
+  <script src="/ui/static/review-queue.js"></script>
   <script type="module" src="/ui/static/app.js"></script>
 
 </body>

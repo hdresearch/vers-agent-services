@@ -1,10 +1,10 @@
 import { Hono } from "hono";
-import { ReportsStore, ValidationError, NotFoundError, type ReportFilters } from "./store.js";
+import { ValidationError, NotFoundError, type ReportFilters } from "./store.js";
 import { ShareStore } from "./share-store.js";
 import { createShareAdminRoutes, createSharePublicRoutes } from "./share-routes.js";
 import { emit } from "../events/emit.js";
+import { reportsStore } from "./shared-store.js";
 
-const reportsStore = new ReportsStore();
 const shareStore = new ShareStore();
 
 export const reportsRoutes = new Hono();
