@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent Services — Command Dashboard</title>
+  <style>
+    /* ─── Reset + Dark Base ─── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { font-size: 14px; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0e0e1a;
+      color: #e0e0e0;
+      min-height: 100vh;
+    }
+
+    /* ─── Header ─── */
+    .dv2-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      background: #12122a;
+      border-bottom: 1px solid #2a2a4a;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .dv2-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 16px;
+      font-weight: 700;
+      color: #00ffd5;
+      letter-spacing: 0.5px;
+    }
+    .dv2-logo-icon { font-size: 20px; }
+    .dv2-nav {
+      display: flex;
+      gap: 6px;
+    }
+    .dv2-nav a {
+      color: #888;
+      text-decoration: none;
+      font-size: 12px;
+      padding: 6px 12px;
+      border-radius: 5px;
+      transition: all 0.2s;
+    }
+    .dv2-nav a:hover { color: #00ffd5; background: rgba(0,255,213,0.06); }
+    .dv2-nav a.active { color: #00ffd5; background: rgba(0,255,213,0.1); }
+    .dv2-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #666;
+    }
+    .dv2-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #333;
+      transition: background 0.3s;
+    }
+    .dv2-dot.connected { background: #4f9; box-shadow: 0 0 6px rgba(0,255,100,0.4); }
+
+    /* ─── Grid Layout ─── */
+    .dv2-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      padding: 20px;
+      max-width: 1600px;
+      margin: 0 auto;
+    }
+
+    /* Vitals spans full width */
+    .dv2-grid > fleet-vitals {
+      grid-column: 1 / -1;
+    }
+
+    /* Event feed gets 2 columns */
+    .dv2-grid > event-feed {
+      grid-column: span 2;
+    }
+
+    /* ─── Responsive ─── */
+    @media (max-width: 1200px) {
+      .dv2-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .dv2-grid > fleet-vitals {
+        grid-column: 1 / -1;
+      }
+      .dv2-grid > event-feed {
+        grid-column: span 2;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .dv2-grid {
+        grid-template-columns: 1fr;
+        padding: 12px;
+        gap: 12px;
+      }
+      .dv2-grid > fleet-vitals,
+      .dv2-grid > event-feed {
+        grid-column: 1;
+      }
+      .dv2-header {
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 10px 12px;
+      }
+      .dv2-nav {
+        order: 3;
+        width: 100%;
+        overflow-x: auto;
+        flex-wrap: nowrap;
+      }
+    }
+
+    /* ─── Utility ─── */
+    .dv2-timestamp {
+      font-size: 11px;
+      color: #555;
+      text-align: center;
+      padding: 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="dv2-header">
+    <div class="dv2-logo">
+      <span class="dv2-logo-icon">▸</span>
+      Command Dashboard
+    </div>
+    <nav class="dv2-nav">
+      <a href="/ui/#dashboard" class="active">Dashboard</a>
+      <a href="/ui/#board">Board</a>
+      <a href="/ui/#fleet">Fleet</a>
+      <a href="/ui/#chat">Chat</a>
+      <a href="/ui/#metrics">Metrics</a>
+      <a href="/ui/#agents">Agents</a>
+      <a href="/ui/#events">Events</a>
+      <a href="/ui/">Classic UI</a>
+    </nav>
+    <div class="dv2-status">
+      <span id="dv2-clock"></span>
+      <span class="dv2-dot connected" id="dv2-dot"></span>
+    </div>
+  </div>
+
+  <!-- Panel Grid — each panel is an isolated island -->
+  <div class="dv2-grid">
+
+    <!-- Row 1: Fleet Vitals (full width) -->
+    <fleet-vitals data-refresh-interval="10000"></fleet-vitals>
+
+    <!-- Row 2: Board + Notifications + Quick Actions -->
+    <board-summary data-refresh-interval="30000"></board-summary>
+    <notification-bell data-refresh-interval="10000"></notification-bell>
+    <quick-actions></quick-actions>
+
+    <!-- Row 3: Event Feed (2 cols) + Agents -->
+    <event-feed></event-feed>
+    <agent-list data-refresh-interval="15000"></agent-list>
+
+    <!-- Row 4: Chat + KB + Cryo -->
+    <fleet-chat-panel data-refresh-interval="20000"></fleet-chat-panel>
+    <kb-browser data-refresh-interval="60000"></kb-browser>
+    <cryo-list data-refresh-interval="30000"></cryo-list>
+
+    <!-- Row 5: Blog -->
+    <blog-status data-refresh-interval="60000"></blog-status>
+
+  </div>
+
+  <div class="dv2-timestamp" id="dv2-last-render"></div>
+
+  <script src="/ui/static/micro-ui.js"></script>
+  <script>
+    // Clock
+    function updateClock() {
+      const el = document.getElementById('dv2-clock');
+      if (el) el.textContent = new Date().toLocaleTimeString();
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // Last render timestamp
+    function updateRenderTime() {
+      const el = document.getElementById('dv2-last-render');
+      if (el) el.textContent = `Last render: ${new Date().toLocaleTimeString()}`;
+    }
+    setInterval(updateRenderTime, 10000);
+    updateRenderTime();
+
+    // Connection dot — check if any panel's SSE is connected
+    setInterval(() => {
+      const dot = document.getElementById('dv2-dot');
+      const feed = document.querySelector('event-feed');
+      if (feed && feed._eventSource && feed._eventSource.readyState === EventSource.OPEN) {
+        dot.classList.add('connected');
+      } else {
+        dot.classList.remove('connected');
+      }
+    }, 2000);
+  </script>
+
+</body>
+</html>

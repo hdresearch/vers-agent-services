@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PM — Agent Services</title>
+  <style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0a0a0a; --bg-panel: #111; --bg-card: #1a1a1a; --border: #2a2a2a;
+  --text: #ccc; --text-dim: #666; --text-bright: #eee;
+  --accent: #4f9; --yellow: #fd0; --red: #f55; --blue: #5af;
+  --purple: #a7f; --orange: #f93; --surface: #161616;
+}
+html, body {
+  height: 100%; background: var(--bg); color: var(--text);
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+  font-size: 13px; line-height: 1.5;
+}
+
+/* ─── Quick Stats Bar ─── */
+.pm-stats {
+  display: flex; align-items: center; gap: 16px; padding: 10px 20px;
+  border-bottom: 1px solid var(--border); background: var(--bg-panel);
+  font-size: 11px; flex-wrap: wrap;
+}
+.pm-stat { display: flex; align-items: center; gap: 6px; color: var(--text-dim); }
+.pm-stat-val { font-weight: 700; font-size: 14px; color: var(--text-bright); }
+.pm-stat-val.s-open { color: var(--blue); }
+.pm-stat-val.s-progress { color: var(--yellow); }
+.pm-stat-val.s-done { color: var(--accent); }
+.pm-stat-val.s-p0 { color: var(--red); }
+.pm-stat-val.s-p1 { color: var(--orange); }
+.pm-stat-val.s-agents { color: var(--purple); }
+.pm-stat-sep { width: 1px; height: 20px; background: var(--border); }
+.pm-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--bg-panel);
+}
+.pm-header h1 { font-size: 14px; color: var(--accent); font-weight: 600; }
+.pm-header a { color: var(--text-dim); text-decoration: none; font-size: 11px; }
+.pm-header a:hover { color: var(--text); }
+
+/* ─── Sub-tabs ─── */
+.pm-tabs {
+  display: flex; gap: 2px; padding: 6px 20px;
+  background: var(--bg-panel); border-bottom: 1px solid var(--border);
+}
+.pm-tab {
+  background: none; border: none; color: var(--text-dim); cursor: pointer;
+  padding: 5px 14px; font-size: 11px; font-family: inherit;
+  border-radius: 3px; transition: all .15s; text-transform: uppercase;
+  letter-spacing: .5px; font-weight: 500;
+}
+.pm-tab:hover { color: var(--text); background: var(--bg-card); }
+.pm-tab.active { color: var(--accent); background: var(--bg-card); font-weight: 600; }
+.pm-tab .badge {
+  display: inline-block; background: var(--red); color: #000; font-size: 9px;
+  font-weight: 700; padding: 1px 5px; border-radius: 6px; margin-left: 4px;
+}
+
+/* ─── Views ─── */
+.pm-view { display: none; flex: 1; min-height: 0; overflow: hidden; }
+.pm-view.active { display: flex; }
+
+/* ─── Task Management Layout ─── */
+.pm-layout {
+  display: grid; grid-template-columns: 340px 1fr 320px;
+  flex: 1; min-height: 0; overflow: hidden; width: 100%;
+}
+
+/* Left: Task List */
+.pm-list-panel {
+  display: flex; flex-direction: column; border-right: 1px solid var(--border);
+  background: var(--bg-panel); overflow: hidden;
+}
+.pm-list-filters {
+  padding: 8px 12px; border-bottom: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 6px; flex-shrink: 0;
+}
+.pm-filter-row { display: flex; gap: 6px; }
+.pm-filter-row select, .pm-filter-row input {
+  background: var(--bg-card); border: 1px solid var(--border); color: var(--text);
+  padding: 4px 8px; border-radius: 3px; font-family: inherit; font-size: 11px;
+  flex: 1; min-width: 0;
+}
+.pm-filter-row select:focus, .pm-filter-row input:focus { outline: none; border-color: #444; }
+.pm-sort-row { display: flex; gap: 6px; align-items: center; }
+.pm-sort-row label { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+.pm-sort-row select {
+  background: var(--bg-card); border: 1px solid var(--border); color: var(--text);
+  padding: 3px 6px; border-radius: 3px; font-family: inherit; font-size: 10px;
+}
+.pm-task-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
+.pm-task-item {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px;
+  padding: 10px 12px; margin: 4px 0; cursor: pointer; transition: all .15s;
+}
+.pm-task-item:hover { border-color: #444; }
+.pm-task-item.selected { border-color: var(--accent); background: #0f1f15; }
+.pm-task-item .t-title { color: var(--text-bright); font-weight: 500; font-size: 12px; margin-bottom: 4px; }
+.pm-task-item .t-meta { font-size: 10px; color: var(--text-dim); display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pm-task-item .t-status {
+  display: inline-block; padding: 1px 6px; border-radius: 3px;
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; cursor: pointer;
+}
+.pm-task-item .t-status:hover { filter: brightness(1.3); }
+.st-open { background: rgba(85,170,255,.15); color: var(--blue); }
+.st-in_progress { background: rgba(255,221,0,.15); color: var(--yellow); }
+.st-in_review { background: rgba(167,119,255,.15); color: var(--purple); }
+.st-blocked { background: rgba(255,85,85,.15); color: var(--red); }
+.st-done { background: rgba(68,255,153,.15); color: var(--accent); }
+.pm-task-item .t-tag {
+  background: #1a1a2a; padding: 1px 5px; border-radius: 3px;
+  font-size: 9px; color: var(--blue);
+}
+.pm-task-item .t-assignee { color: var(--purple); }
+.pm-task-item .t-score { color: var(--yellow); font-weight: 600; }
+.pm-task-item .t-priority { font-weight: 700; }
+.t-priority.p-critical { color: var(--red); }
+.t-priority.p-high { color: var(--orange); }
+.t-priority.p-normal { color: var(--yellow); }
+.t-priority.p-low { color: var(--text-dim); }
+
+/* Center: Task Detail */
+.pm-detail-panel {
+  display: flex; flex-direction: column; overflow: hidden; background: var(--bg);
+}
+.pm-detail-placeholder {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; color: var(--text-dim); font-size: 12px; font-style: italic;
+}
+.pm-detail-header {
+  padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--bg-panel);
+  flex-shrink: 0;
+}
+.pm-detail-title { font-size: 16px; font-weight: 700; color: var(--text-bright); margin-bottom: 8px; }
+.pm-detail-controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.pm-detail-controls select, .pm-detail-controls input {
+  background: var(--bg-card); border: 1px solid var(--border); color: var(--text);
+  padding: 4px 8px; border-radius: 3px; font-family: inherit; font-size: 11px;
+}
+.pm-detail-controls select:focus, .pm-detail-controls input:focus { outline: none; border-color: #444; }
+.pm-detail-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+.pm-detail-section { margin-bottom: 20px; }
+.pm-detail-section h3 {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--text-dim); margin-bottom: 8px; font-weight: 600;
+}
+.pm-detail-desc { color: var(--text); font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
+.pm-note {
+  padding: 8px 12px; margin-bottom: 6px; border-radius: 4px;
+  background: var(--bg-card); border: 1px solid var(--border); font-size: 12px;
+}
+.pm-note .note-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.pm-note .note-author { color: var(--purple); font-weight: 600; font-size: 11px; }
+.pm-note .note-time { color: var(--text-dim); font-size: 10px; }
+.pm-note .note-type { color: var(--orange); font-size: 10px; text-transform: uppercase; margin-left: 6px; }
+.pm-note .note-body { color: var(--text); white-space: pre-wrap; }
+.pm-artifact {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: #1a1a2a; padding: 5px 10px; border-radius: 3px;
+  font-size: 11px; color: var(--blue); text-decoration: none;
+  border: 1px solid #2a2a3a; transition: border-color .15s; margin: 0 6px 6px 0;
+}
+.pm-artifact:hover { border-color: var(--blue); }
+.pm-add-note {
+  display: flex; gap: 6px; margin-top: 8px;
+}
+.pm-add-note textarea {
+  flex: 1; background: var(--bg-card); border: 1px solid var(--border); color: var(--text);
+  padding: 8px; border-radius: 4px; font-family: inherit; font-size: 12px;
+  resize: vertical; min-height: 60px;
+}
+.pm-add-note textarea:focus { outline: none; border-color: #444; }
+.pm-report-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--purple); text-decoration: none; font-size: 11px;
+  padding: 4px 10px; border: 1px solid var(--purple); border-radius: 3px;
+  margin: 0 6px 6px 0; transition: all .15s;
+}
+.pm-report-link:hover { background: rgba(167,119,255,.1); }
+
+/* Right: Dispatch Panel */
+.pm-dispatch-panel {
+  display: flex; flex-direction: column; border-left: 1px solid var(--border);
+  background: var(--bg-panel); overflow: hidden;
+}
+.pm-dispatch-header {
+  padding: 10px 14px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 1px; color: var(--text-dim); font-weight: 600;
+  border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.pm-dispatch-form { padding: 12px 14px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.pm-dispatch-form label {
+  display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--text-dim); margin-bottom: 4px; margin-top: 10px;
+}
+.pm-dispatch-form label:first-child { margin-top: 0; }
+.pm-dispatch-form select, .pm-dispatch-form input {
+  width: 100%; background: var(--bg-card); border: 1px solid var(--border); color: var(--text);
+  padding: 6px 8px; border-radius: 3px; font-family: inherit; font-size: 11px;
+}
+.pm-dispatch-form select:focus, .pm-dispatch-form input:focus { outline: none; border-color: #444; }
+.pm-dispatch-form textarea {
+  width: 100%; background: var(--bg-card); border: 1px solid var(--border); color: var(--text);
+  padding: 8px; border-radius: 4px; font-family: inherit; font-size: 12px;
+  resize: vertical; min-height: 80px;
+}
+.pm-dispatch-form textarea:focus { outline: none; border-color: #444; }
+.pm-dispatch-btn {
+  width: 100%; margin-top: 10px; padding: 8px; background: var(--accent); color: #000;
+  border: none; border-radius: 4px; font-family: inherit; font-size: 12px;
+  font-weight: 700; cursor: pointer; transition: all .15s; letter-spacing: .5px;
+}
+.pm-dispatch-btn:hover { filter: brightness(1.1); }
+.pm-dispatch-btn:disabled { opacity: .5; cursor: not-allowed; }
+.pm-recent-header {
+  padding: 8px 14px; font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--text-dim); font-weight: 600; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.pm-recent-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
+.pm-recent-item {
+  padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 11px;
+}
+.pm-recent-item .r-title { color: var(--text-bright); font-weight: 500; margin-bottom: 2px; }
+.pm-recent-item .r-meta { color: var(--text-dim); font-size: 10px; display: flex; gap: 6px; }
+.pm-recent-item .r-persona { color: var(--purple); }
+
+/* ─── Review Queue View ─── */
+.pm-review-layout {
+  flex: 1; overflow-y: auto; padding: 16px 20px; max-width: 900px; margin: 0 auto; width: 100%;
+}
+.pm-review-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 4px;
+  padding: 16px 20px; margin-bottom: 12px; border-left: 3px solid var(--purple);
+  transition: border-color .15s;
+}
+.pm-review-card:hover { border-color: #444; }
+.pm-review-title { color: var(--text-bright); font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+.pm-review-meta { font-size: 11px; color: var(--text-dim); display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.pm-review-meta .r-author { color: var(--purple); font-weight: 500; }
+.pm-review-summary {
+  font-size: 12px; color: var(--text); line-height: 1.7; white-space: pre-wrap;
+  padding: 10px 0; border-top: 1px solid var(--border);
+}
+.pm-review-artifacts {
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+}
+.pm-review-actions {
+  display: flex; gap: 8px; margin-top: 12px; padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.btn {
+  background: none; border: 1px solid var(--border); color: var(--text);
+  padding: 6px 16px; border-radius: 3px; font-family: inherit; font-size: 11px;
+  cursor: pointer; transition: all .15s; font-weight: 600;
+}
+.btn:hover { background: var(--bg-panel); }
+.btn-approve { color: var(--accent); border-color: var(--accent); }
+.btn-approve:hover { background: #0a2a0a; }
+.btn-changes { color: var(--yellow); border-color: var(--yellow); }
+.btn-changes:hover { background: #2a2a0a; }
+.btn-accent { color: #000; background: var(--accent); border-color: var(--accent); }
+.btn-accent:hover { filter: brightness(1.1); }
+
+/* Modals */
+.pm-modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,.7); z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+}
+.pm-modal {
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 6px;
+  padding: 20px 24px; width: 480px; max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+}
+.pm-modal h3 { font-size: 14px; font-weight: 600; color: var(--text-bright); margin-bottom: 12px; }
+.pm-modal textarea {
+  width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+  padding: 10px; border-radius: 4px; font-family: inherit; font-size: 12px; resize: vertical;
+}
+.pm-modal textarea:focus { outline: none; border-color: #555; }
+.pm-modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+
+.empty { color: var(--text-dim); font-style: italic; padding: 20px; text-align: center; }
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(68,255,153,.15); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(68,255,153,.3); }
+
+/* Responsive */
+@media (max-width: 1100px) {
+  .pm-layout { grid-template-columns: 280px 1fr 260px; }
+}
+@media (max-width: 900px) {
+  .pm-layout { grid-template-columns: 1fr; height: auto; }
+  .pm-list-panel { max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); }
+  .pm-dispatch-panel { max-height: 40vh; border-left: none; border-top: 1px solid var(--border); }
+}
+  </style>
+</head>
+<body style="display:flex;flex-direction:column;height:100vh;overflow:hidden;">
+  <!-- Header -->
+  <div class="pm-header">
+    <h1>▸ Project Management</h1>
+    <a href="/ui/">← Back to Dashboard</a>
+  </div>
+
+  <!-- Stats Bar -->
+  <div class="pm-stats">
+    <div class="pm-stat">Open <span class="pm-stat-val s-open" id="pm-s-open">—</span></div>
+    <div class="pm-stat">In Progress <span class="pm-stat-val s-progress" id="pm-s-progress">—</span></div>
+    <div class="pm-stat">Done <span class="pm-stat-val s-done" id="pm-s-done">—</span></div>
+    <div class="pm-stat-sep"></div>
+    <div class="pm-stat">P0 <span class="pm-stat-val s-p0" id="pm-s-p0">0</span></div>
+    <div class="pm-stat">P1 <span class="pm-stat-val s-p1" id="pm-s-p1">0</span></div>
+    <div class="pm-stat-sep"></div>
+    <div class="pm-stat">Active Agents <span class="pm-stat-val s-agents" id="pm-s-agents">—</span></div>
+  </div>
+
+  <!-- Sub-tabs -->
+  <div class="pm-tabs">
+    <button class="pm-tab active" data-view="tasks">Tasks</button>
+    <button class="pm-tab" data-view="review">Review Queue <span class="badge" id="pm-review-badge" style="display:none">0</span></button>
+  </div>
+
+  <!-- Tasks View -->
+  <div class="pm-view active" id="pm-view-tasks">
+    <div class="pm-layout">
+      <!-- Left: Task List -->
+      <div class="pm-list-panel">
+        <div class="pm-list-filters">
+          <div class="pm-filter-row">
+            <select id="pm-f-status">
+              <option value="">All statuses</option>
+              <option value="open">Open</option>
+              <option value="in_progress">In Progress</option>
+              <option value="in_review">In Review</option>
+              <option value="blocked">Blocked</option>
+              <option value="done">Done</option>
+            </select>
+            <select id="pm-f-priority">
+              <option value="">All priorities</option>
+              <option value="critical">🔴 Critical</option>
+              <option value="high">🟠 High</option>
+              <option value="normal">🟡 Normal</option>
+              <option value="low">⚪ Low</option>
+            </select>
+          </div>
+          <div class="pm-filter-row">
+            <input type="text" id="pm-f-assignee" placeholder="Filter assignee…">
+            <input type="text" id="pm-f-tag" placeholder="Filter tag…">
+          </div>
+          <div class="pm-sort-row">
+            <label>Sort:</label>
+            <select id="pm-sort">
+              <option value="score">Score ↓</option>
+              <option value="date">Newest</option>
+              <option value="date-asc">Oldest</option>
+              <option value="priority">Priority</option>
+            </select>
+          </div>
+        </div>
+        <div class="pm-task-list" id="pm-task-list">
+          <div class="empty">Loading…</div>
+        </div>
+      </div>
+
+      <!-- Center: Detail -->
+      <div class="pm-detail-panel" id="pm-detail">
+        <div class="pm-detail-placeholder">Select a task to view details</div>
+      </div>
+
+      <!-- Right: Dispatch -->
+      <div class="pm-dispatch-panel">
+        <div class="pm-dispatch-header">Dispatch Work</div>
+        <div class="pm-dispatch-form">
+          <label>Persona</label>
+          <select id="pm-d-persona"><option value="">— select persona —</option></select>
+          <label>Assignee</label>
+          <input type="text" id="pm-d-assignee" placeholder="Agent name…">
+          <label>Priority</label>
+          <select id="pm-d-priority">
+            <option value="normal">Normal</option>
+            <option value="critical">Critical</option>
+            <option value="high">High</option>
+            <option value="low">Low</option>
+          </select>
+          <label>Tags (comma-separated)</label>
+          <input type="text" id="pm-d-tags" placeholder="infra, ui, ops…">
+          <label>Task</label>
+          <textarea id="pm-d-task" placeholder="Describe the work to dispatch…"></textarea>
+          <button class="pm-dispatch-btn" id="pm-dispatch-btn">▸ Dispatch</button>
+        </div>
+        <div class="pm-recent-header">Recent Dispatches</div>
+        <div class="pm-recent-list" id="pm-recent-list">
+          <div class="empty">No recent dispatches</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Review Queue View -->
+  <div class="pm-view" id="pm-view-review">
+    <div class="pm-review-layout" id="pm-review-list">
+      <div class="empty">Loading review queue…</div>
+    </div>
+  </div>
+
+  <!-- Feedback Modal -->
+  <div class="pm-modal-overlay" id="pm-modal" style="display:none">
+    <div class="pm-modal">
+      <h3 id="pm-modal-title">Request Changes</h3>
+      <textarea id="pm-modal-text" rows="4" placeholder="Describe what needs to change…"></textarea>
+      <div class="pm-modal-actions">
+        <button class="btn" id="pm-modal-cancel">Cancel</button>
+        <button class="btn btn-accent" id="pm-modal-submit">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/static/pm.js"></script>
+</body>
+</html>

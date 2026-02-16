@@ -1,0 +1,25 @@
+[Unit]
+Description=Agent Services — Core API (board, feed, log, reports, KB, etc.)
+After=network.target
+PartOf=agent-services.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vers-agent-services
+ExecStart=/usr/bin/node dist/core-api/main.js
+Environment=NODE_ENV=production
+Environment=CORE_API_PORT=3001
+EnvironmentFile=-/opt/vers-agent-services/.env
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-core
+
+# Security
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/vers-agent-services/data
+
+[Install]
+WantedBy=agent-services.target

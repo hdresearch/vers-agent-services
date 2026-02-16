@@ -1,0 +1,31 @@
+# Caddy reverse proxy for zero-downtime deploys
+# Caddy listens on :3000 (public), proxies to app on :3001
+#
+# How it works:
+# - Caddy holds all client connections on :3000
+# - App runs on :3001 (or whatever APP_PORT is set to)
+# - During deploy: build new app, start on :3001, health check, kill old
+# - Caddy retries failed upstream connections for up to 10s
+# - Clients see zero dropped requests (assuming restart < 10s)
+
+:3000 {
+	reverse_proxy localhost:3001 {
+		# Keep retrying the upstream for up to 10 seconds
+		# This covers the restart gap (typically 2-3s)
+		lb_try_duration 10s
+		lb_try_interval 250ms
+
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 30s
+		}
+	}
+
+	# Access log for debugging
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10mb
+			roll_keep 3
+		}
+	}
+}
