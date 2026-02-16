@@ -38,6 +38,7 @@ import { contactsRoutes, contactsPublicRoutes, contactsStore } from "./contacts/
 import { notificationRoutes } from "./notifications/routes.js";
 import { blogRoutes } from "./blog/routes.js";
 import { docsRoutes, docsPublicRoutes, docsStore } from "./docs/routes.js";
+import { chatRoutes, chatStore } from "./chat/routes.js";
 
 const app = new Hono();
 
@@ -124,6 +125,8 @@ app.use("/feed/events", etag());
 app.use("/feed/stats", etag());
 app.use("/kb/entries", etag());
 app.use("/kb/briefing", etag());
+app.use("/chat/*", bearerAuth());
+app.use("/chat/messages", etag());
 app.use("/gossip/*", bearerAuth());
 app.use("/loop/*", bearerAuth());
 
@@ -155,6 +158,7 @@ app.route("/loop", loopRoutes);
 app.route("/couch", couchRoutes);
 app.route("/fleet-chat", fleetChatRoutes);
 app.route("/contacts", contactsRoutes);
+app.route("/chat", chatRoutes);
 app.route("/daemon", daemonRoutes);
 app.route("/notifications", notificationRoutes);
 app.route("/docs", docsRoutes);
@@ -219,6 +223,8 @@ async function gracefulShutdown(signal: string) {
   try { contactsStore.close(); } catch {}
   // Close docs DB
   try { docsStore.close(); } catch {}
+  // Close chat DB
+  try { chatStore.close(); } catch {}
   // Stop daemon event loop
   if (daemonEngine.isRunning) {
     try { daemonEngine.stop(); } catch {}
