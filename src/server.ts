@@ -40,6 +40,7 @@ import { blogRoutes } from "./blog/routes.js";
 import { docsRoutes, docsPublicRoutes, docsStore } from "./docs/routes.js";
 import { chatRoutes, chatStore } from "./chat/routes.js";
 import { aegisRoutes, aegisStore } from "./aegis/routes.js";
+import { deployRoutes } from "./deploy/routes.js";
 
 const app = new Hono();
 
@@ -131,6 +132,7 @@ app.use("/chat/messages", etag());
 app.use("/gossip/*", bearerAuth());
 app.use("/loop/*", bearerAuth());
 app.use("/aegis/*", bearerAuth());
+app.use("/deploy/*", bearerAuth());
 
 // Rate limiting for write endpoints (applied after auth)
 app.post("/feed/events", rateLimit({ windowMs: 60_000, maxRequests: 60 }));
@@ -165,6 +167,7 @@ app.route("/daemon", daemonRoutes);
 app.route("/notifications", notificationRoutes);
 app.route("/docs", docsRoutes);
 app.route("/aegis", aegisRoutes);
+app.route("/deploy", deployRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
