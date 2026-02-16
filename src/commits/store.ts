@@ -1,6 +1,7 @@
 import { ulid } from "ulid";
-import { readFileSync, appendFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
+import { atomicWriteFileSync, recoverTmpFile } from "../utils/atomic-write.js";
 
 export interface CommitEntry {
   id: string;
@@ -41,6 +42,12 @@ export class CommitStore {
   }
 
   private load(): void {
+    recoverTmpFile(this.filePath, (content) => {
+      // For JSONL, validate that each non-empty line is valid JSON
+      for (const line of content.split("\n")) {
+        if (line.trim()) JSON.parse(line);
+      }
+    });
     if (!existsSync(this.filePath)) return;
     const content = readFileSync(this.filePath, "utf-8").trim();
     if (!content) return;
@@ -64,10 +71,8 @@ export class CommitStore {
   }
 
   private rewrite(): void {
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const content = this.entries.map((e) => JSON.stringify(e)).join("\n") + (this.entries.length ? "\n" : "");
-    writeFileSync(this.filePath, content, "utf-8");
+    atomicWriteFileSync(this.filePath, content);
   }
 
   record(input: RecordCommitInput): CommitEntry {
@@ -143,9 +148,7 @@ export class CommitStore {
   clear(): void {
     this.entries = [];
     this.byCommitId.clear();
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(this.filePath, "");
+    atomicWriteFileSync(this.filePath, "");
   }
 
   get size(): number {
