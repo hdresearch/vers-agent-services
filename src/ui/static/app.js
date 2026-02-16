@@ -51,19 +51,19 @@ async function api(path, opts = {}) {
 
 // ─── Helpers ───
 
-function timeAgo(iso) {
+// Delegate to shared utils (see utils.js) — single source of truth
+const timeAgo = window._utils ? window._utils.timeAgo : function (iso) {
   const ms = Date.now() - new Date(iso).getTime();
   if (ms < 60000) return `${Math.floor(ms / 1000)}s ago`;
   if (ms < 3600000) return `${Math.floor(ms / 60000)}m ago`;
   if (ms < 86400000) return `${Math.floor(ms / 3600000)}h ago`;
   return `${Math.floor(ms / 86400000)}d ago`;
-}
-
-function esc(s) {
+};
+const esc = window._utils ? window._utils.esc : function (s) {
   const d = document.createElement('div');
   d.textContent = s || '';
   return d.innerHTML;
-}
+};
 
 // ─── Loading / Error UI helpers ───
 

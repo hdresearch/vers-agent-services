@@ -21,6 +21,11 @@
   let mouse = { x: -1000, y: -1000 };
   let streamEvents = [];
   let fleetPersonas = [];
+  let simSettled = false;       // true when kinetic energy is below threshold
+  let simSettledFrames = 0;     // consecutive frames below threshold
+  let focusedNodeIndex = -1;    // keyboard navigation index
+  const SIM_SETTLE_THRESHOLD = 0.5;   // total kinetic energy threshold
+  const SIM_SETTLE_FRAMES = 30;       // frames below threshold before settling
   const MAX_STREAM = 200;
   const DPR = window.devicePixelRatio || 1;
   const STALE_MS = 5 * 60 * 1000; // 5 minutes — matches server stale threshold
@@ -90,16 +95,16 @@
     }
   }
 
-  function timeAgo(iso) {
+  // Delegate to shared utils (see utils.js) — single source of truth
+  const timeAgo = window._utils ? window._utils.timeAgo : function (iso) {
     if (!iso) return '—';
     const ms = Date.now() - new Date(iso).getTime();
     if (ms < 60000) return `${Math.floor(ms / 1000)}s ago`;
     if (ms < 3600000) return `${Math.floor(ms / 60000)}m ago`;
     if (ms < 86400000) return `${Math.floor(ms / 3600000)}h ago`;
     return `${Math.floor(ms / 86400000)}d ago`;
-  }
-
-  function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+  };
+  const esc = window._utils ? window._utils.esc : function (s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; };
 
   // ─── Data loading ───
 
@@ -258,6 +263,11 @@
     return s;
   }
 
+  function wakeSimulation() {
+    simSettled = false;
+    simSettledFrames = 0;
+  }
+
   function updateNodes(vms) {
     const existing = new Map(nodes.map(n => [n.id, n]));
     const newNodes = [];
@@ -293,6 +303,7 @@
       }
     }
     nodes = newNodes;
+    wakeSimulation();
   }
 
   // ─── Physics simulation (force-directed) ───
@@ -339,6 +350,7 @@
       }
     }
 
+    let totalEnergy = 0;
     for (const n of nodes) {
       n.vx *= DAMPING;
       n.vy *= DAMPING;
@@ -347,7 +359,9 @@
       // Keep in bounds
       n.x = Math.max(n.radius + 10, Math.min(canvasW - n.radius - 10, n.x));
       n.y = Math.max(n.radius + 10, Math.min(canvasH - n.radius - 10, n.y));
+      totalEnergy += n.vx * n.vx + n.vy * n.vy;
     }
+    return totalEnergy;
   }
 
   // ─── Canvas rendering ───
@@ -355,7 +369,18 @@
   function render() {
     if (!fleetActive) return;
 
-    simulate();
+    // Only run physics when not settled
+    if (!simSettled) {
+      const energy = simulate();
+      if (energy < SIM_SETTLE_THRESHOLD && nodes.length > 0) {
+        simSettledFrames++;
+        if (simSettledFrames >= SIM_SETTLE_FRAMES) {
+          simSettled = true;
+        }
+      } else {
+        simSettledFrames = 0;
+      }
+    }
 
     ctx.clearRect(0, 0, canvasW, canvasH);
 
@@ -493,16 +518,105 @@
   function initCanvas() {
     canvas = document.getElementById('fleet-canvas');
     if (!canvas) return;
+
+    // Accessibility: make canvas focusable and announce its role
+    canvas.setAttribute('tabindex', '0');
+    canvas.setAttribute('role', 'application');
+    canvas.setAttribute('aria-label', 'Fleet agent map. Use arrow keys to navigate between agents, Enter to select, Escape to deselect.');
+
     ctx = canvas.getContext('2d');
     resizeCanvas();
 
     canvas.addEventListener('mousemove', onMouseMove);
     canvas.addEventListener('click', onCanvasClick);
     canvas.addEventListener('mouseleave', onMouseLeave);
+    canvas.addEventListener('keydown', onCanvasKeydown);
     canvas.addEventListener('touchstart', onTouchStart, { passive: false });
     canvas.addEventListener('touchmove', onTouchMove, { passive: false });
     canvas.addEventListener('touchend', onTouchEnd, { passive: false });
     window.addEventListener('resize', resizeCanvas);
+
+    // Create a live region for screen reader announcements
+    let liveRegion = document.getElementById('fleet-live');
+    if (!liveRegion) {
+      liveRegion = document.createElement('div');
+      liveRegion.id = 'fleet-live';
+      liveRegion.setAttribute('role', 'status');
+      liveRegion.setAttribute('aria-live', 'polite');
+      liveRegion.setAttribute('aria-atomic', 'true');
+      liveRegion.style.cssText = 'position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);';
+      canvas.parentElement.appendChild(liveRegion);
+    }
+  }
+
+  function announceNode(node) {
+    const liveRegion = document.getElementById('fleet-live');
+    if (!liveRegion || !node) return;
+    const statusText = node.status || 'unknown';
+    const roleText = node.role || 'agent';
+    liveRegion.textContent = `${node.name}, ${roleText}, ${statusText}`;
+  }
+
+  function onCanvasKeydown(e) {
+    if (!nodes.length) return;
+
+    switch (e.key) {
+      case 'ArrowRight':
+      case 'ArrowDown':
+        e.preventDefault();
+        focusedNodeIndex = (focusedNodeIndex + 1) % nodes.length;
+        selectedNode = nodes[focusedNodeIndex];
+        hoveredNode = selectedNode;
+        showDetail(selectedNode);
+        announceNode(selectedNode);
+        wakeSimulation();
+        break;
+      case 'ArrowLeft':
+      case 'ArrowUp':
+        e.preventDefault();
+        focusedNodeIndex = (focusedNodeIndex - 1 + nodes.length) % nodes.length;
+        selectedNode = nodes[focusedNodeIndex];
+        hoveredNode = selectedNode;
+        showDetail(selectedNode);
+        announceNode(selectedNode);
+        wakeSimulation();
+        break;
+      case 'Enter':
+      case ' ':
+        e.preventDefault();
+        if (focusedNodeIndex >= 0 && focusedNodeIndex < nodes.length) {
+          selectedNode = nodes[focusedNodeIndex];
+          showDetail(selectedNode);
+          announceNode(selectedNode);
+        }
+        break;
+      case 'Escape':
+        e.preventDefault();
+        selectedNode = null;
+        hoveredNode = null;
+        focusedNodeIndex = -1;
+        hideDetail();
+        wakeSimulation();
+        break;
+      case 'Home':
+        e.preventDefault();
+        focusedNodeIndex = 0;
+        selectedNode = nodes[0];
+        hoveredNode = selectedNode;
+        showDetail(selectedNode);
+        announceNode(selectedNode);
+        wakeSimulation();
+        break;
+      case 'End':
+        e.preventDefault();
+        focusedNodeIndex = nodes.length - 1;
+        selectedNode = nodes[focusedNodeIndex];
+        hoveredNode = selectedNode;
+        showDetail(selectedNode);
+        announceNode(selectedNode);
+        wakeSimulation();
+        break;
+    }
   }
 
   function resizeCanvas() {
@@ -518,6 +632,7 @@
     canvas.style.height = canvasH + 'px';
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 
+    wakeSimulation();
     // Re-center nodes if they're off screen
     for (const n of nodes) {
       if (n.x > canvasW || n.y > canvasH) {
@@ -585,8 +700,10 @@
     const rect = canvas.getBoundingClientRect();
     mouse.x = e.clientX - rect.left;
     mouse.y = e.clientY - rect.top;
+    const prev = hoveredNode;
     hoveredNode = hitTest(mouse.x, mouse.y);
     canvas.style.cursor = hoveredNode ? 'pointer' : 'crosshair';
+    if (hoveredNode !== prev) wakeSimulation(); // redraw on hover change
   }
 
   function onCanvasClick(e) {
@@ -844,6 +961,7 @@
       canvas.removeEventListener('mousemove', onMouseMove);
       canvas.removeEventListener('click', onCanvasClick);
       canvas.removeEventListener('mouseleave', onMouseLeave);
+      canvas.removeEventListener('keydown', onCanvasKeydown);
       canvas.removeEventListener('touchstart', onTouchStart);
       canvas.removeEventListener('touchmove', onTouchMove);
       canvas.removeEventListener('touchend', onTouchEnd);
@@ -859,6 +977,9 @@
     nodes = [];
     hoveredNode = null;
     selectedNode = null;
+    focusedNodeIndex = -1;
+    simSettled = false;
+    simSettledFrames = 0;
     streamEvents = [];
   };
 })();

@@ -24,8 +24,9 @@
     }
   }
 
-  function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
-  function timeAgo(iso) {
+  // Delegate to shared utils (see utils.js)
+  const esc = window._utils ? window._utils.esc : function (s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; };
+  const timeAgo = window._utils ? window._utils.timeAgo : function (iso) {
     if (!iso) return '—';
     const ms = Date.now() - new Date(iso).getTime();
     if (ms < 60000) return `${Math.floor(ms / 1000)}s ago`;

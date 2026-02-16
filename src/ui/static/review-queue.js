@@ -41,19 +41,19 @@
 
   // ─── Helpers ───
 
-  function timeAgo(iso) {
+  // Delegate to shared utils — review-queue uses short format (no "ago")
+  const timeAgo = window._utils ? window._utils.timeAgoShort : function (iso) {
     const ms = Date.now() - new Date(iso).getTime();
     if (ms < 60000) return `${Math.floor(ms / 1000)}s`;
     if (ms < 3600000) return `${Math.floor(ms / 60000)}m`;
     if (ms < 86400000) return `${Math.floor(ms / 3600000)}h`;
     return `${Math.floor(ms / 86400000)}d`;
-  }
-
-  function esc(s) {
+  };
+  const esc = window._utils ? window._utils.esc : function (s) {
     const d = document.createElement('div');
     d.textContent = s || '';
     return d.innerHTML;
-  }
+  };
 
   function priorityIcon(label) {
     switch (label) {
