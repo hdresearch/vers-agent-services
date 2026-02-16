@@ -41,11 +41,14 @@ import { docsRoutes, docsPublicRoutes, docsStore } from "./docs/routes.js";
 import { chatRoutes, chatStore, webChatStore, chatBridge, startFleetEventBridge, stopFleetEventBridge } from "./chat/routes.js";
 import { aegisRoutes, aegisStore } from "./aegis/routes.js";
 import { deployRoutes } from "./deploy/routes.js";
+
 import { backupRoutes, backupScheduler } from "./backup/routes.js";
 
 import { plannerRoutes, plannerStore } from "./planner/routes.js";
 
 import { bootRoutes } from "./boot/routes.js";
+
+import { autonomyRoutes, autonomyStore, orchestrator as autonomyOrchestrator } from "./autonomy/routes.js";
 
 const app = new Hono();
 
@@ -138,6 +141,7 @@ app.use("/chat/*", bearerAuth());
 app.use("/gossip/*", bearerAuth());
 app.use("/loop/*", bearerAuth());
 app.use("/aegis/*", bearerAuth());
+app.use("/autonomy/*", bearerAuth());
 app.use("/deploy/*", bearerAuth());
 
 app.use("/boot/*", bearerAuth());
@@ -177,6 +181,7 @@ app.route("/daemon", daemonRoutes);
 app.route("/notifications", notificationRoutes);
 app.route("/docs", docsRoutes);
 app.route("/aegis", aegisRoutes);
+app.route("/autonomy", autonomyRoutes);
 app.route("/deploy", deployRoutes);
 app.route("/backup", backupRoutes);
 
@@ -261,11 +266,18 @@ async function gracefulShutdown(signal: string) {
   // Close aegis DB
   try { aegisStore.close(); } catch {}
 
+
   // Close planner DB
   try { plannerStore.close(); } catch {}
 
   // Stop backup scheduler
   try { backupScheduler.stop(); } catch {}
+
+  // Stop autonomy loop
+  if (autonomyOrchestrator.isEnabled) {
+    try { autonomyOrchestrator.disable(); } catch {}
+  }
+  try { autonomyStore.close(); } catch {}
   // Stop daemon event loop
   if (daemonEngine.isRunning) {
     try { daemonEngine.stop(); } catch {}
