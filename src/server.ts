@@ -36,6 +36,7 @@ import { kbRoutes, kbStore } from "./kb/routes.js";
 import { daemonRoutes, daemonEngine, daemonStore } from "./daemon/routes.js";
 import { contactsRoutes, contactsPublicRoutes, contactsStore } from "./contacts/routes.js";
 import { notificationRoutes } from "./notifications/routes.js";
+import { plannerRoutes, plannerStore } from "./planner/routes.js";
 
 const app = new Hono();
 
@@ -97,6 +98,7 @@ app.use("/fleet-chat/quarantine", bearerAuth());
 app.use("/fleet-chat/send", bearerAuth());
 app.use("/kb/*", bearerAuth());
 app.use("/daemon/*", bearerAuth());
+app.use("/planner/*", bearerAuth());
 // Contacts: auth on management routes. /peer/accept is public (for peering handshake).
 // Note: /:id routes have auth applied at router level in contacts/routes.ts
 app.use("/contacts", bearerAuth());            // list + create
@@ -147,6 +149,7 @@ app.route("/fleet-chat", fleetChatRoutes);
 app.route("/contacts", contactsRoutes);
 app.route("/daemon", daemonRoutes);
 app.route("/notifications", notificationRoutes);
+app.route("/planner", plannerRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
@@ -206,6 +209,8 @@ async function gracefulShutdown(signal: string) {
   }
   // Close contacts DB
   try { contactsStore.close(); } catch {}
+  // Close planner DB
+  try { plannerStore.close(); } catch {}
   // Stop daemon event loop
   if (daemonEngine.isRunning) {
     try { daemonEngine.stop(); } catch {}
