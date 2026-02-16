@@ -376,6 +376,85 @@ describe("SkillHub Service", () => {
       const res = await jsonPost("/sync", { skills: [], extensions: [] });
       expect(res.status).toBe(400);
     });
+
+    it("does NOT remove git-sourced skills absent from hub", async () => {
+      // Agent has a git-sourced skill that the hub doesn't know about.
+      // Sync should NOT tell the agent to remove it.
+      const res = await jsonPost("/sync", {
+        agentId: "agent-1",
+        skills: [{ name: "git-only-skill", version: 1, source: "git" }],
+        extensions: [],
+      });
+      const data = await res.json();
+      expect(data.updates).toHaveLength(0);
+    });
+
+    it("does NOT remove local-sourced skills absent from hub", async () => {
+      const res = await jsonPost("/sync", {
+        agentId: "agent-1",
+        skills: [{ name: "local-skill", version: 1, source: "local" }],
+        extensions: [],
+      });
+      const data = await res.json();
+      expect(data.updates).toHaveLength(0);
+    });
+
+    it("DOES remove hub-sourced skills absent from hub", async () => {
+      // Agent has a hub-sourced skill that was deleted from hub.
+      // Sync should tell the agent to remove it.
+      const res = await jsonPost("/sync", {
+        agentId: "agent-1",
+        skills: [{ name: "deleted-hub-skill", version: 1, source: "hub" }],
+        extensions: [],
+      });
+      const data = await res.json();
+      expect(data.updates).toHaveLength(1);
+      expect(data.updates[0].action).toBe("remove");
+      expect(data.updates[0].name).toBe("deleted-hub-skill");
+    });
+
+    it("removes skills with no source (backward compat defaults to hub)", async () => {
+      // No source field → defaults to "hub" behavior (backward compatible)
+      const res = await jsonPost("/sync", {
+        agentId: "agent-1",
+        skills: [{ name: "old-format-skill", version: 1 }],
+        extensions: [],
+      });
+      const data = await res.json();
+      expect(data.updates).toHaveLength(1);
+      expect(data.updates[0].action).toBe("remove");
+    });
+
+    it("does NOT remove git-sourced extensions absent from hub", async () => {
+      const res = await jsonPost("/sync", {
+        agentId: "agent-1",
+        skills: [],
+        extensions: [{ name: "git-ext", version: 1, source: "git" }],
+      });
+      const data = await res.json();
+      expect(data.updates).toHaveLength(0);
+    });
+
+    it("still installs/updates hub skills even when agent has git version", async () => {
+      // Hub has skill-a v2. Agent has skill-a v1 from git.
+      // Sync should tell agent to update (hub is source of truth).
+      await jsonPost("/items", sampleSkill);
+      await jsonPost("/items", { ...sampleSkill, content: "# v2" }); // version 2
+
+      const res = await jsonPost("/sync", {
+        agentId: "agent-1",
+        skills: [{ name: "test-skill", version: 1, source: "git" }],
+        extensions: [],
+      });
+      const data = await res.json();
+      expect(data.updates).toHaveLength(1);
+      expect(data.updates[0]).toEqual({
+        type: "skill",
+        name: "test-skill",
+        version: 2,
+        action: "update",
+      });
+    });
   });
 
   // ─── Agent Inventory ────────────────────────────────────
