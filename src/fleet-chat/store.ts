@@ -647,13 +647,13 @@ export class FleetChatStore {
       params.push(opts.before);
     }
 
-    let sql = `SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY timestamp ASC`;
+    let sql = `SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY id ASC`;
 
     if (opts?.limit) {
-      // Last N messages: use a subquery to get the tail
+      // Last N messages: use a subquery to get the tail (order by ULID for deterministic ordering)
       sql = `SELECT * FROM (
-        SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY timestamp DESC LIMIT ?
-      ) sub ORDER BY timestamp ASC`;
+        SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY id DESC LIMIT ?
+      ) sub ORDER BY id ASC`;
       params.push(opts.limit);
     }
 

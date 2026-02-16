@@ -14,14 +14,28 @@ beforeAll(() => {
 });
 
 const app = new Hono();
-// Public routes first (no auth in test)
+// Public peer routes first (no auth needed — matches server.ts pattern)
 app.route("/contacts", contactsPublicRoutes);
+// Then authenticated routes (bearerAuth checks VERS_AUTH_TOKEN if set)
+// Note: Hono cascades through routes in order — public routes only handle /peer/accept
 app.route("/contacts", contactsRoutes);
 
 function req(method: string, path: string, body?: unknown) {
-  const opts: RequestInit = { method, headers: { "Content-Type": "application/json" } };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  // Include bearer token if VERS_AUTH_TOKEN is set (needed for /:id routes with bearerAuth)
+  if (process.env.VERS_AUTH_TOKEN) {
+    headers["Authorization"] = `Bearer ${process.env.VERS_AUTH_TOKEN}`;
+  }
+  const opts: RequestInit = { method, headers };
   if (body) opts.body = JSON.stringify(body);
-  return app.request(`http://localhost/contacts${path}`, opts);
+  // Normalize paths to avoid Hono trailing-slash 404:
+  // "/"           → ""       (no trailing slash)
+  // "/?q=1"       → "?q=1"  (query on root)
+  // "/peer/..."   → "/peer/..."  (sub-paths unchanged)
+  let fullPath = path;
+  if (fullPath === "/") fullPath = "";
+  else if (fullPath.startsWith("/?")) fullPath = fullPath.slice(1); // "/?q=1" → "?q=1"
+  return app.request(`http://localhost/contacts${fullPath}`, opts);
 }
 
 describe("Contacts Routes", () => {

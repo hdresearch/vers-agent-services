@@ -131,6 +131,14 @@ export class LoopStore {
     return this.getStatus();
   }
 
+  /** Wait for all currently active (in-flight) ticks to complete */
+  async waitForActiveTicks(): Promise<void> {
+    const active = [...this.activeTicks.values()];
+    if (active.length > 0) {
+      await Promise.allSettled(active);
+    }
+  }
+
   stop(): LoopStatus {
     if (!this.running) throw new ValidationError("Loop is not running");
 
@@ -154,17 +162,6 @@ export class LoopStore {
     // Don't start new ticks during shutdown
     if (this.shuttingDown) return;
 
-    const promise = this.executeTickRole(role);
-    this.activeTicks.set(role.name, promise);
-    promise.finally(() => {
-      // Only delete if this is still the tracked promise (not replaced by a newer tick)
-      if (this.activeTicks.get(role.name) === promise) {
-        this.activeTicks.delete(role.name);
-      }
-    });
-  }
-
-  private async executeTickRole(role: RoleConfig): Promise<void> {
     const run: RunRecord = {
       id: ulid(),
       role: role.name,
@@ -175,20 +172,53 @@ export class LoopStore {
     role.lastRun = run.startedAt;
     role.runCount++;
 
+    let tickResult: void | Promise<void> | undefined;
     try {
       if (this.onTick) {
-        await this.onTick(role);
+        tickResult = this.onTick(role);
       }
-      run.result = "success";
-      run.completedAt = new Date().toISOString();
-      role.lastResult = "success";
     } catch (err) {
+      // Sync error — record immediately
       run.result = "error";
       run.detail = err instanceof Error ? err.message : String(err);
       run.completedAt = new Date().toISOString();
       role.lastResult = `error: ${run.detail}`;
+      this.recordRun(run);
+      return;
     }
 
+    // If onTick returned a promise, handle async completion
+    if (tickResult && typeof (tickResult as any).then === "function") {
+      const promise = (tickResult as Promise<void>)
+        .then(() => {
+          run.result = "success";
+          run.completedAt = new Date().toISOString();
+          role.lastResult = "success";
+          this.recordRun(run);
+        })
+        .catch((err) => {
+          run.result = "error";
+          run.detail = err instanceof Error ? err.message : String(err);
+          run.completedAt = new Date().toISOString();
+          role.lastResult = `error: ${run.detail}`;
+          this.recordRun(run);
+        });
+      this.activeTicks.set(role.name, promise);
+      promise.finally(() => {
+        if (this.activeTicks.get(role.name) === promise) {
+          this.activeTicks.delete(role.name);
+        }
+      });
+    } else {
+      // Sync callback — record immediately
+      run.result = "success";
+      run.completedAt = new Date().toISOString();
+      role.lastResult = "success";
+      this.recordRun(run);
+    }
+  }
+
+  private recordRun(run: RunRecord): void {
     this.runs.push(run);
     // Keep last 100 runs
     if (this.runs.length > 100) this.runs = this.runs.slice(-100);

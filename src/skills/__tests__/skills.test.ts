@@ -737,8 +737,16 @@ describe("SkillHub Service", () => {
   describe("SkillStore — Persistence", () => {
     const testFile = "data/test-skills.json";
 
+    beforeEach(() => {
+      for (const f of [testFile, testFile + ".tmp", testFile + ".bak"]) {
+        try { unlinkSync(f); } catch {}
+      }
+    });
+
     afterEach(() => {
-      if (existsSync(testFile)) unlinkSync(testFile);
+      for (const f of [testFile, testFile + ".tmp", testFile + ".bak"]) {
+        try { unlinkSync(f); } catch {}
+      }
     });
 
     it("persists and reloads skills", () => {
