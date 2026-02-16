@@ -42,6 +42,7 @@ import { docsRoutes, docsPublicRoutes, docsStore } from "./docs/routes.js";
 import { chatRoutes, chatStore, webChatStore, chatBridge, startFleetEventBridge, stopFleetEventBridge } from "./chat/routes.js";
 import { aegisRoutes, aegisStore } from "./aegis/routes.js";
 import { deployRoutes } from "./deploy/routes.js";
+import { busRoutes } from "./bus/bridge.js";
 
 import { backupRoutes, backupScheduler } from "./backup/routes.js";
 
@@ -145,6 +146,7 @@ app.use("/loop/*", bearerAuth());
 app.use("/aegis/*", bearerAuth());
 app.use("/autonomy/*", bearerAuth());
 app.use("/deploy/*", bearerAuth());
+app.use("/bus/*", bearerAuth());
 
 app.use("/boot/*", bearerAuth());
 
@@ -186,10 +188,9 @@ app.route("/aegis", aegisRoutes);
 app.route("/autonomy", autonomyRoutes);
 app.route("/deploy", deployRoutes);
 app.route("/backup", backupRoutes);
-
 app.route("/planner", plannerRoutes);
-
 app.route("/boot", bootRoutes);
+app.route("/bus", busRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
