@@ -1,6 +1,6 @@
-// Agent Services Dashboard — Reliability Edition
-// Fixes: error boundaries, fetch timeouts, lazy tab loading,
-// graceful SSE degradation, loading states, never-blank guarantee
+// Agent Services Dashboard — Reliability Edition v2
+// Fixes: error boundaries, fetch timeouts (5s), lazy tab loading,
+// graceful SSE degradation, loading states, per-tab refresh, never-blank guarantee
 
 const API = '/ui/api';
 
@@ -10,7 +10,7 @@ const etagCache = new Map(); // path → { etag, data }
 // ─── Fetch with timeout + error boundary + conditional requests ───
 
 async function api(path, opts = {}) {
-  const timeout = opts.timeout || 8000;
+  const timeout = opts.timeout || 5000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   const headers = {};
@@ -77,15 +77,65 @@ function showError(el, message, retryFn) {
   const retryId = 'retry-' + Math.random().toString(36).slice(2, 8);
   el.innerHTML = `<div class="panel-error">
     <span class="error-icon">⚠</span> ${esc(message)}
-    ${retryFn ? `<button class="error-retry" id="${retryId}">Retry</button>` : ''}
+    ${retryFn ? `<button class="error-retry" id="${retryId}">↻ Retry</button>` : ''}
   </div>`;
   if (retryFn) {
-    // Defer to next tick so the element exists in DOM
     setTimeout(() => {
       const btn = document.getElementById(retryId);
       if (btn) btn.onclick = retryFn;
     }, 0);
   }
+}
+
+// ─── Guarded fetch — wraps raw fetch() with timeout + error handling ───
+
+async function guardedFetch(url, opts = {}) {
+  const timeout = opts._timeout || 5000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    const res = await fetch(url, { ...opts, signal: controller.signal });
+    clearTimeout(timer);
+    return res;
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') throw new Error(`Request timeout after ${timeout}ms`);
+    throw e;
+  }
+}
+
+// ─── Tab refresh buttons ───
+// Adds a refresh button to a container element. Call once per tab init.
+
+const _refreshButtons = new Set();
+function addRefreshButton(containerId, refreshFn) {
+  if (_refreshButtons.has(containerId)) return;
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  _refreshButtons.add(containerId);
+
+  // Find the closest panel header (sibling or ancestor structure)
+  const panel = container.closest('.panel') || container.closest('.view');
+  if (!panel) return;
+  const header = panel.querySelector('.panel-header, .view-header, h2, .status-bar');
+  if (!header) return;
+
+  const btn = document.createElement('button');
+  btn.className = 'tab-refresh-btn';
+  btn.textContent = '↻';
+  btn.title = 'Refresh';
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    btn.classList.add('spinning');
+    const result = refreshFn();
+    if (result && result.then) {
+      result.then(() => btn.classList.remove('spinning')).catch(() => btn.classList.remove('spinning'));
+    } else {
+      setTimeout(() => btn.classList.remove('spinning'), 500);
+    }
+  };
+  header.style.position = 'relative';
+  header.appendChild(btn);
 }
 
 // ─── Board ───
@@ -167,7 +217,7 @@ function renderBoard(tasks) {
 
 async function bumpTask(taskId) {
   try {
-    await fetch(`${API}/board/tasks/${taskId}/bump`, { method: 'POST' });
+    await guardedFetch(`${API}/board/tasks/${taskId}/bump`, { method: 'POST' });
     loadBoard();
   } catch (e) {
     console.error('Bump failed:', e);
@@ -582,7 +632,7 @@ async function approveTask(taskId) {
   const comment = prompt('Approval comment (optional):');
   if (comment === null) return;
   try {
-    await fetch(`${API}/board/tasks/${taskId}/approve`, {
+    await guardedFetch(`${API}/board/tasks/${taskId}/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ comment: comment || '', approvedBy: 'dashboard-user' }),
@@ -598,7 +648,7 @@ async function rejectTask(taskId) {
   const reason = prompt('Rejection reason (required):');
   if (!reason) return;
   try {
-    await fetch(`${API}/board/tasks/${taskId}/reject`, {
+    await guardedFetch(`${API}/board/tasks/${taskId}/reject`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reason, rejectedBy: 'dashboard-user' }),
@@ -892,7 +942,7 @@ function renderKbEntries() {
 
 async function reinforceKbEntry(id) {
   try {
-    await fetch(`${API}/kb/entries/${id}`, {
+    await guardedFetch(`${API}/kb/entries/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reinforce: true }),
@@ -916,7 +966,7 @@ async function addKbEntry() {
     const tagsRaw = document.getElementById('kb-add-tags').value.trim();
     const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
 
-    await fetch(`${API}/kb/entries`, {
+    await guardedFetch(`${API}/kb/entries`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1179,6 +1229,12 @@ async function init() {
     loadRegistry(),
     loadReports(),
   ]);
+
+  // Wire up per-tab refresh buttons (after initial data loads so containers exist)
+  addRefreshButton('board', () => loadBoard());
+  addRefreshButton('feed', () => loadFeed());
+  addRefreshButton('registry', () => loadRegistry());
+  addRefreshButton('reports', () => loadReports());
 
   // Hash routing — support deep links like #review, #board, etc.
   const hash = window.location.hash.replace('#', '').split('?')[0];

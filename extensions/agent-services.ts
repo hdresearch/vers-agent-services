@@ -50,7 +50,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { homedir } from "node:os";
-import { mkdir, writeFile, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, writeFile, readFile, readdir, rm, stat, rename } from "node:fs/promises";
 import { join } from "node:path";
 
 // =============================================================================
@@ -142,16 +142,20 @@ const TURN_SYNC_COOLDOWN_MS = 60_000; // 60 seconds
 let lastTurnSyncAt = 0;
 
 /**
- * Discover skill names already installed from git-based packages.
+ * Discover skill paths already installed from git-based packages.
  * Scans ~/.pi/agent/git/ recursively for skills/X/SKILL.md patterns.
- * These skills should NOT be downloaded from SkillHub to avoid collision warnings.
+ * Returns a Map of skillName → directory path so we can remove conflicts.
+ *
+ * SkillHub skills OVERRIDE git-package skills. When SkillHub has a skill
+ * that also exists in a git package, the git version is removed to prevent
+ * pi's "first found wins" collision from using the stale git version.
  */
-async function getPackageSkillNames(): Promise<Set<string>> {
-  const names = new Set<string>();
+async function getPackageSkillPaths(): Promise<Map<string, string>> {
+  const paths = new Map<string, string>();
   const gitDir = join(homedir(), ".pi", "agent", "git");
 
   async function walkForSkills(dir: string, depth: number): Promise<void> {
-    if (depth > 8) return; // don't recurse too deep
+    if (depth > 8) return;
     let entries: string[];
     try {
       entries = await readdir(dir);
@@ -167,20 +171,18 @@ async function getPackageSkillNames(): Promise<Set<string>> {
         continue;
       }
       if (entry === "skills") {
-        // Found a skills directory — enumerate its children
         try {
           const skillDirs = await readdir(full);
           for (const skillName of skillDirs) {
+            const skillPath = join(full, skillName);
             try {
-              await stat(join(full, skillName, "SKILL.md"));
-              names.add(skillName);
+              await stat(join(skillPath, "SKILL.md"));
+              paths.set(skillName, skillPath);
             } catch {
               // not a valid skill dir
             }
           }
-        } catch {
-          // can't read skills dir
-        }
+        } catch {}
       } else {
         await walkForSkills(full, depth + 1);
       }
@@ -188,7 +190,30 @@ async function getPackageSkillNames(): Promise<Set<string>> {
   }
 
   await walkForSkills(gitDir, 0);
-  return names;
+  return paths;
+}
+
+// Backward compat helper — returns just names (used by SSE handler)
+async function getPackageSkillNames(): Promise<Set<string>> {
+  const paths = await getPackageSkillPaths();
+  return new Set(paths.keys());
+}
+
+/**
+ * Remove a git-package skill directory so the SkillHub version takes priority.
+ * Creates a .hub-override marker so we know this was intentional.
+ */
+async function removeConflictingPackageSkill(skillName: string, packagePath: string): Promise<void> {
+  try {
+    await rm(packagePath, { recursive: true });
+  } catch {
+    // If we can't remove, at least rename the SKILL.md so pi won't discover it
+    try {
+      await rename(join(packagePath, "SKILL.md"), join(packagePath, "SKILL.md.shadowed-by-hub"));
+    } catch {
+      // Last resort: can't override, will get collision warning
+    }
+  }
 }
 
 /**
@@ -203,8 +228,8 @@ async function syncSkillsLightweight(): Promise<string[]> {
   const synced: string[] = [];
 
   try {
-    // Step 0: Discover skills already installed from packages (skip these)
-    const packageSkills = await getPackageSkillNames();
+    // Step 0: Discover skills installed from git packages (we'll override conflicts)
+    const packageSkillPaths = await getPackageSkillPaths();
 
     // Step 1: Get lightweight manifest (no content, just names + versions)
     const manifest = await api<{
@@ -212,8 +237,8 @@ async function syncSkillsLightweight(): Promise<string[]> {
       extensions: Array<{ name: string; version: number }>;
     }>("GET", "/skills/manifest");
 
-    // Filter out skills that already exist from installed packages
-    const remoteSkills = manifest.skills.filter((s) => !packageSkills.has(s.name));
+    // ALL remote skills are candidates — hub takes priority over git packages
+    const remoteSkills = manifest.skills;
 
     await mkdir(HUB_SKILLS_DIR, { recursive: true });
 
@@ -235,21 +260,30 @@ async function syncSkillsLightweight(): Promise<string[]> {
           "GET",
           `/skills/items/${encodeURIComponent(skill.name)}`,
         );
+
+        // Remove conflicting git-package skill so hub version wins
+        const conflictPath = packageSkillPaths.get(skill.name);
+        if (conflictPath) {
+          await removeConflictingPackageSkill(skill.name, conflictPath);
+          synced.push(`${full.name} v${full.version} (overrode git package)`);
+        } else {
+          synced.push(`${full.name} v${full.version}`);
+        }
+
         const skillDir = join(HUB_SKILLS_DIR, skill.name);
         await mkdir(skillDir, { recursive: true });
         await writeFile(join(skillDir, "SKILL.md"), full.content);
         await writeFile(join(skillDir, ".version"), String(full.version));
-        synced.push(`${full.name} v${full.version}`);
       } catch {
         // Best effort — skip individual skill failures
       }
     }
 
-    // Step 4: Remove hub skills that were deleted from hub or now come from packages
-    const hubOnlyNames = new Set(remoteSkills.map((s) => s.name));
+    // Step 4: Remove hub skills that were deleted from hub
+    const hubNames = new Set(remoteSkills.map((s) => s.name));
     const localDirs = await readdir(HUB_SKILLS_DIR).catch(() => [] as string[]);
     for (const dir of localDirs) {
-      if (!hubOnlyNames.has(dir)) {
+      if (!hubNames.has(dir)) {
         await rm(join(HUB_SKILLS_DIR, dir), { recursive: true });
         synced.push(`${dir} (removed)`);
       }
@@ -266,11 +300,10 @@ async function syncSkillsFromHub(): Promise<string[]> {
   if (!baseUrl) return [];
 
   const synced: string[] = [];
-  const skipped: string[] = [];
 
   try {
-    // Discover skills already installed from packages (skip these)
-    const packageSkills = await getPackageSkillNames();
+    // Discover skills installed from git packages (we'll override conflicts)
+    const packageSkillPaths = await getPackageSkillPaths();
 
     const res = await api<{ skills: Array<{ name: string; version: number; content: string }>; count: number }>(
       "GET",
@@ -281,33 +314,42 @@ async function syncSkillsFromHub(): Promise<string[]> {
     await mkdir(HUB_SKILLS_DIR, { recursive: true });
 
     for (const skill of skills) {
-      // Skip skills already provided by installed packages
-      if (packageSkills.has(skill.name)) {
-        skipped.push(skill.name);
-        continue;
-      }
-
       const skillDir = join(HUB_SKILLS_DIR, skill.name);
       await mkdir(skillDir, { recursive: true });
 
-      // Check if we already have this version
+      // Check if we already have this version in _hub
       const versionFile = join(skillDir, ".version");
       const currentVersion = await readFile(versionFile, "utf-8").catch(() => "0");
-      if (parseInt(currentVersion) >= skill.version) continue;
+
+      if (parseInt(currentVersion) >= skill.version) {
+        // Already up to date in _hub, but still need to remove any conflicting git skill
+        const conflictPath = packageSkillPaths.get(skill.name);
+        if (conflictPath) {
+          await removeConflictingPackageSkill(skill.name, conflictPath);
+          synced.push(`${skill.name} (removed stale git package)`);
+        }
+        continue;
+      }
+
+      // Remove conflicting git-package skill so hub version wins
+      const conflictPath = packageSkillPaths.get(skill.name);
+      if (conflictPath) {
+        await removeConflictingPackageSkill(skill.name, conflictPath);
+        synced.push(`${skill.name} v${skill.version} (overrode git package)`);
+      } else {
+        synced.push(`${skill.name} v${skill.version}`);
+      }
 
       // Write SKILL.md and version tracker
       await writeFile(join(skillDir, "SKILL.md"), skill.content);
       await writeFile(versionFile, String(skill.version));
-      synced.push(`${skill.name} v${skill.version}`);
     }
 
-    // Remove hub skills that were deleted from hub or now come from packages
-    const hubOnlyNames = new Set(
-      skills.filter((s) => !packageSkills.has(s.name)).map((s) => s.name)
-    );
+    // Remove hub skills that were deleted from hub
+    const hubNames = new Set(skills.map((s) => s.name));
     const localDirs = await readdir(HUB_SKILLS_DIR).catch(() => [] as string[]);
     for (const dir of localDirs) {
-      if (!hubOnlyNames.has(dir)) {
+      if (!hubNames.has(dir)) {
         await rm(join(HUB_SKILLS_DIR, dir), { recursive: true });
         synced.push(`${dir} (removed)`);
       }
@@ -428,10 +470,7 @@ async function handleSkillEvent(event: { type: string; name: string; kind?: stri
     return;
   }
 
-  // Handle skill events — skip skills already installed from packages
-  const packageSkills = await getPackageSkillNames();
-  if (packageSkills.has(event.name)) return;
-
+  // Handle skill events — hub takes priority over git packages
   const skillDir = join(HUB_SKILLS_DIR, event.name);
 
   if (event.type === "skill_removed") {
@@ -441,6 +480,13 @@ async function handleSkillEvent(event: { type: string; name: string; kind?: stri
 
   if (event.type === "skill_published" || event.type === "skill_updated") {
     try {
+      // Remove conflicting git-package skill
+      const packageSkillPaths = await getPackageSkillPaths();
+      const conflictPath = packageSkillPaths.get(event.name);
+      if (conflictPath) {
+        await removeConflictingPackageSkill(event.name, conflictPath);
+      }
+
       const skill = await api<{ name: string; version: number; content: string }>(
         "GET",
         `/skills/items/${encodeURIComponent(event.name)}`,
@@ -1537,18 +1583,14 @@ export default function (pi: ExtensionAPI) {
     async execute() {
       if (!getBaseUrl()) return noUrlError();
       try {
-        const packageSkills = await getPackageSkillNames();
         const synced = await syncSkillsFromHub();
         const extsSynced = await syncExtensionsFromHub();
         const total = synced.length + extsSynced.length;
-        const skippedNote = packageSkills.size > 0
-          ? `\nSkipped (from packages): ${Array.from(packageSkills).join(", ")}`
-          : "";
         const text =
           total > 0
-            ? `Synced from hub:\nSkills: ${synced.join(", ") || "up to date"}\nExtensions: ${extsSynced.join(", ") || "up to date"}${skippedNote}${extsSynced.length > 0 ? "\n\nNote: Extension changes require /reload to take effect." : ""}`
-            : `Everything up to date.${skippedNote}`;
-        return ok(text, { skills: synced, extensions: extsSynced, skippedFromPackages: Array.from(packageSkills) });
+            ? `Synced from hub (hub skills override git packages):\nSkills: ${synced.join(", ") || "up to date"}\nExtensions: ${extsSynced.join(", ") || "up to date"}${extsSynced.length > 0 ? "\n\nNote: Extension changes require /reload to take effect." : ""}`
+            : `Everything up to date.`;
+        return ok(text, { skills: synced, extensions: extsSynced });
       } catch (e: any) {
         return err(e.message);
       }
