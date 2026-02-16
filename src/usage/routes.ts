@@ -17,6 +17,19 @@ usageRoutes.post("/sessions", async (c) => {
   }
 });
 
+// PATCH /sessions/:id — upsert session with latest partial data (periodic flush)
+usageRoutes.patch("/sessions/:id", async (c) => {
+  try {
+    const sessionId = c.req.param("id");
+    const body = await c.req.json();
+    const record = await store.upsertSession(sessionId, { ...body, sessionId });
+    return c.json(record, 200);
+  } catch (e) {
+    if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
+    throw e;
+  }
+});
+
 // POST /vms — record a VM lifecycle event
 usageRoutes.post("/vms", async (c) => {
   try {
@@ -31,6 +44,13 @@ usageRoutes.post("/vms", async (c) => {
 
 // GET / — usage summary
 usageRoutes.get("/", async (c) => {
+  const range = c.req.query("range") || "7d";
+  const summary = await store.summary(range);
+  return c.json(summary);
+});
+
+// GET /summary — alias for / (TokenBurn macOS app uses this path)
+usageRoutes.get("/summary", async (c) => {
   const range = c.req.query("range") || "7d";
   const summary = await store.summary(range);
   return c.json(summary);
@@ -61,3 +81,4 @@ usageRoutes.get("/vms", async (c) => {
   });
   return c.json({ vms, count: vms.length });
 });
+

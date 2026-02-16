@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { atomicWriteFileSync, recoverTmpFile } from "../utils/atomic-write.js";
 
 export interface Report {
   id: string;
@@ -16,6 +16,13 @@ export interface CreateReportInput {
   title: string;
   author: string;
   content: string;
+  tags?: string[];
+}
+
+export interface UpdateReportInput {
+  title?: string;
+  author?: string;
+  content?: string;
   tags?: string[];
 }
 
@@ -35,6 +42,7 @@ export class ReportsStore {
   }
 
   private load(): void {
+    recoverTmpFile(this.filePath);
     try {
       if (existsSync(this.filePath)) {
         const raw = readFileSync(this.filePath, "utf-8");
@@ -63,12 +71,8 @@ export class ReportsStore {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;
     }
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
     const data = JSON.stringify({ reports: Array.from(this.reports.values()) }, null, 2);
-    writeFileSync(this.filePath, data, "utf-8");
+    atomicWriteFileSync(this.filePath, data);
   }
 
   create(input: CreateReportInput): Report {
@@ -117,6 +121,38 @@ export class ReportsStore {
     return results;
   }
 
+  update(id: string, input: UpdateReportInput): Report {
+    const report = this.reports.get(id);
+    if (!report) throw new NotFoundError("report not found");
+
+    if (input.title !== undefined) {
+      if (typeof input.title !== "string" || !input.title.trim()) {
+        throw new ValidationError("title cannot be empty");
+      }
+      report.title = input.title.trim();
+    }
+    if (input.author !== undefined) {
+      if (typeof input.author !== "string" || !input.author.trim()) {
+        throw new ValidationError("author cannot be empty");
+      }
+      report.author = input.author.trim();
+    }
+    if (input.content !== undefined) {
+      if (typeof input.content !== "string") {
+        throw new ValidationError("content must be a string");
+      }
+      report.content = input.content;
+    }
+    if (input.tags !== undefined) {
+      report.tags = input.tags;
+    }
+
+    report.updatedAt = new Date().toISOString();
+    this.reports.set(id, report);
+    this.scheduleSave();
+    return report;
+  }
+
   delete(id: string): boolean {
     const existed = this.reports.delete(id);
     if (existed) this.scheduleSave();
@@ -124,16 +160,5 @@ export class ReportsStore {
   }
 }
 
-export class NotFoundError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NotFoundError";
-  }
-}
-
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ValidationError";
-  }
-}
+export { NotFoundError, ValidationError } from "../errors.js";
+import { NotFoundError, ValidationError } from "../errors.js";

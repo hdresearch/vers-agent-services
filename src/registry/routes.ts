@@ -8,6 +8,7 @@ import {
   type VMRole,
   type VMStatus,
 } from "./store.js";
+import { emit } from "../events/emit.js";
 
 export const registryStore = new RegistryStore();
 
@@ -18,6 +19,7 @@ registryRoutes.post("/vms", async (c) => {
   try {
     const body = await c.req.json();
     const vm = registryStore.register(body);
+    emit('registry', 'registry.vm.registered', { vmId: vm.id, name: vm.name, role: vm.role, address: vm.address }, vm.registeredBy);
     return c.json(vm, 201);
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
@@ -26,17 +28,36 @@ registryRoutes.post("/vms", async (c) => {
   }
 });
 
-// List all registered VMs
+// List registered VMs (excludes stale by default unless include_stale=true)
 registryRoutes.get("/vms", (c) => {
   const filters: VMFilters = {};
   const role = c.req.query("role");
   const status = c.req.query("status");
+  const includeStale = c.req.query("include_stale") === "true";
 
   if (role) filters.role = role as VMRole;
   if (status) filters.status = status as VMStatus;
 
-  const vms = registryStore.list(filters);
+  const vms = includeStale
+    ? registryStore.listAll(filters)
+    : registryStore.list(filters, false);
   return c.json({ vms, count: vms.length });
+});
+
+// List only stale (expired) VMs
+registryRoutes.get("/stale", (c) => {
+  const vms = registryStore.listStale();
+  return c.json({ vms, count: vms.length });
+});
+
+// Purge all stale VMs (past the soft TTL threshold)
+registryRoutes.delete("/stale", (c) => {
+  const staleVms = registryStore.listStale();
+  for (const vm of staleVms) {
+    registryStore.deregister(vm.id);
+    emit('registry', 'registry.vm.stale', { vmId: vm.id, name: vm.name, role: vm.role });
+  }
+  return c.json({ purged: staleVms.length });
 });
 
 // Get a single VM
@@ -61,8 +82,10 @@ registryRoutes.patch("/vms/:id", async (c) => {
 
 // Deregister a VM
 registryRoutes.delete("/vms/:id", (c) => {
-  const deleted = registryStore.deregister(c.req.param("id"));
+  const vmId = c.req.param("id");
+  const deleted = registryStore.deregister(vmId);
   if (!deleted) return c.json({ error: "VM not found" }, 404);
+  emit('registry', 'registry.vm.deregistered', { vmId });
   return c.json({ deleted: true });
 });
 
@@ -70,11 +93,21 @@ registryRoutes.delete("/vms/:id", (c) => {
 registryRoutes.post("/vms/:id/heartbeat", (c) => {
   try {
     const vm = registryStore.heartbeat(c.req.param("id"));
+    emit('registry', 'registry.vm.heartbeat', { vmId: vm.id, lastSeen: vm.lastSeen });
     return c.json({ id: vm.id, lastSeen: vm.lastSeen });
   } catch (e) {
     if (e instanceof NotFoundError) return c.json({ error: e.message }, 404);
     throw e;
   }
+});
+
+// Resolve a VM by name (poor man's DNS)
+registryRoutes.get("/resolve/:name", (c) => {
+  const name = c.req.param("name");
+  const vms = registryStore.list();
+  const vm = vms.find((v) => v.name === name);
+  if (!vm) return c.json({ error: `No VM registered with name: ${name}` }, 404);
+  return c.json({ name: vm.name, address: vm.address, vmId: vm.id, role: vm.role });
 });
 
 // Discover VMs by role

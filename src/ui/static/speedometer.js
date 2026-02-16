@@ -40,23 +40,23 @@
   // EventSource at /ui/api/feed/stream. We'll create our own listener
   // that coexists — or better, we expose a function for app.js to call.
 
-  // Global hook: app.js SSE onmessage will call this if it exists
+  // Global hook: app.js SSE onmessage will call this if it exists.
+  // Accepts ALL event types that carry token data — not just token_update/cost_update.
   window._speedometerOnFeedEvent = function (evt) {
-    if (evt.type !== 'token_update' && evt.type !== 'cost_update') return;
-    if (!evt.detail) return;
+    // Accept multiple event types that may carry token info
+    const validTypes = ['token_update', 'cost_update', 'task_completed', 'custom'];
+    if (!validTypes.includes(evt.type) && !evt.detail) return;
 
     try {
-      const d = typeof evt.detail === 'string' ? JSON.parse(evt.detail) : evt.detail;
-      const tokens = d.tokensThisTurn || 0;
-      // Always use local time for the sliding window timestamp.
-      // The server's d.timestamp comes from the Vers VM clock which may have
-      // skew relative to this browser. A stale server timestamp causes events
-      // to fall outside the 10-second window and get pruned immediately,
-      // keeping the needle permanently at 0.
+      const d = typeof evt.detail === 'string' ? JSON.parse(evt.detail) : (evt.detail || {});
+      // Look for token counts in various field names
+      const tokens = d.tokensThisTurn || d.tokens || d.tokenCount || 0;
+      // Always use local time for the sliding window timestamp (avoid VM clock skew)
       const ts = Date.now();
       if (tokens > 0) {
-        tokenEvents.push({ tokens, timestamp: ts });
+        tokenEvents.push({ tokens, timestamp: ts, agent: evt.agent || 'unknown' });
         lastEventTime = ts;
+        sseConnected = true; // mark as receiving data
       }
     } catch {
       // malformed detail, ignore
@@ -306,7 +306,7 @@
     ctx.fillStyle = 'rgba(192, 192, 192, 0.5)';
     ctx.fillText('TOKENS/SEC', cx, cy + 22);
 
-    // ─── Idle pulse ───
+    // ─── Idle / status indicator ───
     if (currentRate < 0.5) {
       const pulse = Math.sin(time * 0.002) * 0.08 + 0.08;
       ctx.beginPath();
@@ -315,6 +315,14 @@
       ctx.lineWidth = 1;
       ctx.stroke();
     }
+
+    // SSE status dot (top-right corner)
+    const dotColor = sseConnected ? '#44ff88' : '#ff4466';
+    const dotPulse = Math.sin(time * 0.003) * 0.3 + 0.7;
+    ctx.beginPath();
+    ctx.arc(w - 12, 12, 3, 0, Math.PI * 2);
+    ctx.fillStyle = sseConnected ? `rgba(68, 255, 136, ${dotPulse})` : `rgba(255, 68, 102, ${dotPulse})`;
+    ctx.fill();
 
     ctx.restore();
 

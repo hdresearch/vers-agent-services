@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { LogStore, ValidationError } from "./store.js";
+import { emit } from "../events/emit.js";
 
 const store = new LogStore();
 
@@ -10,6 +11,7 @@ logRoutes.post("/", async (c) => {
   try {
     const body = await c.req.json();
     const entry = store.append(body);
+    emit('log', 'log.entry.created', { entryId: entry.id, text: entry.text?.substring(0, 200) }, entry.agent);
     return c.json(entry, 201);
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
