@@ -1082,6 +1082,13 @@ function switchView(viewName) {
   } else if (prevView === 'config') {
     if (typeof window._configDestroy === 'function') window._configDestroy();
   }
+
+  // Write: init/destroy
+  if (viewName === 'write') {
+    if (typeof window._writeInit === 'function') window._writeInit();
+  } else if (prevView === 'write') {
+    if (typeof window._writeDestroy === 'function') window._writeDestroy();
+  }
 }
 
 // ─── Metrics Sub-tabs ───
