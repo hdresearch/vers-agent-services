@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Hono } from "hono";
 import { SkillStore, ExtensionStore, ManifestStore } from "../store.js";
 import { skillStore, extensionStore, manifestStore, skillsRoutes } from "../routes.js";
-import { unlinkSync, existsSync, mkdirSync } from "node:fs";
+import { unlinkSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 
 const app = new Hono();
 app.route("/skills", skillsRoutes);
@@ -512,6 +512,144 @@ describe("SkillHub Service", () => {
       }
 
       expect(text).toContain('"s2"');
+    });
+  });
+
+  // ─── Health Check ─────────────────────────────────────────
+
+  describe("GET /skills/health — Health check", () => {
+    it("returns healthy when skills exist", async () => {
+      await jsonPost("/items", sampleSkill);
+      const res = await req("/health");
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.healthy).toBe(true);
+      expect(data.skills).toBe(1);
+      expect(data.restored).toBe(false);
+    });
+
+    it("returns 503 when no skills or extensions exist", async () => {
+      const res = await req("/health");
+      expect(res.status).toBe(503);
+      const data = await res.json();
+      expect(data.healthy).toBe(false);
+      expect(data.skills).toBe(0);
+      expect(data.extensions).toBe(0);
+    });
+  });
+
+  // ─── Deploy Resilience (Backup/Restore) ─────────────────
+
+  describe("SkillStore — Backup on startup", () => {
+    const testFile = "data/test-backup-skills.json";
+    const backupFile = testFile + ".bak";
+
+    afterEach(() => {
+      for (const f of [testFile, backupFile, testFile + ".tmp"]) {
+        if (existsSync(f)) unlinkSync(f);
+      }
+    });
+
+    it("creates a .bak file when loading data", () => {
+      const store1 = new SkillStore(testFile);
+      store1.publish({
+        name: "bak-test",
+        description: "Backup test",
+        content: "# backup",
+        publishedBy: "test",
+      });
+      store1.flush();
+
+      // Reload — should create backup
+      const store2 = new SkillStore(testFile);
+      expect(existsSync(backupFile)).toBe(true);
+      expect(store2.restoredFromBackup).toBe(false);
+    });
+
+    it("restores from .bak when primary file is empty", () => {
+      // Create a store with data and flush to create backup
+      const store1 = new SkillStore(testFile);
+      store1.publish({
+        name: "restore-me",
+        description: "Should be restored",
+        content: "# restore",
+        publishedBy: "test",
+      });
+      store1.flush();
+
+      // Reload to create backup
+      new SkillStore(testFile);
+      expect(existsSync(backupFile)).toBe(true);
+
+      // Simulate deploy wipe — write empty skills file
+      writeFileSync(testFile, JSON.stringify({ skills: [], changeLog: [] }));
+
+      // Reload — should restore from backup
+      const store3 = new SkillStore(testFile);
+      expect(store3.restoredFromBackup).toBe(true);
+      expect(store3.get("restore-me")).toBeDefined();
+      expect(store3.count).toBe(1);
+    });
+
+    it("restores from .bak when primary file is missing", () => {
+      const store1 = new SkillStore(testFile);
+      store1.publish({
+        name: "ghost",
+        description: "Gone",
+        content: "# gone",
+        publishedBy: "test",
+      });
+      store1.flush();
+
+      // Reload to create backup
+      new SkillStore(testFile);
+
+      // Simulate deploy wipe — delete primary
+      unlinkSync(testFile);
+
+      const store3 = new SkillStore(testFile);
+      expect(store3.restoredFromBackup).toBe(true);
+      expect(store3.get("ghost")).toBeDefined();
+    });
+
+    it("does not restore if backup is also empty", () => {
+      writeFileSync(backupFile, JSON.stringify({ skills: [], changeLog: [] }));
+      const store = new SkillStore(testFile);
+      expect(store.restoredFromBackup).toBe(false);
+      expect(store.count).toBe(0);
+    });
+  });
+
+  describe("ExtensionStore — Backup on startup", () => {
+    const testFile = "data/test-backup-extensions.json";
+    const backupFile = testFile + ".bak";
+
+    afterEach(() => {
+      for (const f of [testFile, backupFile, testFile + ".tmp"]) {
+        if (existsSync(f)) unlinkSync(f);
+      }
+    });
+
+    it("restores from .bak when primary file is wiped", () => {
+      const store1 = new ExtensionStore(testFile);
+      store1.publish({
+        name: "ext-restore",
+        description: "Restore me",
+        content: "// ext",
+        publishedBy: "test",
+      });
+      store1.flush();
+
+      // Reload to create backup
+      new ExtensionStore(testFile);
+
+      // Wipe
+      writeFileSync(testFile, JSON.stringify({ extensions: [], changeLog: [] }));
+
+      const store3 = new ExtensionStore(testFile);
+      expect(store3.restoredFromBackup).toBe(true);
+      expect(store3.get("ext-restore")).toBeDefined();
+      expect(store3.count).toBe(1);
     });
   });
 

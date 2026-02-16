@@ -11,11 +11,22 @@
     <h1>▸ Agent Services</h1>
     <nav class="tabs">
       <button class="tab active" data-view="dashboard">Dashboard</button>
-      <button class="tab" data-view="review">Review</button>
+      <button class="tab" data-view="review">Review <span class="tab-badge" id="review-tab-badge" style="display:none">0</span></button>
       <button class="tab" data-view="log">Log</button>
       <button class="tab" data-view="journal">Journal</button>
       <button class="tab" data-view="skills">Skills</button>
       <button class="tab" data-view="metrics">Metrics</button>
+      <button class="tab" data-view="chat">Chat</button>
+      <button class="tab" data-view="fleet">Fleet</button>
+      <button class="tab" data-view="knowledge">Knowledge</button>
+      <button class="tab" data-view="couch">Couch</button>
+      <button class="tab" data-view="agents">Agents</button>
+      <button class="tab" data-view="board">Board</button>
+      <button class="tab" data-view="comms">Comms</button>
+      <button class="tab" data-view="events">Events</button>
+      <button class="tab" data-view="daemon">Daemon</button>
+      <button class="tab" data-view="config">Config</button>
+      <button class="tab" data-view="write">Write</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -56,19 +67,71 @@
     </div>
   </div>
 
-  <!-- Review view -->
+  <!-- Review Queue view -->
   <div class="view" id="view-review">
-    <div class="log-toolbar">
-      <div class="log-filters">
-        <span style="color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:1px;">Tasks Awaiting Review</span>
+    <div class="rq-toolbar">
+      <div class="rq-toolbar-left">
+        <span class="rq-title">Review Queue</span>
+        <span class="rq-badge" id="rq-badge" title="Items needing attention">0</span>
       </div>
-      <div class="log-meta">
-        <span id="review-count">-</span> tasks
-        <span class="log-refresh-hint">auto-refresh 30s</span>
+      <div class="rq-filters">
+        <select id="rq-type-filter">
+          <option value="">All types</option>
+          <option value="task">Tasks</option>
+          <option value="report">Reports</option>
+          <option value="notification">Notifications</option>
+        </select>
+        <select id="rq-priority-filter">
+          <option value="">All priorities</option>
+          <option value="critical">🔴 Critical</option>
+          <option value="high">🟠 High</option>
+          <option value="normal">🟡 Normal</option>
+          <option value="low">⚪ Low</option>
+        </select>
+        <input type="text" id="rq-source-filter" placeholder="filter by agent…" class="rq-agent-input">
+      </div>
+      <div class="rq-toolbar-right">
+        <button class="rq-bulk-btn" id="rq-mark-all-seen" title="Mark all seen">👁 Mark seen</button>
+        <span class="rq-stats" id="rq-stats"></span>
+        <span class="rq-hint">j/k navigate · a approve · f feedback · d dismiss · ? help</span>
       </div>
     </div>
-    <div class="review-list" id="review-list">
+    <div class="rq-list" id="rq-list">
       <div class="empty">Loading review queue…</div>
+    </div>
+
+    <!-- Feedback modal -->
+    <div class="rq-modal-overlay" id="rq-modal" style="display:none">
+      <div class="rq-modal">
+        <div class="rq-modal-title" id="rq-modal-title">Feedback</div>
+        <textarea id="rq-modal-text" rows="4" placeholder="Your feedback…"></textarea>
+        <div class="rq-modal-actions">
+          <button class="btn" id="rq-modal-cancel">Cancel</button>
+          <button class="btn btn-approve" id="rq-modal-submit">Send</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Keyboard help overlay -->
+    <div class="rq-modal-overlay" id="rq-help" style="display:none">
+      <div class="rq-modal" style="width:360px">
+        <div class="rq-modal-title">Keyboard Shortcuts</div>
+        <div class="rq-shortcuts">
+          <div><kbd>j</kbd> / <kbd>↓</kbd> — Next item</div>
+          <div><kbd>k</kbd> / <kbd>↑</kbd> — Previous item</div>
+          <div><kbd>Enter</kbd> / <kbd>o</kbd> — Expand/collapse</div>
+          <div><kbd>a</kbd> — Approve</div>
+          <div><kbd>f</kbd> — Leave feedback</div>
+          <div><kbd>r</kbd> — Request changes / send back</div>
+          <div><kbd>d</kbd> — Dismiss</div>
+          <div><kbd>v</kbd> — Open linked report/artifact</div>
+          <div><kbd>?</kbd> — Toggle this help</div>
+          <div><kbd>Esc</kbd> — Close modal</div>
+        </div>
+        <div class="rq-modal-actions">
+          <button class="btn" onclick="document.getElementById('rq-help').style.display='none'">Close</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -199,7 +262,10 @@
             </div>
           </div>
           <div class="m-panel-scroll" id="metrics-panel-content">
-            <div class="m-empty">Loading metrics…</div>
+            <div class="m-empty">
+              <div class="achat-dots" style="color:#00ffd5;font-size:16px;margin-bottom:8px">●●●</div>
+              Loading fleet metrics…
+            </div>
           </div>
         </div>
         <!-- Center: Agent tree canvas -->
@@ -232,9 +298,676 @@
     </div>
   </div>
 
+  <!-- Chat view -->
+  <div class="view" id="view-chat">
+    <div class="oc-layout">
+      <!-- Agent sidebar -->
+      <div class="oc-sidebar">
+        <div class="oc-sidebar-header">
+          <span>Agents</span>
+          <div class="oc-status">
+            <span class="oc-dot oc-dot-off" id="oc-status-dot"></span>
+            <span id="oc-status-label">connecting</span>
+          </div>
+        </div>
+        <div class="oc-sidebar-agents" id="chat-sidebar-agents">
+          <div class="oc-sidebar-empty">Loading…</div>
+        </div>
+        <div class="oc-quick-actions">
+          <button class="oc-action-btn" id="oc-action-status" title="Fleet status">📊 Status</button>
+          <button class="oc-action-btn" id="oc-action-board" title="Board summary">📋 Board</button>
+          <button class="oc-action-btn" id="oc-action-snapshot" title="Snapshot infra">📸 Snap</button>
+        </div>
+      </div>
+      <!-- Main chat area -->
+      <div class="oc-main">
+        <div class="oc-messages" id="chat-messages">
+          <div class="oc-welcome">
+            <div class="oc-welcome-icon">▸</div>
+            <div class="oc-welcome-text">Fleet Command</div>
+            <div class="oc-welcome-hint">
+              Orchestrate the fleet from here. Messages persist across sessions.<br>
+              Use <code>/task</code>, <code>/status</code>, <code>/board</code>, or just type.
+            </div>
+          </div>
+        </div>
+        <div class="oc-input-area">
+          <input type="text" id="chat-input" placeholder="Message the fleet…" autocomplete="off" spellcheck="false">
+          <button id="chat-send" class="oc-send-btn">▸</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Fleet View -->
+  <div class="view" id="view-fleet">
+    <!-- Vitals bar -->
+    <div class="fleet-vitals" id="fleet-vitals">
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Agents</span>
+        <span class="fleet-vital-val" id="fv-agents">—</span>
+      </div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Awake</span>
+        <span class="fleet-vital-val fv-green" id="fv-awake">—</span>
+      </div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Idle</span>
+        <span class="fleet-vital-val fv-yellow" id="fv-idle">—</span>
+      </div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Error</span>
+        <span class="fleet-vital-val fv-red" id="fv-error">—</span>
+      </div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Hibernating</span>
+        <span class="fleet-vital-val" style="color:#666" id="fv-hibernating">—</span>
+      </div>
+      <div class="fleet-vital-sep"></div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Token Spend</span>
+        <span class="fleet-vital-val" id="fv-tokens">—</span>
+      </div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Cost</span>
+        <span class="fleet-vital-val fv-green" id="fv-cost">—</span>
+      </div>
+      <div class="fleet-vital-sep"></div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Tasks Open</span>
+        <span class="fleet-vital-val fv-blue" id="fv-tasks-open">—</span>
+      </div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Tasks Done</span>
+        <span class="fleet-vital-val" id="fv-tasks-done">—</span>
+      </div>
+      <div class="fleet-vital-sep"></div>
+      <div class="fleet-vital">
+        <span class="fleet-vital-label">Last Deploy</span>
+        <span class="fleet-vital-val" id="fv-last-deploy">—</span>
+      </div>
+    </div>
+
+    <div class="fleet-layout">
+      <!-- Agent Map (Canvas) -->
+      <div class="fleet-map-wrap">
+        <div class="fleet-map-header">
+          <span>Agent Map</span>
+          <div class="fleet-legend">
+            <span class="fleet-legend-dot" style="background:#4f9"></span> awake
+            <span class="fleet-legend-dot" style="background:#fd0"></span> idle
+            <span class="fleet-legend-dot" style="background:#666"></span> hibernating
+            <span class="fleet-legend-dot" style="background:#f55"></span> error
+            <span class="fleet-legend-dot" style="background:#a7f"></span> orchestrator
+            <span class="fleet-legend-dot" style="background:#446;border:1px dashed #666"></span> cryo
+          </div>
+        </div>
+        <canvas id="fleet-canvas"></canvas>
+        <!-- Agent detail popover -->
+        <div class="fleet-detail" id="fleet-detail" style="display:none">
+          <div class="fleet-detail-close" id="fleet-detail-close">✕</div>
+          <div class="fleet-detail-name" id="fd-name"></div>
+          <div class="fleet-detail-role" id="fd-role"></div>
+          <div class="fleet-detail-status" id="fd-status"></div>
+          <div class="fleet-detail-meta" id="fd-meta"></div>
+          <div class="fleet-detail-services" id="fd-services"></div>
+        </div>
+      </div>
+
+      <!-- Activity stream sidebar -->
+      <div class="fleet-sidebar">
+        <div class="fleet-sidebar-header">Activity Stream</div>
+        <div class="fleet-stream" id="fleet-stream">
+          <div class="empty">Connecting…</div>
+        </div>
+        <!-- Quick actions -->
+        <div class="fleet-actions">
+          <button class="fleet-action-btn" id="fleet-new-task" title="New Task">+ Task</button>
+          <button class="fleet-action-btn" id="fleet-wake-agent" title="Wake Agent">⚡ Wake</button>
+          <button class="fleet-action-btn" id="fleet-jump-chat" title="Jump to Chat">💬 Chat</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Knowledge Base View -->
+  <div class="view" id="view-knowledge">
+    <!-- Stats bar -->
+    <div class="kb-stats" id="kb-stats">
+      <div class="kb-stat">Total <span class="kb-stat-val" id="kb-stat-total">—</span></div>
+      <div class="kb-stat">Active <span class="kb-stat-val kb-stat-green" id="kb-stat-active">—</span></div>
+      <div class="kb-stat">Expired <span class="kb-stat-val kb-stat-red" id="kb-stat-expired">—</span></div>
+      <div class="kb-stat-sep"></div>
+      <div class="kb-stat">⚠️ Warnings <span class="kb-stat-val kb-stat-orange" id="kb-stat-warning">—</span></div>
+      <div class="kb-stat">📐 Conventions <span class="kb-stat-val kb-stat-blue" id="kb-stat-convention">—</span></div>
+      <div class="kb-stat">💡 Lessons <span class="kb-stat-val kb-stat-yellow" id="kb-stat-lesson">—</span></div>
+      <div class="kb-stat">📋 Context <span class="kb-stat-val kb-stat-purple" id="kb-stat-context">—</span></div>
+    </div>
+
+    <div class="kb-layout">
+      <!-- Session Briefing -->
+      <div class="kb-briefing-panel">
+        <div class="kb-panel-header">Session Briefing</div>
+        <div class="kb-briefing-body" id="kb-briefing">
+          <div class="empty">Loading briefing…</div>
+        </div>
+      </div>
+
+      <!-- Entries list + form -->
+      <div class="kb-entries-panel">
+        <div class="kb-panel-header">
+          Entries
+          <button class="kb-add-toggle" id="kb-add-toggle" title="Add entry">+ Add</button>
+        </div>
+
+        <!-- Add entry form (hidden by default) -->
+        <div class="kb-add-form" id="kb-add-form" style="display:none">
+          <select id="kb-add-type">
+            <option value="warning">⚠️ Warning</option>
+            <option value="convention">📐 Convention</option>
+            <option value="lesson">💡 Lesson</option>
+            <option value="context">📋 Context</option>
+          </select>
+          <textarea id="kb-add-content" placeholder="Entry content…" rows="3"></textarea>
+          <input type="text" id="kb-add-source" placeholder="Source (e.g. debugging session)">
+          <input type="text" id="kb-add-tags" placeholder="Tags (comma-separated)">
+          <div class="kb-add-row">
+            <label>Decay days: <input type="number" id="kb-add-decay" value="60" min="1" max="365" style="width:60px"></label>
+            <button class="kb-submit-btn" id="kb-submit-btn">Save Entry</button>
+          </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="kb-filters">
+          <select id="kb-type-filter">
+            <option value="">All types</option>
+            <option value="warning">⚠️ Warning</option>
+            <option value="convention">📐 Convention</option>
+            <option value="lesson">💡 Lesson</option>
+            <option value="context">📋 Context</option>
+          </select>
+          <input type="text" id="kb-search" placeholder="Search entries…">
+        </div>
+
+        <div class="kb-entries-list" id="kb-entries-list">
+          <div class="empty">Loading entries…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Couch View -->
+  <div class="view" id="view-couch">
+    <div class="couch-layout">
+      <!-- Left: Guests + Resources -->
+      <div class="couch-main">
+        <div class="couch-section">
+          <div class="couch-section-header">
+            <span>Active Guests</span>
+            <span class="couch-badge" id="couch-guest-count">0</span>
+          </div>
+          <div class="couch-section-body" id="couch-guests">
+            <div class="couch-empty">Loading…</div>
+          </div>
+        </div>
+        <div class="couch-section">
+          <div class="couch-section-header">
+            <span>Resource Dashboard</span>
+          </div>
+          <div class="couch-section-body" id="couch-resources">
+            <div class="couch-empty">Loading…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Invites + Generator -->
+      <div class="couch-sidebar">
+        <div class="couch-section">
+          <div class="couch-section-header">
+            <span>Generate Invite</span>
+          </div>
+          <div class="couch-section-body">
+            <div class="couch-form">
+              <label>Label</label>
+              <input type="text" id="couch-inv-label" placeholder="e.g. Barton's agent" value="">
+              <label>Token Budget</label>
+              <input type="number" id="couch-inv-tokens" value="100000" min="1000" step="1000">
+              <label>Duration (hours)</label>
+              <input type="number" id="couch-inv-duration" value="24" min="1" max="720">
+              <label>Memory Limit (MB)</label>
+              <input type="number" id="couch-inv-memory" value="4096" min="512" step="512">
+              <label>Disk Limit (GB)</label>
+              <input type="number" id="couch-inv-disk" value="20" min="1" max="100">
+              <label>Network Egress (GB)</label>
+              <input type="number" id="couch-inv-network" value="5" min="1" max="50">
+              <button class="couch-create-btn" id="couch-create-invite-btn" onclick="window._couchCreateInvite()">Generate Invite</button>
+            </div>
+            <div id="couch-generated-link"></div>
+          </div>
+        </div>
+        <div class="couch-section">
+          <div class="couch-section-header">
+            <span>Invites</span>
+            <span class="couch-badge" id="couch-invite-count">0</span>
+          </div>
+          <div class="couch-section-body couch-invites-scroll" id="couch-invites-list">
+            <div class="couch-empty">Loading…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Comms View -->
+  <div class="view" id="view-comms">
+    <!-- Identity bar -->
+    <div class="comms-identity" id="comms-identity-bar">
+      <span class="comms-id-label">Loading identity…</span>
+    </div>
+
+    <!-- Sub-tabs -->
+    <div class="comms-subtabs">
+      <button class="comms-subtab active" data-subview="channels">Channels</button>
+      <button class="comms-subtab" data-subview="quarantine">Quarantine</button>
+      <button class="comms-subtab" data-subview="gossip">Gossip</button>
+    </div>
+
+    <!-- Channels sub-view -->
+    <div class="comms-subview active" id="comms-subview-channels">
+      <div class="comms-layout">
+        <div class="comms-sidebar">
+          <div class="comms-sidebar-header">Channels</div>
+          <div class="comms-channel-list" id="comms-channel-list">
+            <div class="comms-empty">Loading…</div>
+          </div>
+        </div>
+        <div class="comms-main">
+          <div class="comms-msg-header-bar">
+            <span id="comms-msg-channel-name">Select a channel</span>
+          </div>
+          <div class="comms-messages" id="comms-messages">
+            <div class="comms-empty">Select a channel to view messages</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quarantine sub-view -->
+    <div class="comms-subview" id="comms-subview-quarantine">
+      <div class="comms-quarantine-wrap">
+        <div class="comms-quarantine-header">Quarantined Agents</div>
+        <div class="comms-quarantine-list" id="comms-quarantine-list">
+          <div class="comms-empty">Loading…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Gossip sub-view -->
+    <div class="comms-subview" id="comms-subview-gossip">
+      <div class="comms-gossip-wrap">
+        <div class="comms-gossip-header">
+          <span>Gossip Messages</span>
+          <div class="comms-gossip-search-bar">
+            <input type="text" id="comms-gossip-agent" placeholder="Agent name…" autocomplete="off">
+            <button id="comms-gossip-search" class="comms-btn comms-btn-search">Search</button>
+          </div>
+        </div>
+        <div class="comms-gossip-list" id="comms-gossip-list">
+          <div class="comms-empty">Enter an agent name to view gossip messages</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/ui/static/couch.js"></script>
+  <!-- Agents view -->
+  <div class="view" id="view-agents">
+    <!-- Sub-tabs -->
+    <div class="agents-subtabs">
+      <button class="agents-subtab active" data-section="personas">Personas</button>
+      <button class="agents-subtab" data-section="cryo">Cryochamber</button>
+      <button class="agents-subtab" data-section="loop">Fleet Loop</button>
+    </div>
+
+    <!-- Personas Section -->
+    <div class="agents-section active" id="agents-section-personas">
+      <div class="agents-toolbar">
+        <input type="text" id="persona-filter" placeholder="filter personas…">
+        <button class="btn btn-accent" id="persona-add-btn">+ New Persona</button>
+      </div>
+      <div class="persona-grid" id="persona-grid">
+        <div class="empty">Loading personas…</div>
+      </div>
+
+      <!-- Persona Form Modal -->
+      <div class="agents-modal-overlay" id="persona-modal" style="display:none">
+        <div class="agents-modal">
+          <div class="agents-modal-header">
+            <span id="persona-form-title">New Persona</span>
+            <button class="agents-modal-close" id="persona-modal-close">✕</button>
+          </div>
+          <form id="persona-form" class="agents-form">
+            <input type="hidden" id="pf-editing">
+            <label>Name<input type="text" id="pf-name" required placeholder="e.g. architect"></label>
+            <label>Description<input type="text" id="pf-description" placeholder="Short description"></label>
+            <label>Specialization<input type="text" id="pf-specialization" placeholder="e.g. infrastructure"></label>
+            <label>Author<input type="text" id="pf-author" placeholder="Who created this"></label>
+            <label>Tags <span class="hint">(comma-separated)</span><input type="text" id="pf-tags" placeholder="ops, infra, review"></label>
+            <label>Extends<input type="text" id="pf-extends" placeholder="Parent persona name"></label>
+            <label>System Prompt<textarea id="pf-prompt" rows="10" placeholder="You are a…"></textarea></label>
+            <div class="agents-form-actions">
+              <button type="button" class="btn" id="persona-form-cancel">Cancel</button>
+              <button type="submit" class="btn btn-accent">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Persona Detail Expand -->
+      <div class="agents-modal-overlay" id="persona-detail-modal" style="display:none">
+        <div class="agents-modal agents-modal-wide">
+          <div class="agents-modal-header">
+            <span id="persona-detail-name"></span>
+            <div style="display:flex;gap:8px">
+              <button class="btn" id="persona-detail-edit">Edit</button>
+              <button class="agents-modal-close" id="persona-detail-close">✕</button>
+            </div>
+          </div>
+          <div id="persona-detail-body" class="persona-detail-body"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cryochamber Section -->
+    <div class="agents-section" id="agents-section-cryo">
+      <div class="agents-toolbar">
+        <select id="cryo-status-filter">
+          <option value="">all statuses</option>
+          <option value="awake">awake</option>
+          <option value="hibernating">hibernating</option>
+          <option value="retired">retired</option>
+        </select>
+        <button class="btn btn-accent" id="cryo-add-btn">+ Register Agent</button>
+      </div>
+      <div class="cryo-list" id="cryo-list">
+        <div class="empty">Loading cryochamber…</div>
+      </div>
+
+      <!-- Cryo Agent Form Modal -->
+      <div class="agents-modal-overlay" id="cryo-modal" style="display:none">
+        <div class="agents-modal">
+          <div class="agents-modal-header">
+            <span>Register Agent</span>
+            <button class="agents-modal-close" id="cryo-modal-close">✕</button>
+          </div>
+          <form id="cryo-form" class="agents-form">
+            <label>Name<input type="text" id="cf-name" required placeholder="e.g. sentinel-01"></label>
+            <label>Persona<input type="text" id="cf-persona" placeholder="Persona name to use"></label>
+            <label>Tags <span class="hint">(comma-separated)</span><input type="text" id="cf-tags" placeholder="ops, worker"></label>
+            <div class="agents-form-actions">
+              <button type="button" class="btn" id="cryo-form-cancel">Cancel</button>
+              <button type="submit" class="btn btn-accent">Register</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fleet Loop Section -->
+    <div class="agents-section" id="agents-section-loop">
+      <div class="agents-toolbar">
+        <div class="loop-status-indicator" id="loop-status-indicator">
+          <span class="loop-dot" id="loop-dot"></span>
+          <span id="loop-status-label">—</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-accent" id="loop-start-btn">▶ Start Loop</button>
+          <button class="btn btn-danger" id="loop-stop-btn">■ Stop Loop</button>
+        </div>
+      </div>
+      <div class="loop-roles" id="loop-roles">
+        <div class="empty">Loading fleet loop…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Board Full View -->
+  <div class="view" id="view-board">
+    <!-- Stats bar -->
+    <div class="bf-stats">
+      <div class="bf-stat">Total <span class="bf-stat-val" id="bf-stat-total">—</span></div>
+      <div class="bf-stat">Open <span class="bf-stat-val bf-c-open" id="bf-stat-open">—</span></div>
+      <div class="bf-stat">In Progress <span class="bf-stat-val bf-c-progress" id="bf-stat-progress">—</span></div>
+      <div class="bf-stat">Review <span class="bf-stat-val bf-c-review" id="bf-stat-review">—</span></div>
+      <div class="bf-stat">Blocked <span class="bf-stat-val bf-c-blocked" id="bf-stat-blocked">—</span></div>
+      <div class="bf-stat">Done <span class="bf-stat-val bf-c-done" id="bf-stat-done">—</span></div>
+    </div>
+
+    <!-- Toolbar: filters + create -->
+    <div class="bf-toolbar">
+      <div class="bf-filters">
+        <select id="bf-filter-status" class="bf-filter-select">
+          <option value="">All statuses</option>
+          <option value="open">Open</option>
+          <option value="in_progress">In Progress</option>
+          <option value="in_review">In Review</option>
+          <option value="blocked">Blocked</option>
+          <option value="done">Done</option>
+        </select>
+        <input type="text" id="bf-filter-tag" class="bf-filter-input" placeholder="Filter by tag…">
+        <input type="text" id="bf-filter-assignee" class="bf-filter-input" placeholder="Filter by assignee…">
+        <input type="text" id="bf-filter-search" class="bf-filter-input bf-search" placeholder="🔍 Search tasks…">
+      </div>
+      <div class="bf-toolbar-actions">
+        <button class="bf-select-btn" id="bf-select-all" title="Select all">☑ All</button>
+        <button class="bf-select-btn" id="bf-select-none" title="Clear selection">☐ None</button>
+        <button class="bf-create-btn-main" id="bf-create-btn">+ New Task</button>
+      </div>
+    </div>
+
+    <!-- Bulk action bar -->
+    <div class="bf-bulk-bar" id="bf-bulk-bar" style="display:none">
+      <span><span id="bf-bulk-count">0</span> selected</span>
+      <button class="bf-bulk-btn" id="bf-bulk-close">✓ Close</button>
+      <button class="bf-bulk-btn" id="bf-bulk-reopen">↩ Reopen</button>
+      <button class="bf-bulk-btn" id="bf-bulk-retag">🏷 Retag</button>
+      <button class="bf-bulk-btn" id="bf-bulk-assign">👤 Assign</button>
+      <button class="bf-bulk-btn bf-bulk-danger" id="bf-bulk-delete">🗑 Delete</button>
+    </div>
+
+    <!-- Main layout: list + detail -->
+    <div class="bf-layout">
+      <div class="bf-list-panel">
+        <div class="bf-task-list" id="bf-task-list">
+          <div class="bf-empty">Loading tasks…</div>
+        </div>
+      </div>
+      <div class="bf-detail-panel" id="bf-detail">
+        <div class="bf-detail-placeholder">Select a task to view details</div>
+      </div>
+    </div>
+
+    <!-- Create Task Modal -->
+    <div class="bf-modal-overlay" id="bf-create-overlay" style="display:none">
+      <div class="bf-modal">
+        <div class="bf-modal-header">
+          <span>New Task</span>
+          <button class="bf-modal-close" id="bf-create-cancel">✕</button>
+        </div>
+        <div class="bf-modal-body">
+          <label>Title <span class="bf-required">*</span></label>
+          <input type="text" id="bf-create-title" placeholder="Task title…" class="bf-modal-input">
+          <label>Description</label>
+          <textarea id="bf-create-desc" placeholder="Task description…" rows="4" class="bf-modal-textarea"></textarea>
+          <label>Assignee</label>
+          <input type="text" id="bf-create-assignee" placeholder="Assignee" class="bf-modal-input">
+          <label>Tags (comma-separated)</label>
+          <input type="text" id="bf-create-tags" placeholder="e.g. infra, ops" class="bf-modal-input">
+          <label>Created By</label>
+          <input type="text" id="bf-create-author" placeholder="dashboard-user" value="dashboard-user" class="bf-modal-input">
+        </div>
+        <div class="bf-modal-footer">
+          <button class="bf-modal-btn-cancel" id="bf-create-cancel-btn" onclick="document.getElementById('bf-create-overlay').style.display='none'">Cancel</button>
+          <button class="bf-modal-btn-submit" id="bf-create-submit">Create Task</button>
+  <!-- Events View -->
+  <div class="view" id="view-events">
+    <div class="events-stats-bar" id="events-stats-bar">
+      <div class="events-stat">Loading stats…</div>
+    </div>
+    <div class="events-toolbar">
+      <div class="events-filters">
+        <input type="text" id="events-source-filter" placeholder="source…" autocomplete="off">
+        <input type="text" id="events-type-filter" placeholder="event type…" autocomplete="off">
+        <input type="text" id="events-agent-filter" placeholder="agent…" autocomplete="off">
+        <select id="events-limit">
+          <option value="50">50</option>
+          <option value="100" selected>100</option>
+          <option value="200">200</option>
+          <option value="500">500</option>
+        </select>
+        <label class="events-noise-label"><input type="checkbox" id="events-exclude-noise" checked> hide feed noise</label>
+      </div>
+      <div class="events-controls">
+        <span id="events-count" class="events-count-label">—</span>
+        <button class="btn" id="events-breakdown-btn" title="Type breakdown">📊 Types</button>
+        <button class="btn" id="events-refresh-btn">↻ Refresh</button>
+        <div class="events-stream-indicator">
+          <span class="events-dot" id="events-stream-dot"></span>
+          <span id="events-stream-label">paused</span>
+        </div>
+        <button class="btn btn-accent" id="events-stream-btn">▶ Stream</button>
+      </div>
+    </div>
+    <div class="events-list" id="events-list">
+      <div class="empty">Loading events…</div>
+    </div>
+    <!-- Type breakdown modal -->
+    <div class="agents-modal-overlay" id="events-breakdown-modal" style="display:none">
+      <div class="agents-modal agents-modal-wide">
+        <div class="agents-modal-header">
+          <span>Event Type Breakdown</span>
+          <button class="agents-modal-close" id="events-breakdown-close">✕</button>
+        </div>
+        <div id="events-breakdown-body" style="max-height:60vh;overflow-y:auto;padding:12px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Daemon View -->
+  <div class="view" id="view-daemon">
+    <div class="daemon-layout">
+      <div class="daemon-status-panel" id="daemon-status-panel">
+        <div class="daemon-header-row">
+          <div class="daemon-indicator">
+            <span class="daemon-dot" id="daemon-dot"></span>
+            <span id="daemon-status-label">—</span>
+          </div>
+          <div class="daemon-controls">
+            <button class="btn btn-accent" id="daemon-start-btn">▶ Start</button>
+            <button class="btn btn-danger" id="daemon-stop-btn">■ Stop</button>
+            <button class="btn" id="daemon-refresh-btn">↻</button>
+          </div>
+        </div>
+        <div class="daemon-vitals">
+          <div class="daemon-vital"><span class="daemon-vital-label">Uptime</span><span class="daemon-vital-val" id="daemon-uptime">—</span></div>
+          <div class="daemon-vital"><span class="daemon-vital-label">Started</span><span class="daemon-vital-val" id="daemon-started">—</span></div>
+          <div class="daemon-vital"><span class="daemon-vital-label">Last Poll</span><span class="daemon-vital-val" id="daemon-last-poll">—</span></div>
+          <div class="daemon-vital"><span class="daemon-vital-label">Last Action</span><span class="daemon-vital-val" id="daemon-last-action">—</span></div>
+          <div class="daemon-vital"><span class="daemon-vital-label">Event Cursor</span><span class="daemon-vital-val" id="daemon-cursor">—</span></div>
+          <div class="daemon-vital"><span class="daemon-vital-label">Total Actions</span><span class="daemon-vital-val" id="daemon-total-actions">—</span></div>
+        </div>
+        <div class="daemon-section-header">Recent Actions (preview)</div>
+        <div id="daemon-recent-preview" class="daemon-recent-preview">
+          <div class="empty">Loading…</div>
+        </div>
+      </div>
+      <div class="daemon-actions-panel">
+        <div class="daemon-actions-header">
+          <span>Action Log</span>
+          <div class="daemon-actions-controls">
+            <span class="daemon-actions-count" id="daemon-actions-count">—</span>
+            <select id="daemon-actions-limit">
+              <option value="25">25</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+            </select>
+          </div>
+        </div>
+        <div class="daemon-actions-list" id="daemon-actions-list">
+          <div class="empty">Loading actions…</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Config View -->
+  <div class="view" id="view-config">
+    <div class="config-stats-bar">
+      <div class="config-stat">Total <span class="config-stat-val" id="config-stat-total">—</span></div>
+      <div class="config-stat">Secrets <span class="config-stat-val config-stat-red" id="config-stat-secrets">—</span></div>
+      <div class="config-stat">Config <span class="config-stat-val config-stat-green" id="config-stat-configs">—</span></div>
+    </div>
+    <div class="config-toolbar">
+      <input type="text" id="config-filter" placeholder="filter by key…" autocomplete="off">
+      <select id="config-type-filter">
+        <option value="">all types</option>
+        <option value="config">config</option>
+        <option value="secret">secret</option>
+      </select>
+      <button class="btn btn-accent" id="config-add-btn">+ Add</button>
+      <button class="btn" id="config-refresh-btn">↻ Refresh</button>
+    </div>
+    <div class="config-list" id="config-list">
+      <div class="empty">Loading config…</div>
+    </div>
+    <!-- Edit modal -->
+    <div class="agents-modal-overlay" id="config-modal" style="display:none">
+      <div class="agents-modal">
+        <div class="agents-modal-header">
+          <span id="config-modal-title">Edit Config</span>
+          <button class="agents-modal-close" id="config-modal-close">✕</button>
+        </div>
+        <div class="agents-form" style="padding:16px;display:flex;flex-direction:column;gap:12px;">
+          <label>Key<input type="text" id="config-modal-key" placeholder="CONFIG_KEY"></label>
+          <label>Value<textarea id="config-modal-value" rows="4" placeholder="Config value"></textarea></label>
+          <label>Type
+            <select id="config-modal-type">
+              <option value="config">config</option>
+              <option value="secret">secret</option>
+            </select>
+          </label>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button class="btn" id="config-modal-cancel">Cancel</button>
+            <button class="btn btn-accent" id="config-modal-save">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Write View -->
+  <div class="view" id="view-write">
+    <div class="write-container" id="write-content">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
+
+  <script src="/ui/static/write.js"></script>
+  <script src="/ui/static/board-full.js"></script>
+  <script src="/ui/static/comms.js"></script>
+  <script src="/ui/static/events.js"></script>
+  <script src="/ui/static/daemon.js"></script>
+  <script src="/ui/static/config.js"></script>
+  <script src="/ui/static/fleet.js"></script>
+  <script src="/ui/static/chat.js"></script>
   <script src="/ui/static/speedometer.js"></script>
   <script src="/ui/static/metrics.js"></script>
   <script src="/ui/static/analytics.js"></script>
+  <script src="/ui/static/agents.js"></script>
+  <script src="/ui/static/review-queue.js"></script>
   <script type="module" src="/ui/static/app.js"></script>
+
 </body>
 </html>
+
+

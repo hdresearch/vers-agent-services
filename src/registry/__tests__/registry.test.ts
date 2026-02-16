@@ -33,7 +33,7 @@ describe("RegistryStore", () => {
   beforeEach(() => {
     tmpDir = mkdtempSync(join(tmpdir(), "registry-test-"));
     filePath = join(tmpDir, "registry.json");
-    store = new RegistryStore(filePath);
+    store = new RegistryStore(filePath, undefined, { autoPurge: false });
   });
 
   afterEach(() => {
@@ -167,10 +167,8 @@ describe("RegistryStore", () => {
 
   describe("stale VM detection", () => {
     it("excludes stale VMs from discover", () => {
-      // Use a very short stale threshold
-      const shortStore = new RegistryStore(join(tmpDir, "short.json"), 1);
+      const shortStore = new RegistryStore(join(tmpDir, "short.json"), 1, { autoPurge: false });
       shortStore.register(makeInput({ id: "vm-1", role: "infra" }));
-      // Wait for it to go stale
       return new Promise<void>((resolve) => {
         setTimeout(() => {
           const results = shortStore.discover("infra");
@@ -181,7 +179,7 @@ describe("RegistryStore", () => {
     });
 
     it("excludes stale VMs when filtering status=running", () => {
-      const shortStore = new RegistryStore(join(tmpDir, "short2.json"), 1);
+      const shortStore = new RegistryStore(join(tmpDir, "short2.json"), 1, { autoPurge: false });
       shortStore.register(makeInput({ id: "vm-1", role: "worker" }));
       return new Promise<void>((resolve) => {
         setTimeout(() => {
@@ -192,13 +190,126 @@ describe("RegistryStore", () => {
       });
     });
 
+    it("excludes stale running VMs from default list (no filters)", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "short-nofilter.json"), 1, { autoPurge: false });
+      shortStore.register(makeInput({ id: "vm-1", role: "worker" }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          const results = shortStore.list();
+          expect(results).toHaveLength(0);
+          resolve();
+        }, 10);
+      });
+    });
+
+    it("include_stale=true shows stale VMs", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "short-include.json"), 1, { autoPurge: false });
+      shortStore.register(makeInput({ id: "vm-1", role: "worker" }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          // With includeStale=true, should show everything
+          const results = shortStore.list(undefined, true);
+          expect(results).toHaveLength(1);
+          // Without, should hide stale running
+          const filtered = shortStore.list();
+          expect(filtered).toHaveLength(0);
+          resolve();
+        }, 10);
+      });
+    });
+
     it("heartbeat prevents staleness", () => {
-      const shortStore = new RegistryStore(join(tmpDir, "short3.json"), 50);
+      const shortStore = new RegistryStore(join(tmpDir, "short3.json"), 50, { autoPurge: false });
       shortStore.register(makeInput({ id: "vm-1", role: "infra" }));
-      // Heartbeat to keep alive
       shortStore.heartbeat("vm-1");
       const results = shortStore.discover("infra");
       expect(results).toHaveLength(1);
+    });
+
+    it("heartbeat refreshes lastSeen timestamp", async () => {
+      const shortStore = new RegistryStore(join(tmpDir, "short-hb.json"), 100, { autoPurge: false });
+      const vm = shortStore.register(makeInput({ id: "vm-1", role: "infra" }));
+      const firstLastSeen = vm.lastSeen;
+      await new Promise((r) => setTimeout(r, 15));
+      const updated = shortStore.heartbeat("vm-1");
+      expect(new Date(updated.lastSeen).getTime()).toBeGreaterThan(new Date(firstLastSeen).getTime());
+    });
+
+    it("registration sets lastSeen to now", () => {
+      const before = Date.now();
+      const vm = store.register(makeInput({ id: "vm-ts" }));
+      const after = Date.now();
+      const lastSeenMs = new Date(vm.lastSeen).getTime();
+      expect(lastSeenMs).toBeGreaterThanOrEqual(before);
+      expect(lastSeenMs).toBeLessThanOrEqual(after);
+    });
+  });
+
+  describe("listStale", () => {
+    it("returns only expired entries", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "stale-list.json"), 1, { autoPurge: false });
+      shortStore.register(makeInput({ id: "vm-1", role: "worker" }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          const stale = shortStore.listStale();
+          expect(stale).toHaveLength(1);
+          expect(stale[0].id).toBe("vm-1");
+          resolve();
+        }, 10);
+      });
+    });
+
+    it("does not include fresh entries", () => {
+      const stale = store.listStale();
+      expect(stale).toHaveLength(0);
+      store.register(makeInput({ id: "vm-fresh" }));
+      expect(store.listStale()).toHaveLength(0);
+    });
+  });
+
+  describe("purgeStale", () => {
+    it("removes entries past hard TTL", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "purge.json"), 1, { autoPurge: false, hardTtlMs: 1 });
+      shortStore.register(makeInput({ id: "vm-1" }));
+      shortStore.register(makeInput({ id: "vm-2" }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          const purged = shortStore.purgeStale();
+          expect(purged).toBe(2);
+          expect(shortStore.list(undefined, true)).toHaveLength(0);
+          resolve();
+        }, 10);
+      });
+    });
+
+    it("does not remove fresh entries", () => {
+      store.register(makeInput({ id: "vm-keep" }));
+      const purged = store.purgeStale();
+      expect(purged).toBe(0);
+      expect(store.get("vm-keep")).toBeTruthy();
+    });
+
+    it("accepts custom TTL override", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "purge-custom.json"), 1, { autoPurge: false, hardTtlMs: 999999 });
+      shortStore.register(makeInput({ id: "vm-1" }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          // Default hard TTL is very large, so nothing purged
+          expect(shortStore.purgeStale()).toBe(0);
+          // But with a tiny override, should purge
+          expect(shortStore.purgeStale(1)).toBe(1);
+          resolve();
+        }, 10);
+      });
+    });
+  });
+
+  describe("auto-purge timer", () => {
+    it("can be started and stopped", () => {
+      const timerStore = new RegistryStore(join(tmpDir, "timer.json"), undefined, { autoPurge: true });
+      // Should not throw
+      timerStore.stopAutoPurge();
+      timerStore.stopAutoPurge(); // idempotent
     });
   });
 
@@ -215,6 +326,96 @@ describe("RegistryStore", () => {
       // Reload from disk
       const store2 = new RegistryStore(filePath);
       expect(store2.get("vm-1")?.name).toBe("persisted");
+    });
+  });
+
+  describe("pinned VMs", () => {
+    it("pinned VMs are never stale", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "pinned1.json"), 1);
+      shortStore.register(makeInput({ id: "vm-pinned", role: "infra", pinned: true }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          const results = shortStore.discover("infra");
+          expect(results).toHaveLength(1);
+          expect(results[0].id).toBe("vm-pinned");
+          resolve();
+        }, 10);
+      });
+    });
+
+    it("unpinned VMs still go stale", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "pinned2.json"), 1);
+      shortStore.register(makeInput({ id: "vm-unpinned", role: "infra" }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          const results = shortStore.discover("infra");
+          expect(results).toHaveLength(0);
+          resolve();
+        }, 10);
+      });
+    });
+
+    it("pinned flag persists through upsert", () => {
+      store.upsert(makeInput({ id: "vm-ups", role: "infra", pinned: true }));
+      const vm = store.get("vm-ups");
+      expect(vm?.pinned).toBe(true);
+    });
+  });
+
+  describe("upsert", () => {
+    it("registers a new VM if not exists", () => {
+      const vm = store.upsert(makeInput({ id: "vm-new", name: "new-vm" }));
+      expect(vm.name).toBe("new-vm");
+      expect(store.get("vm-new")).toBeDefined();
+    });
+
+    it("updates existing VM and refreshes lastSeen", () => {
+      store.register(makeInput({ id: "vm-exist", name: "old-name" }));
+      const before = store.get("vm-exist")!.lastSeen;
+
+      // Small delay to ensure different timestamp
+      const vm = store.upsert(makeInput({ id: "vm-exist", name: "new-name" }));
+      expect(vm.name).toBe("new-name");
+      expect(new Date(vm.lastSeen).getTime()).toBeGreaterThanOrEqual(new Date(before).getTime());
+    });
+
+    it("can pin an existing unpinned VM", () => {
+      store.register(makeInput({ id: "vm-topin" }));
+      expect(store.get("vm-topin")?.pinned).toBeFalsy();
+
+      store.upsert(makeInput({ id: "vm-topin", pinned: true }));
+      expect(store.get("vm-topin")?.pinned).toBe(true);
+    });
+  });
+
+  describe("listStale", () => {
+    it("returns only stale unpinned VMs", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "stale1.json"), 1);
+      shortStore.register(makeInput({ id: "vm-pinned", role: "infra", pinned: true }));
+      shortStore.register(makeInput({ id: "vm-unpinned", role: "infra" }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          const stale = shortStore.listStale();
+          expect(stale).toHaveLength(1);
+          expect(stale[0].id).toBe("vm-unpinned");
+          resolve();
+        }, 10);
+      });
+    });
+  });
+
+  describe("listAll", () => {
+    it("returns all VMs regardless of stale status", () => {
+      const shortStore = new RegistryStore(join(tmpDir, "all1.json"), 1);
+      shortStore.register(makeInput({ id: "vm-1", role: "infra" }));
+      shortStore.register(makeInput({ id: "vm-2", role: "worker" }));
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          const all = shortStore.listAll();
+          expect(all).toHaveLength(2);
+          resolve();
+        }, 10);
+      });
     });
   });
 });
@@ -377,6 +578,74 @@ describe("Registry Routes", () => {
     it("returns 404 for missing VM", async () => {
       const res = await req("/vms/nope/heartbeat", { method: "POST" });
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe("GET /vms?include_stale=true — Include Stale", () => {
+    it("shows stale VMs when include_stale=true", async () => {
+      // Register, then manually hack the lastSeen to be old
+      await registerVM({ id: "vm-old" });
+      // Patch lastSeen to be way in the past
+      const vm = registryStore.get("vm-old")!;
+      (vm as any).lastSeen = new Date(Date.now() - 999999999).toISOString();
+
+      // Default listing should hide it
+      const res1 = await req("/vms");
+      const body1 = await res1.json();
+      expect(body1.count).toBe(0);
+
+      // With include_stale=true, should show it
+      const res2 = await req("/vms?include_stale=true");
+      const body2 = await res2.json();
+      expect(body2.count).toBe(1);
+    });
+  });
+
+  describe("GET /stale — Stale VMs", () => {
+    it("returns only expired entries", async () => {
+      await registerVM({ id: "vm-fresh" });
+      await registerVM({ id: "vm-old" });
+      // Make one stale
+      const vm = registryStore.get("vm-old")!;
+      (vm as any).lastSeen = new Date(Date.now() - 999999999).toISOString();
+
+      const res = await req("/stale");
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.count).toBe(1);
+      expect(body.vms[0].id).toBe("vm-old");
+    });
+
+    it("returns empty when nothing is stale", async () => {
+      await registerVM({ id: "vm-fresh" });
+      const res = await req("/stale");
+      const body = await res.json();
+      expect(body.count).toBe(0);
+    });
+  });
+
+  describe("DELETE /stale — Purge Stale", () => {
+    it("purges all expired entries", async () => {
+      await registerVM({ id: "vm-fresh" });
+      await registerVM({ id: "vm-old1" });
+      await registerVM({ id: "vm-old2" });
+
+      // Make two stale
+      for (const id of ["vm-old1", "vm-old2"]) {
+        const vm = registryStore.get(id)!;
+        (vm as any).lastSeen = new Date(Date.now() - 999999999).toISOString();
+      }
+
+      const res = await req("/stale", { method: "DELETE" });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.purged).toBe(2);
+
+      // Verify fresh one is still there
+      const listRes = await req("/vms?include_stale=true");
+      const listBody = await listRes.json();
+      expect(listBody.count).toBe(1);
+      expect(listBody.vms[0].id).toBe("vm-fresh");
     });
   });
 
