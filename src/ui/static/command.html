@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fleet Command</title>
+  <link rel="stylesheet" href="/ui/static/style.css">
+  <style>
+    body { overflow: hidden; }
+
+    /* ─── Command Layout ─── */
+    .cmd-container {
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      height: 100vh;
+    }
+
+    /* ─── Top Bar ─── */
+    .cmd-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 20px; border-bottom: 1px solid var(--border);
+      background: var(--bg-panel);
+    }
+    .cmd-header h1 { font-size: 14px; color: var(--accent); font-weight: 700; }
+    .cmd-header h1 span { color: var(--text-dim); font-weight: 400; }
+    .cmd-header .meta { font-size: 11px; color: var(--text-dim); display: flex; gap: 16px; align-items: center; }
+    .cmd-header .meta .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .cmd-header .meta .dot.live { background: var(--accent); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+    /* ─── Vitals Bar ─── */
+    .vitals {
+      display: flex; gap: 32px; padding: 10px 20px;
+      border-bottom: 1px solid var(--border); background: var(--bg-panel);
+      font-size: 12px; flex-wrap: wrap;
+    }
+    .vital { display: flex; flex-direction: column; gap: 2px; }
+    .vital .vital-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); }
+    .vital .vital-value { font-size: 18px; font-weight: 700; color: var(--text-bright); }
+    .vital .vital-value.accent { color: var(--accent); }
+    .vital .vital-value.yellow { color: var(--yellow); }
+    .vital .vital-value.red { color: var(--red); }
+
+    /* ─── Main 3-panel ─── */
+    .cmd-main {
+      display: grid;
+      grid-template-columns: 280px 1fr 300px;
+      overflow: hidden;
+    }
+
+    .cmd-panel {
+      display: flex; flex-direction: column; overflow: hidden;
+      border-right: 1px solid var(--border);
+    }
+    .cmd-panel:last-child { border-right: none; }
+    .cmd-panel-header {
+      padding: 8px 14px; font-size: 10px; text-transform: uppercase;
+      letter-spacing: 1px; color: var(--text-dim); border-bottom: 1px solid var(--border);
+      background: var(--bg-panel); font-weight: 600; flex-shrink: 0;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .cmd-panel-body { overflow-y: auto; flex: 1; }
+
+    /* ─── Agent List ─── */
+    .agent-item {
+      padding: 10px 14px; border-bottom: 1px solid var(--border);
+      cursor: pointer; transition: background 0.1s;
+      display: flex; align-items: flex-start; gap: 10px;
+    }
+    .agent-item:hover { background: var(--bg-card); }
+    .agent-item.selected { background: var(--bg-card); border-left: 2px solid var(--accent); }
+    .agent-status-dot {
+      width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex-shrink: 0;
+    }
+    .agent-status-dot.working { background: var(--accent); }
+    .agent-status-dot.idle { background: var(--yellow); }
+    .agent-status-dot.done { background: #666; }
+    .agent-status-dot.error { background: var(--red); }
+    .agent-info { flex: 1; min-width: 0; }
+    .agent-name { font-size: 12px; font-weight: 600; color: var(--text-bright); }
+    .agent-role { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+    .agent-task { font-size: 11px; color: var(--text); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .agent-meta { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+
+    /* ─── Feed ─── */
+    .feed-controls {
+      padding: 8px 14px; display: flex; gap: 8px; border-bottom: 1px solid var(--border);
+      background: var(--bg-panel); flex-shrink: 0;
+    }
+    .feed-controls input, .feed-controls select {
+      background: var(--bg-card); border: 1px solid var(--border); color: var(--text);
+      font-family: inherit; font-size: 11px; padding: 4px 8px; border-radius: 3px;
+      flex: 1;
+    }
+    .feed-controls select { flex: 0 0 auto; min-width: 100px; }
+    .feed-item {
+      padding: 8px 14px; border-bottom: 1px solid #1a1a1a;
+      font-size: 11px; line-height: 1.5;
+    }
+    .feed-item .feed-time { color: var(--text-dim); font-size: 10px; }
+    .feed-item .feed-agent { font-weight: 600; }
+    .feed-item .feed-summary { color: var(--text); margin-top: 2px; }
+    .feed-item.type-task_start { border-left: 2px solid var(--accent); }
+    .feed-item.type-task_done { border-left: 2px solid var(--blue); }
+    .feed-item.type-error { border-left: 2px solid var(--red); }
+    .feed-item.type-deploy { border-left: 2px solid var(--purple); }
+    .feed-item.type-status { border-left: 2px solid var(--yellow); }
+    .feed-item.type-info { border-left: 2px solid var(--text-dim); }
+    .feed-item.type-discovery { border-left: 2px solid var(--orange); }
+
+    /* ─── Actions Panel ─── */
+    .action-group {
+      padding: 12px 14px; border-bottom: 1px solid var(--border);
+    }
+    .action-group h3 {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+      color: var(--text-dim); margin-bottom: 8px; font-weight: 600;
+    }
+    .action-group textarea, .action-group input, .action-group select {
+      width: 100%; background: var(--bg-card); border: 1px solid var(--border);
+      color: var(--text); font-family: inherit; font-size: 11px;
+      padding: 6px 8px; border-radius: 3px; margin-bottom: 6px; resize: vertical;
+    }
+    .action-group textarea { min-height: 50px; }
+    .action-btn {
+      background: var(--bg-card); border: 1px solid var(--border);
+      color: var(--text); font-family: inherit; font-size: 11px;
+      padding: 6px 12px; border-radius: 3px; cursor: pointer;
+      transition: all 0.15s; width: 100%;
+    }
+    .action-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .action-btn.primary { border-color: var(--accent); color: var(--accent); }
+    .action-btn.danger { border-color: var(--red); color: var(--red); }
+    .action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .action-row { display: flex; gap: 6px; margin-bottom: 6px; }
+    .action-row .action-btn { flex: 1; }
+
+    .action-toast {
+      position: fixed; bottom: 60px; right: 20px; background: var(--bg-card);
+      border: 1px solid var(--accent); color: var(--accent); padding: 8px 16px;
+      border-radius: 4px; font-size: 11px; font-family: inherit;
+      opacity: 0; transition: opacity 0.3s; pointer-events: none; z-index: 100;
+    }
+    .action-toast.show { opacity: 1; }
+    .action-toast.error { border-color: var(--red); color: var(--red); }
+
+    /* ─── Bottom Bar ─── */
+    .cmd-bottom {
+      display: flex; gap: 24px; padding: 10px 20px; align-items: center;
+      border-top: 1px solid var(--border); background: var(--bg-panel);
+      font-size: 11px; overflow-x: auto; flex-shrink: 0;
+    }
+    .board-stat { display: flex; align-items: center; gap: 6px; }
+    .board-stat .label { color: var(--text-dim); text-transform: uppercase; font-size: 10px; letter-spacing: 0.5px; }
+    .board-stat .value { font-weight: 700; color: var(--text-bright); }
+    .board-stat .value.p0 { color: var(--red); }
+    .board-stat .value.p1 { color: var(--orange); }
+    .board-stat .value.p2 { color: var(--yellow); }
+    .board-recent {
+      flex: 1; display: flex; gap: 8px; overflow: hidden; align-items: center;
+    }
+    .board-recent .label { color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; white-space: nowrap; }
+    .board-chip {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 3px;
+      padding: 2px 8px; font-size: 10px; color: var(--text); white-space: nowrap;
+      max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+    }
+    .board-chip.blocked { border-color: var(--red); color: var(--red); }
+
+    .back-link {
+      color: var(--text-dim); text-decoration: none; font-size: 11px;
+    }
+    .back-link:hover { color: var(--accent); }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg); }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #444; }
+  </style>
+</head>
+<body>
+  <div class="cmd-container">
+    <!-- Top Header -->
+    <div class="cmd-header">
+      <h1>◆ Fleet Command <span>— bridge</span></h1>
+      <div class="meta">
+        <a href="/ui/" class="back-link">← Dashboard</a>
+        <span id="clock"></span>
+        <span class="dot live" id="live-dot"></span>
+        <span id="refresh-label">live</span>
+      </div>
+    </div>
+
+    <!-- Vitals Bar -->
+    <div class="vitals" id="vitals">
+      <div class="vital">
+        <span class="vital-label">Running VMs</span>
+        <span class="vital-value accent" id="v-vms">—</span>
+      </div>
+      <div class="vital">
+        <span class="vital-label">Active Agents</span>
+        <span class="vital-value accent" id="v-agents">—</span>
+      </div>
+      <div class="vital">
+        <span class="vital-label">Sessions Today</span>
+        <span class="vital-value" id="v-sessions">—</span>
+      </div>
+      <div class="vital">
+        <span class="vital-label">Tokens Today</span>
+        <span class="vital-value yellow" id="v-tokens">—</span>
+      </div>
+      <div class="vital">
+        <span class="vital-label">Cost Today</span>
+        <span class="vital-value yellow" id="v-cost">—</span>
+      </div>
+      <div class="vital">
+        <span class="vital-label">Open Tasks</span>
+        <span class="vital-value" id="v-tasks">—</span>
+      </div>
+      <div class="vital">
+        <span class="vital-label">Feed Events</span>
+        <span class="vital-value" id="v-events">—</span>
+      </div>
+    </div>
+
+    <!-- 3-panel main -->
+    <div class="cmd-main">
+      <!-- Left: Agents -->
+      <div class="cmd-panel">
+        <div class="cmd-panel-header">
+          <span>Agents</span>
+          <span id="agent-count">0</span>
+        </div>
+        <div class="cmd-panel-body" id="agent-list">
+          <div style="padding:14px;color:var(--text-dim);font-size:11px;">Loading agents…</div>
+        </div>
+      </div>
+
+      <!-- Center: Live Feed -->
+      <div class="cmd-panel">
+        <div class="cmd-panel-header">
+          <span>Live Feed</span>
+          <span id="feed-count">0</span>
+        </div>
+        <div class="feed-controls">
+          <input type="text" id="feed-filter-agent" placeholder="Filter agent…">
+          <select id="feed-filter-type">
+            <option value="">All types</option>
+            <option value="task_start">task_start</option>
+            <option value="task_done">task_done</option>
+            <option value="status">status</option>
+            <option value="error">error</option>
+            <option value="deploy">deploy</option>
+            <option value="info">info</option>
+            <option value="discovery">discovery</option>
+          </select>
+        </div>
+        <div class="cmd-panel-body" id="feed-list">
+          <div style="padding:14px;color:var(--text-dim);font-size:11px;">Connecting to feed…</div>
+        </div>
+      </div>
+
+      <!-- Right: Actions -->
+      <div class="cmd-panel">
+        <div class="cmd-panel-header">
+          <span>Quick Actions</span>
+        </div>
+        <div class="cmd-panel-body">
+          <!-- Spawn Agent -->
+          <div class="action-group">
+            <h3>Fleet Chat</h3>
+            <input type="text" id="chat-channel" placeholder="Channel (default: general)" value="bridge">
+            <textarea id="chat-msg" placeholder="Message to fleet…"></textarea>
+            <button class="action-btn primary" id="btn-chat">Send Message</button>
+          </div>
+
+          <div class="action-group">
+            <h3>Deploy</h3>
+            <input type="text" id="deploy-branch" placeholder="Branch (default: main)" value="main">
+            <button class="action-btn" id="btn-deploy">Trigger Deploy</button>
+          </div>
+
+          <div class="action-group">
+            <h3>Registry</h3>
+            <div class="action-row">
+              <button class="action-btn" id="btn-reap">Reap Stale</button>
+              <button class="action-btn" id="btn-refresh-reg">Refresh</button>
+            </div>
+          </div>
+
+          <div class="action-group">
+            <h3>Magic Link</h3>
+            <button class="action-btn" id="btn-magic">Generate Link</button>
+            <div id="magic-result" style="margin-top:6px;font-size:11px;color:var(--accent);word-break:break-all;"></div>
+          </div>
+
+          <div class="action-group">
+            <h3>Feed</h3>
+            <input type="text" id="feed-agent" placeholder="Agent name" value="bridge">
+            <select id="feed-type" style="width:100%;margin-bottom:6px;">
+              <option value="info">info</option>
+              <option value="status">status</option>
+              <option value="task_start">task_start</option>
+              <option value="task_done">task_done</option>
+            </select>
+            <textarea id="feed-summary" placeholder="Event summary…"></textarea>
+            <button class="action-btn" id="btn-feed">Publish Event</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom: Board Summary -->
+    <div class="cmd-bottom" id="board-bar">
+      <div class="board-stat"><span class="label">P0</span> <span class="value p0" id="b-p0">0</span></div>
+      <div class="board-stat"><span class="label">P1</span> <span class="value p1" id="b-p1">0</span></div>
+      <div class="board-stat"><span class="label">P2</span> <span class="value p2" id="b-p2">0</span></div>
+      <div class="board-stat"><span class="label">Blocked</span> <span class="value" id="b-blocked" style="color:var(--red)">0</span></div>
+      <div class="board-stat"><span class="label">Done</span> <span class="value" id="b-done">0</span></div>
+      <div class="board-recent">
+        <span class="label">Recent</span>
+        <div id="b-recent" style="display:flex;gap:6px;overflow:hidden;"></div>
+      </div>
+      <div class="board-recent">
+        <span class="label">Blocked</span>
+        <div id="b-blocked-list" style="display:flex;gap:6px;overflow:hidden;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="action-toast" id="toast"></div>
+
+  <script src="/ui/static/command.js"></script>
+</body>
+</html>
