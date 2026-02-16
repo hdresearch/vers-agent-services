@@ -1,0 +1,25 @@
+[Unit]
+Description=Agent Services — Autonomy API (daemon, loop, aegis, deploy)
+After=network.target
+PartOf=agent-services.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vers-agent-services
+ExecStart=/usr/bin/node dist/autonomy-api/main.js
+Environment=NODE_ENV=production
+Environment=AUTONOMY_API_PORT=3003
+EnvironmentFile=-/opt/vers-agent-services/.env
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-autonomy
+
+# Security
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/vers-agent-services/data
+
+[Install]
+WantedBy=agent-services.target

@@ -1,0 +1,25 @@
+[Unit]
+Description=Agent Services — Fleet API (fleet-chat, contacts, couch, gossip, registry)
+After=network.target
+PartOf=agent-services.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vers-agent-services
+ExecStart=/usr/bin/node dist/fleet-api/main.js
+Environment=NODE_ENV=production
+Environment=FLEET_API_PORT=3002
+EnvironmentFile=-/opt/vers-agent-services/.env
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agent-fleet
+
+# Security
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/vers-agent-services/data
+
+[Install]
+WantedBy=agent-services.target
