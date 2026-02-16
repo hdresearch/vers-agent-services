@@ -1222,8 +1222,9 @@ async function init() {
   document.getElementById('kb-submit-btn').addEventListener('click', addKbEntry);
 
   // Load all dashboard panels independently — each succeeds or fails on its own
-  // Use allSettled so one failure doesn't block others
-  await Promise.allSettled([
+  // Fire-and-forget: don't await. Each panel renders as soon as its data arrives.
+  // One slow/failed panel never blocks another from painting.
+  Promise.allSettled([
     loadBoard(),
     loadFeed(),
     loadRegistry(),
@@ -1245,6 +1246,28 @@ async function init() {
     const h = window.location.hash.replace('#', '').split('?')[0];
     if (h && document.getElementById(`view-${h}`)) switchView(h);
   });
+
+  // ─── Lazy-load below-the-fold views using IntersectionObserver ───
+  // Views that are off-screen don't load until they're scrolled near.
+  if ('IntersectionObserver' in window) {
+    const lazyPanels = document.querySelectorAll('.panel-right .panel');
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting) {
+          // Trigger load for panels entering viewport
+          const panelBody = entry.target.querySelector('.panel-body');
+          if (panelBody && panelBody.id === 'reports' && !panelBody.querySelector('.report-card')) {
+            loadReports();
+          }
+          if (panelBody && panelBody.id === 'registry' && !panelBody.querySelector('.vm-card')) {
+            loadRegistry();
+          }
+          observer.unobserve(entry.target);
+        }
+      }
+    }, { rootMargin: '200px' });
+    lazyPanels.forEach(p => observer.observe(p));
+  }
 
   // SSE starts non-blocking AFTER initial data is painted
   startSSE();
