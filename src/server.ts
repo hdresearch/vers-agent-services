@@ -36,6 +36,7 @@ import { kbRoutes, kbStore } from "./kb/routes.js";
 import { daemonRoutes, daemonEngine, daemonStore } from "./daemon/routes.js";
 import { contactsRoutes, contactsPublicRoutes, contactsStore } from "./contacts/routes.js";
 import { notificationRoutes } from "./notifications/routes.js";
+import { blogRoutes } from "./blog/routes.js";
 
 const app = new Hono();
 
@@ -62,6 +63,9 @@ app.route("/fleet-chat", fleetChatPublicRoutes);
 
 // Contacts peering accept — NO bearer auth (public door for peer handshake)
 app.route("/contacts", contactsPublicRoutes);
+
+// Blog — NO bearer auth (public-facing fleet blog)
+app.route("/blog", blogRoutes);
 
 // LLM Router — NO bearer auth on /v1 (agents auth with x-agent-id or fleet token;
 // router validates internally). This is the single source of truth for API keys.
