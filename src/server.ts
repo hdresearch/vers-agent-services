@@ -69,6 +69,8 @@ import { plannerRoutes, plannerStore } from "./planner/routes.js";
 import { bootRoutes } from "./boot/routes.js";
 import { autonomyRoutes, autonomyStore, orchestrator as autonomyOrchestrator } from "./autonomy/routes.js";
 import { subfleetRoutes, subfleetStore, subfleetOrchestrator, setAegisGuard } from "./subfleet/routes.js";
+import { directoryRoutes, directoryStore } from "./directory/routes.js";
+import { seedDirectory } from "./directory/seed.js";
 
 const app = new Hono();
 const loader = new ServiceLoader();
@@ -236,6 +238,7 @@ app.route("/planner", plannerRoutes);
 app.route("/boot", bootRoutes);
 app.route("/bus", busRoutes);
 app.route("/subfleet", subfleetRoutes);
+app.route("/directory", directoryRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
@@ -283,6 +286,12 @@ const server = serve({ fetch: app.fetch, port, hostname: "::" }, () => {
 
   // Wire up Aegis protection for sub-fleet teardowns
   setAegisGuard((vmId: string) => aegisStore.isProtected(vmId));
+
+  // Seed directory with known people on first boot
+  const seeded = seedDirectory(directoryStore);
+  if (seeded > 0) {
+    console.log(`directory seeded — ${seeded} people added`);
+  }
 });
 
 // Graceful shutdown — let in-flight requests drain before exiting.
@@ -310,6 +319,8 @@ async function gracefulShutdown(signal: string) {
   }
   // Close contacts DB
   try { contactsStore.close(); } catch {}
+  // Close directory DB
+  try { directoryStore.close(); } catch {}
   // Close docs DB
   try { docsStore.close(); } catch {}
   // Close chat DB
