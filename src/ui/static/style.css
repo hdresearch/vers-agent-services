@@ -3355,3 +3355,106 @@ a.rq-action-btn {
   .rq-action-btn { font-size: 10px; padding: 4px 10px; }
   .rq-modal { padding: 16px; }
 }
+
+/* ─── Usage Dashboard ─── */
+
+.usage-toolbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 20px; border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.usage-title { font-size: 14px; font-weight: 600; color: var(--accent); }
+.usage-range-btns { display: flex; gap: 4px; }
+.usage-range-btn {
+  background: var(--bg-card); border: 1px solid var(--border); color: var(--text-dim);
+  padding: 3px 10px; font-size: 11px; font-family: inherit; cursor: pointer;
+  border-radius: 3px; transition: all 0.15s;
+}
+.usage-range-btn:hover { color: var(--text); border-color: #444; }
+.usage-range-btn.active { color: var(--accent); border-color: var(--accent); background: rgba(68,255,153,0.08); }
+
+.usage-overview {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px; padding: 16px 20px;
+}
+.usage-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px;
+  padding: 14px 16px; text-align: center;
+}
+.usage-card-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 4px; }
+.usage-card-value { font-size: 22px; font-weight: 700; color: var(--text-bright); }
+.usage-card-value.accent { color: var(--accent); }
+.usage-card-value.blue { color: var(--blue); }
+.usage-card-value.yellow { color: var(--yellow); }
+.usage-card-value.red { color: var(--red); }
+.usage-card-value.purple { color: var(--purple); }
+.usage-card-sub { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+
+.usage-budget-bar {
+  display: flex; gap: 24px; padding: 8px 20px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  font-size: 11px; flex-wrap: wrap;
+}
+.usage-budget-item { display: flex; gap: 6px; align-items: center; }
+
+.usage-charts-grid {
+  display: grid; grid-template-columns: 1fr 1fr;
+  gap: 0; border-bottom: 1px solid var(--border);
+}
+.usage-chart-panel {
+  padding: 14px 20px; border-right: 1px solid var(--border);
+  min-height: 200px; overflow: hidden;
+}
+.usage-chart-panel:last-child { border-right: none; }
+.usage-chart-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-dim); margin-bottom: 10px; font-weight: 600;
+}
+
+/* Bar chart */
+.usage-bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.usage-bar-label { width: 60px; font-size: 10px; color: var(--text-dim); text-overflow: ellipsis; overflow: hidden; white-space: nowrap; text-align: right; }
+.usage-bar-track { flex: 1; height: 14px; background: var(--bg); border-radius: 2px; overflow: hidden; }
+.usage-bar-fill { height: 100%; border-radius: 2px; transition: width 0.3s ease; min-width: 2px; }
+.usage-bar-value { width: 50px; font-size: 10px; color: var(--text-bright); text-align: right; }
+
+/* Pie */
+.usage-pie-wrap { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.usage-legend { display: flex; flex-direction: column; gap: 6px; }
+.usage-legend-item { font-size: 11px; color: var(--text); display: flex; align-items: center; gap: 6px; }
+.usage-legend-dot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+
+/* Efficiency tables */
+.usage-efficiency-section {}
+.usage-eff-header { font-size: 11px; font-weight: 600; margin-bottom: 4px; }
+.usage-eff-header.accent { color: var(--accent); }
+.usage-eff-header.red { color: var(--red); }
+
+.usage-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.usage-table th { text-align: left; padding: 3px 8px; color: var(--text-dim); font-weight: 500; border-bottom: 1px solid var(--border); }
+.usage-table td { padding: 3px 8px; color: var(--text); }
+.usage-table tr:hover td { background: rgba(255,255,255,0.02); }
+.usage-table-full { font-size: 10px; }
+.usage-table-full td, .usage-table-full th { padding: 2px 6px; }
+
+/* VM stats */
+.usage-vm-stats { display: flex; gap: 20px; margin-bottom: 12px; flex-wrap: wrap; font-size: 12px; }
+.usage-vm-stat { display: flex; gap: 6px; }
+.usage-vm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.usage-vm-role { font-size: 11px; margin-bottom: 2px; }
+
+/* Color helpers */
+.dim { color: var(--text-dim); }
+.bright { color: var(--text-bright); }
+.accent { color: var(--accent); }
+.red { color: var(--red); }
+.yellow { color: var(--yellow); }
+.blue { color: var(--blue); }
+.purple { color: var(--purple); }
+
+#view-usage { overflow-y: auto; height: calc(100vh - 82px); }
+
+@media (max-width: 900px) {
+  .usage-charts-grid { grid-template-columns: 1fr; }
+  .usage-overview { grid-template-columns: repeat(3, 1fr); }
+}

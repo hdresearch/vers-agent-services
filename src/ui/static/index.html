@@ -27,6 +27,7 @@
       <button class="tab" data-view="daemon">Daemon</button>
       <button class="tab" data-view="config">Config</button>
       <button class="tab" data-view="write">Write</button>
+      <button class="tab" data-view="usage">Usage</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -931,6 +932,12 @@
     </div>
   </div>
 
+  <!-- Usage Dashboard -->
+  <div class="view" id="view-usage">
+    <div id="usage-root"><div class="empty">Loading…</div></div>
+  </div>
+
+  <script src="/ui/static/usage.js"></script>
   <script src="/ui/static/write.js"></script>
   <script src="/ui/static/board-full.js"></script>
   <script src="/ui/static/comms.js"></script>
