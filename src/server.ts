@@ -38,7 +38,7 @@ import { contactsRoutes, contactsPublicRoutes, contactsStore } from "./contacts/
 import { notificationRoutes } from "./notifications/routes.js";
 import { blogRoutes } from "./blog/routes.js";
 import { docsRoutes, docsPublicRoutes, docsStore } from "./docs/routes.js";
-import { chatRoutes, chatStore } from "./chat/routes.js";
+import { chatRoutes, chatStore, webChatStore, chatBridge, startFleetEventBridge, stopFleetEventBridge } from "./chat/routes.js";
 import { aegisRoutes, aegisStore } from "./aegis/routes.js";
 import { deployRoutes } from "./deploy/routes.js";
 
@@ -127,8 +127,8 @@ app.use("/feed/events", etag());
 app.use("/feed/stats", etag());
 app.use("/kb/entries", etag());
 app.use("/kb/briefing", etag());
-app.use("/chat/*", bearerAuth());
 app.use("/chat/messages", etag());
+app.use("/chat/*", bearerAuth());
 app.use("/gossip/*", bearerAuth());
 app.use("/loop/*", bearerAuth());
 app.use("/aegis/*", bearerAuth());
@@ -200,6 +200,14 @@ const server = serve({ fetch: app.fetch, port, hostname: "::" }, () => {
   // Auto-register persistent VMs (infra, gitea, minio) and start heartbeat loop.
   // This ensures they survive TTL purging without manual intervention.
   initPersistentVMs();
+
+  // Start chat bridge — watches for commands in web chat and executes them
+  chatBridge.start();
+  console.log("chat bridge started — /help for commands");
+
+  // Start fleet event bridge — auto-posts interesting events to web chat
+  startFleetEventBridge();
+  console.log("fleet event bridge started — interesting events → web chat");
 });
 
 // Graceful shutdown — let in-flight requests drain before exiting.
@@ -237,6 +245,10 @@ async function gracefulShutdown(signal: string) {
   if (daemonEngine.isRunning) {
     try { daemonEngine.stop(); } catch {}
   }
+  // Stop chat bridge and fleet event bridge
+  chatBridge.stop();
+  stopFleetEventBridge();
+  try { webChatStore.close(); } catch {}
   server.close(() => {
     console.log("All connections closed. Exiting.");
     process.exit(0);

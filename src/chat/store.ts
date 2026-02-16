@@ -5,35 +5,35 @@ import { dirname } from "node:path";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-export type MessageRole = "user" | "agent" | "system";
+export type ChatRole = "human" | "system" | "agent" | "bridge";
 
-export interface ChatMessage {
+export interface WebChatMessage {
   id: string;
-  role: MessageRole;
+  role: ChatRole;
   sender: string;
   content: string;
-  timestamp: string;
+  command?: string;       // parsed command name (e.g. "spawn", "status")
   metadata?: Record<string, unknown>;
+  createdAt: string;
 }
 
-export interface ChatMessageInput {
-  role?: MessageRole;
+export interface PostMessageInput {
+  role: ChatRole;
   sender: string;
   content: string;
+  command?: string;
   metadata?: Record<string, unknown>;
 }
 
 // ── Store ──────────────────────────────────────────────────────────────────
 
-export class ChatStore {
+export class WebChatStore {
   private db: Database.Database;
-  private sseListeners: Set<(msg: ChatMessage) => void> = new Set();
+  private listeners: Set<(msg: WebChatMessage) => void> = new Set();
 
-  constructor(dbPath = "data/chat.db") {
+  constructor(dbPath = "data/web-chat.db") {
     const dir = dirname(dbPath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
     this.init();
@@ -43,116 +43,103 @@ export class ChatStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
-        role TEXT NOT NULL DEFAULT 'user',
+        role TEXT NOT NULL,
         sender TEXT NOT NULL,
         content TEXT NOT NULL,
-        timestamp TEXT NOT NULL,
-        metadata TEXT
+        command TEXT,
+        metadata TEXT,
+        createdAt TEXT NOT NULL
       );
-      CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
-      CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender);
+      CREATE INDEX IF NOT EXISTS idx_messages_createdAt ON messages(createdAt);
+      CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role);
     `);
   }
 
-  addMessage(input: ChatMessageInput): ChatMessage {
-    const msg: ChatMessage = {
+  post(input: PostMessageInput): WebChatMessage {
+    const msg: WebChatMessage = {
       id: ulid(),
-      role: input.role || "user",
+      role: input.role,
       sender: input.sender,
       content: input.content,
-      timestamp: new Date().toISOString(),
+      command: input.command,
       metadata: input.metadata,
+      createdAt: new Date().toISOString(),
     };
 
-    this.db
-      .prepare(
-        `INSERT INTO messages (id, role, sender, content, timestamp, metadata)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        msg.id,
-        msg.role,
-        msg.sender,
-        msg.content,
-        msg.timestamp,
-        msg.metadata ? JSON.stringify(msg.metadata) : null,
-      );
+    this.db.prepare(
+      `INSERT INTO messages (id, role, sender, content, command, metadata, createdAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      msg.id, msg.role, msg.sender, msg.content,
+      msg.command || null,
+      msg.metadata ? JSON.stringify(msg.metadata) : null,
+      msg.createdAt,
+    );
 
     // Notify SSE listeners
-    for (const listener of this.sseListeners) {
+    for (const listener of this.listeners) {
       try { listener(msg); } catch { /* ignore */ }
     }
 
     return msg;
   }
 
-  getMessages(opts?: {
-    limit?: number;
-    since?: string;
-    before?: string;
-    sender?: string;
-    role?: MessageRole;
-  }): ChatMessage[] {
+  list(opts?: { limit?: number; after?: string; before?: string; role?: ChatRole }): WebChatMessage[] {
     const conditions: string[] = [];
-    const params: any[] = [];
+    const params: unknown[] = [];
 
-    if (opts?.since) {
-      conditions.push("timestamp > ?");
-      params.push(opts.since);
-    }
-    if (opts?.before) {
-      conditions.push("timestamp < ?");
-      params.push(opts.before);
-    }
-    if (opts?.sender) {
-      conditions.push("sender = ?");
-      params.push(opts.sender);
-    }
     if (opts?.role) {
       conditions.push("role = ?");
       params.push(opts.role);
+    }
+    if (opts?.after) {
+      conditions.push("createdAt > ?");
+      params.push(opts.after);
+    }
+    if (opts?.before) {
+      conditions.push("createdAt < ?");
+      params.push(opts.before);
     }
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const limit = opts?.limit || 100;
 
-    // Get last N messages, ordered ascending
     const sql = `SELECT * FROM (
-      SELECT * FROM messages ${where} ORDER BY timestamp DESC LIMIT ?
-    ) sub ORDER BY timestamp ASC`;
-    params.push(limit);
+      SELECT * FROM messages ${where} ORDER BY createdAt DESC LIMIT ?
+    ) sub ORDER BY createdAt ASC`;
 
+    params.push(limit);
     const rows = this.db.prepare(sql).all(...params) as any[];
     return rows.map((r) => this.rowToMessage(r));
   }
 
-  getMessage(id: string): ChatMessage | null {
+  get(id: string): WebChatMessage | null {
     const row = this.db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as any;
     return row ? this.rowToMessage(row) : null;
   }
 
-  get messageCount(): number {
-    const row = this.db.prepare("SELECT COUNT(*) as cnt FROM messages").get() as any;
-    return row.cnt;
+  addListener(fn: (msg: WebChatMessage) => void): () => void {
+    this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
   }
 
-  addListener(listener: (msg: ChatMessage) => void): () => void {
-    this.sseListeners.add(listener);
-    return () => this.sseListeners.delete(listener);
+  get count(): number {
+    return (this.db.prepare("SELECT COUNT(*) as cnt FROM messages").get() as any).cnt;
   }
 
   close(): void {
     this.db.close();
   }
 
-  private rowToMessage(row: any): ChatMessage {
+  private rowToMessage(row: any): WebChatMessage {
     return {
       id: row.id,
-      role: row.role as MessageRole,
+      role: row.role as ChatRole,
       sender: row.sender,
       content: row.content,
-      timestamp: row.timestamp,
+      command: row.command || undefined,
       metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+      createdAt: row.createdAt,
     };
   }
 }
