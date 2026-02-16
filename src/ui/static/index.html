@@ -300,20 +300,41 @@
 
   <!-- Chat view -->
   <div class="view" id="view-chat">
-    <div class="chat-container">
-      <div class="chat-messages" id="chat-messages">
-        <div class="chat-welcome">
-          <div class="chat-welcome-icon">▸</div>
-          <div class="chat-welcome-text">Fleet Chat</div>
-          <div class="chat-welcome-hint">
-            Messages go to the work log. Use <code>/task</code> to create a board task.<br>
-            Live feed events stream in automatically.
+    <div class="oc-layout">
+      <!-- Agent sidebar -->
+      <div class="oc-sidebar">
+        <div class="oc-sidebar-header">
+          <span>Agents</span>
+          <div class="oc-status">
+            <span class="oc-dot oc-dot-off" id="oc-status-dot"></span>
+            <span id="oc-status-label">connecting</span>
           </div>
         </div>
+        <div class="oc-sidebar-agents" id="chat-sidebar-agents">
+          <div class="oc-sidebar-empty">Loading…</div>
+        </div>
+        <div class="oc-quick-actions">
+          <button class="oc-action-btn" id="oc-action-status" title="Fleet status">📊 Status</button>
+          <button class="oc-action-btn" id="oc-action-board" title="Board summary">📋 Board</button>
+          <button class="oc-action-btn" id="oc-action-snapshot" title="Snapshot infra">📸 Snap</button>
+        </div>
       </div>
-      <div class="chat-input-area">
-        <input type="text" id="chat-input" placeholder="Message the fleet…" autocomplete="off" spellcheck="false">
-        <button id="chat-send" class="chat-send-btn">▸</button>
+      <!-- Main chat area -->
+      <div class="oc-main">
+        <div class="oc-messages" id="chat-messages">
+          <div class="oc-welcome">
+            <div class="oc-welcome-icon">▸</div>
+            <div class="oc-welcome-text">Fleet Command</div>
+            <div class="oc-welcome-hint">
+              Orchestrate the fleet from here. Messages persist across sessions.<br>
+              Use <code>/task</code>, <code>/status</code>, <code>/board</code>, or just type.
+            </div>
+          </div>
+        </div>
+        <div class="oc-input-area">
+          <input type="text" id="chat-input" placeholder="Message the fleet…" autocomplete="off" spellcheck="false">
+          <button id="chat-send" class="oc-send-btn">▸</button>
+        </div>
       </div>
     </div>
   </div>
