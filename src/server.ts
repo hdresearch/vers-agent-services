@@ -63,6 +63,7 @@ import { docsRoutes, docsPublicRoutes, docsStore } from "./docs/routes.js";
 import { chatRoutes, chatStore, webChatStore, chatBridge, startFleetEventBridge, stopFleetEventBridge } from "./chat/routes.js";
 import { aegisRoutes, aegisStore } from "./aegis/routes.js";
 import { deployRoutes } from "./deploy/routes.js";
+import { fileRoutes, filePublicRoutes } from "./files/routes.js";
 import { busRoutes } from "./bus/bridge.js";
 import { backupRoutes, backupScheduler } from "./backup/routes.js";
 import { plannerRoutes, plannerStore } from "./planner/routes.js";
@@ -102,6 +103,9 @@ app.route("/blog", blogRoutes);
 
 // Docs public routes — NO bearer auth (published docs are public)
 app.route("/docs", docsPublicRoutes);
+
+// File share public routes — NO bearer auth (share link IS the auth)
+app.route("/", filePublicRoutes);
 
 // LLM Router — mount AFTER bearer auth middleware below
 // (was previously unauthenticated — security fix: anyone with the URL could burn API keys)
@@ -189,6 +193,7 @@ app.use("/loop/*", bearerAuth());
 app.use("/aegis/*", bearerAuth());
 app.use("/autonomy/*", bearerAuth());
 app.use("/deploy/*", bearerAuth());
+app.use("/files/*", bearerAuth());
 app.use("/bus/*", bearerAuth());
 
 app.use("/boot/*", bearerAuth());
@@ -231,6 +236,7 @@ app.route("/docs", docsRoutes);
 app.route("/aegis", aegisRoutes);
 app.route("/autonomy", autonomyRoutes);
 app.route("/deploy", deployRoutes);
+app.route("/files", fileRoutes);
 app.route("/backup", backupRoutes);
 app.route("/planner", plannerRoutes);
 app.route("/boot", bootRoutes);
