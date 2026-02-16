@@ -55,3 +55,44 @@ daemonRoutes.get("/actions", (c) => {
   const actions = daemonStore.getActions(limit);
   return c.json({ actions, count: actions.length, total: daemonStore.getActionCount() });
 });
+
+// POST /snapshot — trigger a manual infra snapshot
+daemonRoutes.post("/snapshot", async (c) => {
+  try {
+    const commitId = await engine.performSnapshot("manual");
+    return c.json({ message: "snapshot created", commitId }, 200);
+  } catch (err) {
+    return c.json(
+      { error: "snapshot failed", detail: (err as Error).message },
+      500,
+    );
+  }
+});
+
+// GET /snapshot/config — get auto-snapshot config
+daemonRoutes.get("/snapshot/config", (c) => {
+  const enabled = configStore.get("AUTO_SNAPSHOT_ENABLED");
+  const vmId = configStore.get("INFRA_VM_ID");
+  return c.json({
+    autoSnapshotEnabled: enabled?.value === "true",
+    infraVmId: vmId?.value || "a9a83d7f-c092-404a-bf44-cf21b96a2170",
+  });
+});
+
+// POST /snapshot/config — enable/disable auto-snapshots
+daemonRoutes.post("/snapshot/config", async (c) => {
+  const body = await c.req.json();
+  if (typeof body.enabled === "boolean") {
+    configStore.set("AUTO_SNAPSHOT_ENABLED", String(body.enabled), "config");
+  }
+  if (typeof body.infraVmId === "string" && body.infraVmId.trim()) {
+    configStore.set("INFRA_VM_ID", body.infraVmId.trim(), "config");
+  }
+  const enabled = configStore.get("AUTO_SNAPSHOT_ENABLED");
+  const vmId = configStore.get("INFRA_VM_ID");
+  return c.json({
+    autoSnapshotEnabled: enabled?.value === "true",
+    infraVmId: vmId?.value || "a9a83d7f-c092-404a-bf44-cf21b96a2170",
+    message: "config updated",
+  });
+});

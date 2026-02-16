@@ -48,10 +48,13 @@ export class DaemonEngine {
   private store: DaemonStore;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private snapshotTimer: ReturnType<typeof setInterval> | null = null;
   private startedAt: Date | null = null;
   private rules: Rule[] = [];
   private _pollIntervalMs = 30_000;
   private _heartbeatIntervalMs = 60_000;
+  private _snapshotIntervalMs = 30 * 60 * 1000; // 30 minutes
+  private _maxSnapshotLedgerEntries = 10;
 
   constructor(deps: DaemonDeps) {
     this.deps = deps;
@@ -78,6 +81,9 @@ export class DaemonEngine {
     // Start heartbeat
     this.heartbeatTimer = setInterval(() => this.heartbeat(), this._heartbeatIntervalMs);
 
+    // Start auto-snapshot timer if enabled
+    this.startSnapshotTimer();
+
     // Do an immediate first poll
     await this.poll();
 
@@ -92,6 +98,10 @@ export class DaemonEngine {
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
+    }
+    if (this.snapshotTimer) {
+      clearInterval(this.snapshotTimer);
+      this.snapshotTimer = null;
     }
     this.store.setState("running", "false");
     this.startedAt = null;
@@ -552,6 +562,189 @@ export class DaemonEngine {
     }
   }
 
+  // --- Auto-Snapshot ---
+
+  private isAutoSnapshotEnabled(): boolean {
+    try {
+      const entry = this.deps.configStore.get("AUTO_SNAPSHOT_ENABLED");
+      return entry?.value === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  private getInfraVmId(): string {
+    try {
+      const entry = this.deps.configStore.get("INFRA_VM_ID");
+      return entry?.value || "a9a83d7f-c092-404a-bf44-cf21b96a2170";
+    } catch {
+      return "a9a83d7f-c092-404a-bf44-cf21b96a2170";
+    }
+  }
+
+  private getSnapshotApiKey(): string | null {
+    try {
+      const entry = this.deps.configStore.get("VERS_API_KEY");
+      return entry?.value || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private startSnapshotTimer(): void {
+    if (this.snapshotTimer) {
+      clearInterval(this.snapshotTimer);
+      this.snapshotTimer = null;
+    }
+    // Check config on each tick rather than only at start
+    this.snapshotTimer = setInterval(() => {
+      if (this.isAutoSnapshotEnabled()) {
+        this.performSnapshot("auto").catch((err) =>
+          console.error("[daemon] auto-snapshot error:", err),
+        );
+      }
+    }, this._snapshotIntervalMs);
+    console.log(
+      `[daemon] snapshot timer started — every ${this._snapshotIntervalMs / 1000}s (enabled=${this.isAutoSnapshotEnabled()})`,
+    );
+  }
+
+  /**
+   * Perform an infra VM snapshot. Called by both auto-timer and manual endpoint.
+   * Returns the commit_id on success.
+   */
+  async performSnapshot(trigger: "auto" | "manual"): Promise<string> {
+    const vmId = this.getInfraVmId();
+    const apiBase = this.deps.versApiBase || "https://api.vers.sh/api/v1";
+    const apiKey = this.getSnapshotApiKey();
+    if (!apiKey) throw new Error("VERS_API_KEY not configured — cannot snapshot");
+
+    const action = this.store.recordAction({
+      actionType: "auto_snapshot",
+      trigger: trigger === "auto" ? "timer.auto_snapshot" : "manual.snapshot",
+      triggerEventId: `${trigger}-${Date.now()}`,
+      description: `${trigger === "auto" ? "Scheduled" : "Manual"} infra VM snapshot (vm=${vmId})`,
+      result: "pending",
+      metadata: { vmId, trigger },
+    });
+
+    try {
+      // Call Vers API to commit the VM
+      const resp = await fetch(`${apiBase}/vm/${vmId}/commit`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key":
+            "9370b900-e31a-4f0c-b92d-0829df4c8e1592fe3dae0b420da046d1e22dd307ae6787f9392915464f76bcfe02e75e80fe25",
+        },
+      });
+
+      if (!resp.ok) {
+        const body = await resp.text();
+        throw new Error(`Vers API commit failed ${resp.status}: ${body}`);
+      }
+
+      const data = (await resp.json()) as { commit_id?: string; id?: string };
+      const commitId = data.commit_id || data.id || "unknown";
+
+      this.store.updateActionResult(
+        action.id,
+        "success",
+        `Snapshot created: commit=${commitId}`,
+      );
+      this.store.setState("last_action_at", new Date().toISOString());
+
+      // Log to commits ledger
+      await this.recordSnapshotCommit(commitId, vmId, trigger);
+
+      // Prune old snapshot entries from the ledger
+      await this.pruneSnapshotCommits();
+
+      // Emit to feed
+      await this.emitFeedEvent(
+        "custom",
+        `📸 Infra snapshot ${trigger === "auto" ? "(auto)" : "(manual)"}: commit=${commitId}`,
+      );
+
+      console.log(`[daemon] ${trigger} snapshot success: commit=${commitId}`);
+      return commitId;
+    } catch (err) {
+      const msg = (err as Error).message;
+      this.store.updateActionResult(action.id, "failure", `Snapshot failed: ${msg}`);
+      await this.emitFeedEvent(
+        "blocker_found",
+        `⚠️ Infra snapshot failed (${trigger}): ${msg}`,
+      );
+      throw err;
+    }
+  }
+
+  private async recordSnapshotCommit(
+    commitId: string,
+    vmId: string,
+    trigger: "auto" | "manual",
+  ): Promise<void> {
+    const baseUrl = this.deps.selfBaseUrl || "http://localhost:3000";
+    const token = this.deps.authToken || process.env.VERS_AUTH_TOKEN || "";
+    try {
+      await fetch(`${baseUrl}/commits`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          commitId,
+          vmId,
+          label: `infra-snapshot-${trigger}`,
+          agent: "fleet-daemon",
+          tags: ["auto-snapshot", trigger, "infra"],
+          metadata: {
+            trigger,
+            timestamp: new Date().toISOString(),
+          },
+        }),
+      });
+    } catch (err) {
+      console.error("[daemon] failed to record snapshot commit:", err);
+    }
+  }
+
+  private async pruneSnapshotCommits(): Promise<void> {
+    const baseUrl = this.deps.selfBaseUrl || "http://localhost:3000";
+    const token = this.deps.authToken || process.env.VERS_AUTH_TOKEN || "";
+    try {
+      const resp = await fetch(
+        `${baseUrl}/commits?tag=auto-snapshot&agent=fleet-daemon`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      if (!resp.ok) return;
+      const data = (await resp.json()) as { commits: Array<{ commitId: string }> };
+      const commits = data.commits || [];
+      // commits come newest-first; keep the first N, delete the rest
+      if (commits.length > this._maxSnapshotLedgerEntries) {
+        const toDelete = commits.slice(this._maxSnapshotLedgerEntries);
+        for (const c of toDelete) {
+          try {
+            await fetch(`${baseUrl}/commits/${c.commitId}`, {
+              method: "DELETE",
+              headers: { Authorization: `Bearer ${token}` },
+            });
+          } catch {
+            // best-effort pruning
+          }
+        }
+        console.log(
+          `[daemon] pruned ${toDelete.length} old snapshot commits (kept ${this._maxSnapshotLedgerEntries})`,
+        );
+      }
+    } catch (err) {
+      console.error("[daemon] failed to prune snapshot commits:", err);
+    }
+  }
+
   // --- Test helpers ---
 
   setPollInterval(ms: number): void {
@@ -560,5 +753,13 @@ export class DaemonEngine {
 
   setHeartbeatInterval(ms: number): void {
     this._heartbeatIntervalMs = ms;
+  }
+
+  setSnapshotInterval(ms: number): void {
+    this._snapshotIntervalMs = ms;
+  }
+
+  setMaxSnapshotLedgerEntries(n: number): void {
+    this._maxSnapshotLedgerEntries = n;
   }
 }
