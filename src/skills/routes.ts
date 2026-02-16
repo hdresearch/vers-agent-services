@@ -60,13 +60,21 @@ skillsRoutes.post("/items", async (c) => {
 });
 
 // GET /items — List all skills
+// Supports ?compact=true to return lightweight records (no content field)
 skillsRoutes.get("/items", (c) => {
   const tag = c.req.query("tag");
   const enabledStr = c.req.query("enabled");
   const enabled = enabledStr !== undefined ? enabledStr === "true" : undefined;
+  const compact = c.req.query("compact") === "true";
 
   const skills = skillStore.list({ tag, enabled });
-  return c.json({ skills, count: skills.length });
+
+  // Compact mode strips content to save bandwidth on manifest-style queries
+  const result = compact
+    ? skills.map(({ content, ...rest }) => rest)
+    : skills;
+
+  return c.json({ skills: result, count: result.length });
 });
 
 // GET /items/:name — Get a skill by name
