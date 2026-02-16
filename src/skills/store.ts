@@ -49,8 +49,8 @@ export interface ChangeEvent {
 export interface SyncRequest {
   agentId: string;
   vmId?: string;
-  skills: { name: string; version: number }[];
-  extensions: { name: string; version: number }[];
+  skills: { name: string; version: number; source?: "hub" | "git" | "local" }[];
+  extensions: { name: string; version: number; source?: "hub" | "git" | "local" }[];
 }
 
 export interface SyncUpdate {
@@ -670,9 +670,11 @@ export class ManifestStore {
 
     const updates: SyncUpdate[] = [];
 
-    // Build maps of what agent has
+    // Build maps of what agent has (with source tracking)
     const agentSkills = new Map(request.skills.map((s) => [s.name, s.version]));
+    const agentSkillSources = new Map(request.skills.map((s) => [s.name, s.source || "hub"]));
     const agentExtensions = new Map(request.extensions.map((e) => [e.name, e.version]));
+    const agentExtSources = new Map(request.extensions.map((e) => [e.name, e.source || "hub"]));
 
     // Build maps of what's current
     const hubSkills = new Map(currentSkills.map((s) => [s.name, s.version]));
@@ -688,10 +690,14 @@ export class ManifestStore {
       }
     }
 
-    // Skills: remove (agent has it but hub doesn't)
+    // Skills: remove — only for hub-sourced skills (not git or local)
+    // Git/local skills are managed outside the hub and should never be removed by sync.
     for (const [name, version] of agentSkills) {
       if (!hubSkills.has(name)) {
-        updates.push({ type: "skill", name, version, action: "remove" });
+        const source = agentSkillSources.get(name);
+        if (source === "hub" || source === undefined) {
+          updates.push({ type: "skill", name, version, action: "remove" });
+        }
       }
     }
 
@@ -705,10 +711,13 @@ export class ManifestStore {
       }
     }
 
-    // Extensions: remove
+    // Extensions: remove — only for hub-sourced extensions
     for (const [name, version] of agentExtensions) {
       if (!hubExtensions.has(name)) {
-        updates.push({ type: "extension", name, version, action: "remove" });
+        const source = agentExtSources.get(name);
+        if (source === "hub" || source === undefined) {
+          updates.push({ type: "extension", name, version, action: "remove" });
+        }
       }
     }
 
