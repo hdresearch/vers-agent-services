@@ -84,9 +84,8 @@ app.route("/blog", blogRoutes);
 // Docs public routes — NO bearer auth (published docs are public)
 app.route("/docs", docsPublicRoutes);
 
-// LLM Router — NO bearer auth on /v1 (agents auth with x-agent-id or fleet token;
-// router validates internally). This is the single source of truth for API keys.
-app.route("/v1", routerRoutes);
+// LLM Router — mount AFTER bearer auth middleware below
+// (was previously unauthenticated — security fix: anyone with the URL could burn API keys)
 
 // Gzip compression for all responses > 1KB
 app.use("*", compress());
@@ -140,6 +139,7 @@ app.use("/kb/entries", etag());
 app.use("/kb/briefing", etag());
 app.use("/chat/messages", etag());
 app.use("/chat/*", bearerAuth());
+app.use("/v1/*", bearerAuth());
 app.use("/gossip/*", bearerAuth());
 app.use("/loop/*", bearerAuth());
 app.use("/aegis/*", bearerAuth());
@@ -172,6 +172,7 @@ app.route("/review", reviewRoutes);
 app.route("/events", eventRoutes);
 app.route("/personas", personaRoutes);
 app.route("/cryo", cryoRoutes);
+app.route("/v1", routerRoutes);
 app.route("/gossip", gossipRoutes);
 app.route("/kb", kbRoutes);
 app.route("/loop", loopRoutes);

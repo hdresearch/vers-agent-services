@@ -402,8 +402,8 @@ import { rateLimit } from "../middleware/rate-limit.js";
 
 export const fleetChatPublicRoutes = new Hono();
 
-// Rate limit inbox: 30 messages per minute per IP
-fleetChatPublicRoutes.use("/inbox", rateLimit({ windowMs: 60_000, maxRequests: 30 }));
+// Rate limit inbox: 10 messages per minute from unknown senders (security hardening)
+fleetChatPublicRoutes.use("/inbox", rateLimit({ windowMs: 60_000, maxRequests: 10 }));
 
 // POST /inbox — Receive a message from another fleet (PUBLIC endpoint)
 fleetChatPublicRoutes.post("/inbox", async (c) => {

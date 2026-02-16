@@ -35,8 +35,8 @@ export class ValidationError extends Error {
 }
 
 export function maskValue(value: string): string {
-  if (!value || value.length <= 6) return "***";
-  return value.slice(0, 6) + "***";
+  if (!value || value.length <= 4) return "***";
+  return "***" + value.slice(-4);
 }
 
 export class ConfigStore {

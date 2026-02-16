@@ -3,6 +3,7 @@ import { ContactsStore, fetchGitHubKeys } from "./store.js";
 import type { CreateContactInput, UpdateContactInput, PeerAcceptInput, TrustLevel } from "./store.js";
 import { ValidationError, NotFoundError } from "../errors.js";
 import { emit } from "../events/emit.js";
+import { rateLimit } from "../middleware/rate-limit.js";
 import { fleetChatStore } from "../fleet-chat/routes.js";
 import { bearerAuth } from "../auth.js";
 
@@ -258,6 +259,9 @@ contactsRoutes.get("/peer/invites", (c) => {
 // ── Public peering routes (NO auth) ────────────────────────────────────────
 
 export const contactsPublicRoutes = new Hono();
+
+// Rate limit public peering endpoints: 10 requests per minute
+contactsPublicRoutes.use("/peer/*", rateLimit({ windowMs: 60_000, maxRequests: 10 }));
 
 // GET /contacts/peer/accept?token=XXX — show our identity (for browser visits)
 contactsPublicRoutes.get("/peer/accept", (c) => {

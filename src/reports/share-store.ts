@@ -76,13 +76,18 @@ export class ShareStore {
     `);
   }
 
+  /** Default share link expiration: 7 days from creation */
+  static DEFAULT_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
+
   createLink(input: CreateShareLinkInput): ShareLink {
+    const now = new Date();
+    const defaultExpiry = new Date(now.getTime() + ShareStore.DEFAULT_EXPIRY_MS).toISOString();
     const link: ShareLink = {
       linkId: randomUUID(),
       reportId: input.reportId,
-      createdAt: new Date().toISOString(),
+      createdAt: now.toISOString(),
       createdBy: input.createdBy,
-      expiresAt: input.expiresAt || null,
+      expiresAt: input.expiresAt || defaultExpiry,
       label: input.label || null,
       revoked: 0,
     };
@@ -131,6 +136,53 @@ export class ShareStore {
       .prepare("UPDATE share_links SET revoked = 1 WHERE linkId = ? AND revoked = 0")
       .run(linkId);
     return result.changes > 0;
+  }
+
+  /** List all active (non-revoked, non-expired) share links */
+  listAllActiveLinks(): ShareLinkWithCount[] {
+    const now = new Date().toISOString();
+    return this.db
+      .prepare(
+        `SELECT sl.*, COUNT(sal.id) as accessCount
+         FROM share_links sl
+         LEFT JOIN share_access_log sal ON sl.linkId = sal.linkId
+         WHERE sl.revoked = 0 AND (sl.expiresAt IS NULL OR sl.expiresAt > ?)
+         GROUP BY sl.linkId
+         ORDER BY sl.createdAt DESC`
+      )
+      .all(now) as ShareLinkWithCount[];
+  }
+
+  /** List all share links (including expired/revoked) */
+  listAllLinks(): ShareLinkWithCount[] {
+    return this.db
+      .prepare(
+        `SELECT sl.*, COUNT(sal.id) as accessCount
+         FROM share_links sl
+         LEFT JOIN share_access_log sal ON sl.linkId = sal.linkId
+         GROUP BY sl.linkId
+         ORDER BY sl.createdAt DESC`
+      )
+      .all() as ShareLinkWithCount[];
+  }
+
+  /** Hard-delete a share link and its access log */
+  deleteLink(linkId: string): boolean {
+    const tx = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM share_access_log WHERE linkId = ?").run(linkId);
+      const result = this.db.prepare("DELETE FROM share_links WHERE linkId = ?").run(linkId);
+      return result.changes > 0;
+    });
+    return tx();
+  }
+
+  /** Check if a link is expired (but not revoked) — used for 410 Gone */
+  isExpired(linkId: string): boolean {
+    const link = this.getLink(linkId);
+    if (!link) return false;
+    if (link.revoked) return false;
+    if (link.expiresAt && new Date(link.expiresAt) < new Date()) return true;
+    return false;
   }
 
   /**
