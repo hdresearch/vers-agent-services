@@ -196,6 +196,13 @@ uiRoutes.get("/ui/pm", async (c) => {
   return c.html(file.content);
 });
 
+// Usage dashboard
+uiRoutes.get("/ui/usage", async (c) => {
+  const file = await getStaticFile("index.html");
+  if (!file) return c.text("Dashboard files not found", 500);
+  return c.html(file.content);
+});
+
 // Report viewer
 uiRoutes.get("/ui/report/:id", async (c) => {
   const file = await getStaticFile("report.html");
