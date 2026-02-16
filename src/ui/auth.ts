@@ -35,6 +35,8 @@ function ensureDb(): Database.Database {
   }
   const db = new Database(DB_PATH);
   db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
+  db.pragma("busy_timeout = 5000");
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       token TEXT PRIMARY KEY,
