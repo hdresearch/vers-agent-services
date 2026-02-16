@@ -339,6 +339,95 @@ describe("UsageStore", () => {
     });
   });
 
+  describe("upsertSession", () => {
+    it("inserts a new session when none exists", async () => {
+      const input = makeSessionInput({ sessionId: "upsert-new" });
+      const record = await store.upsertSession("upsert-new", input);
+      expect(record.id).toBeTruthy();
+      expect(record.sessionId).toBe("upsert-new");
+      expect(record.turns).toBe(15);
+      expect(await store.sessionCount()).toBe(1);
+    });
+
+    it("updates existing session on second call with same sessionId", async () => {
+      const input1 = makeSessionInput({
+        sessionId: "upsert-dup",
+        turns: 5,
+        tokens: { input: 1000, output: 500, cacheRead: 100, cacheWrite: 50, total: 1650 },
+        cost: { input: 0.01, output: 0.02, cacheRead: 0.001, cacheWrite: 0.001, total: 0.032 },
+      });
+      const r1 = await store.upsertSession("upsert-dup", input1);
+
+      const input2 = makeSessionInput({
+        sessionId: "upsert-dup",
+        turns: 10,
+        tokens: { input: 5000, output: 2500, cacheRead: 500, cacheWrite: 200, total: 8200 },
+        cost: { input: 0.05, output: 0.10, cacheRead: 0.005, cacheWrite: 0.003, total: 0.158 },
+      });
+      const r2 = await store.upsertSession("upsert-dup", input2);
+
+      // Should reuse the same row ID
+      expect(r2.id).toBe(r1.id);
+      expect(r2.turns).toBe(10);
+      expect(r2.tokens.total).toBe(8200);
+      expect(r2.cost.total).toBe(0.158);
+
+      // Only one row in the DB
+      expect(await store.sessionCount()).toBe(1);
+    });
+
+    it("preserves startedAt from first insert on update", async () => {
+      const startedAt = "2025-01-01T00:00:00.000Z";
+      await store.upsertSession("upsert-start", makeSessionInput({
+        sessionId: "upsert-start",
+        startedAt,
+        turns: 1,
+      }));
+
+      const r2 = await store.upsertSession("upsert-start", makeSessionInput({
+        sessionId: "upsert-start",
+        startedAt,
+        turns: 5,
+        endedAt: "2025-01-01T01:00:00.000Z",
+      }));
+
+      // started_at is not updated by the UPDATE query, but endedAt is
+      expect(r2.turns).toBe(5);
+      expect(r2.endedAt).toBe("2025-01-01T01:00:00.000Z");
+    });
+
+    it("does not affect other sessions", async () => {
+      await store.recordSession(makeSessionInput({ sessionId: "other-1" }));
+      await store.upsertSession("upsert-only", makeSessionInput({ sessionId: "upsert-only", turns: 3 }));
+      await store.upsertSession("upsert-only", makeSessionInput({ sessionId: "upsert-only", turns: 7 }));
+
+      expect(await store.sessionCount()).toBe(2);
+      const sessions = await store.listSessions();
+      const other = sessions.find((s) => s.sessionId === "other-1");
+      expect(other?.turns).toBe(15); // unchanged
+      const upserted = sessions.find((s) => s.sessionId === "upsert-only");
+      expect(upserted?.turns).toBe(7);
+    });
+
+    it("rejects missing agent", async () => {
+      await expect(
+        store.upsertSession("x", makeSessionInput({ agent: "" }))
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects invalid tokens", async () => {
+      await expect(
+        store.upsertSession("x", makeSessionInput({ tokens: { input: 0 } as any }))
+      ).rejects.toThrow(ValidationError);
+    });
+
+    it("rejects empty sessionId path param", async () => {
+      await expect(
+        store.upsertSession("", makeSessionInput())
+      ).rejects.toThrow(ValidationError);
+    });
+  });
+
   describe("persistence", () => {
     it("persists sessions to DuckDB and reloads", async () => {
       const dbPath = join(tmpDir, "persist.duckdb");
@@ -433,6 +522,49 @@ describe("Usage Routes", () => {
     const body = await res.json();
     const filtered = body.sessions.filter((s: any) => s.agent === "lt-a");
     expect(filtered.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // --- PATCH session (upsert) routes ---
+
+  it("PATCH /usage/sessions/:id — creates session on first call", async () => {
+    const input = makeSessionInput({ sessionId: "patch-new" });
+    const res = await app.request("/usage/sessions/patch-new", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.sessionId).toBe("patch-new");
+    expect(body.turns).toBe(15);
+  });
+
+  it("PATCH /usage/sessions/:id — updates on subsequent calls", async () => {
+    const input1 = makeSessionInput({ sessionId: "patch-upd", turns: 3 });
+    await app.request("/usage/sessions/patch-upd", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input1),
+    });
+
+    const input2 = makeSessionInput({ sessionId: "patch-upd", turns: 8 });
+    const res = await app.request("/usage/sessions/patch-upd", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input2),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.turns).toBe(8);
+  });
+
+  it("PATCH /usage/sessions/:id — 400 on missing fields", async () => {
+    const res = await app.request("/usage/sessions/bad", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent: "test" }),
+    });
+    expect(res.status).toBe(400);
   });
 
   // --- VM routes ---
