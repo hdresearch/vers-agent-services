@@ -219,6 +219,12 @@ export class KBStore {
     return entry;
   }
 
+  deleteEntry(id: string): boolean {
+    const existed = this.entries.delete(id);
+    if (existed) this.scheduleSave();
+    return existed;
+  }
+
   listEntries(filters?: EntryFilters): KBEntry[] {
     let results = Array.from(this.entries.values());
 

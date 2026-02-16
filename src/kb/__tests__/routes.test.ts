@@ -19,7 +19,7 @@ function createApp() {
   app.post("/entries", async (c) => {
     const body = await c.req.json();
     try {
-      const entry = store.create(body);
+      const entry = store.createEntry(body);
       return c.json(entry, 201);
     } catch (e: any) {
       return c.json({ error: e.message }, 400);
@@ -34,13 +34,13 @@ function createApp() {
     if (type) filters.type = type;
     if (tag) filters.tag = tag;
     if (search) filters.search = search;
-    const entries = store.list(filters);
+    const entries = store.listEntries(filters);
     return c.json({ entries, count: entries.length });
   });
 
   app.get("/entries/:id", (c) => {
     try {
-      const entry = store.get(c.req.param("id"));
+      const entry = store.getEntry(c.req.param("id"));
       return c.json(entry);
     } catch (e: any) {
       return c.json({ error: e.message }, 404);
@@ -48,7 +48,7 @@ function createApp() {
   });
 
   app.delete("/entries/:id", (c) => {
-    const deleted = store.delete(c.req.param("id"));
+    const deleted = store.deleteEntry(c.req.param("id"));
     if (!deleted) return c.json({ error: "not found" }, 404);
     return c.json({ deleted: true });
   });
@@ -104,8 +104,8 @@ describe("KB Routes", () => {
   });
 
   it("GET /entries lists entries with filters", async () => {
-    store.create({ type: "lesson", title: "L", content: "C", tags: ["a"] });
-    store.create({ type: "gotcha", title: "G", content: "C", tags: ["b"] });
+    store.createEntry({ type: "lesson", title: "L", content: "C", tags: ["a"] });
+    store.createEntry({ type: "gotcha", title: "G", content: "C", tags: ["b"] });
 
     const res = await app.request("/entries?type=lesson");
     expect(res.status).toBe(200);
@@ -115,7 +115,7 @@ describe("KB Routes", () => {
   });
 
   it("GET /entries/:id returns entry", async () => {
-    const entry = store.create({ type: "sop", title: "S", content: "C" });
+    const entry = store.createEntry({ type: "sop", title: "S", content: "C" });
     const res = await app.request(`/entries/${entry.id}`);
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -128,7 +128,7 @@ describe("KB Routes", () => {
   });
 
   it("DELETE /entries/:id removes entry", async () => {
-    const entry = store.create({ type: "reference", title: "R", content: "C" });
+    const entry = store.createEntry({ type: "reference", title: "R", content: "C" });
     const res = await app.request(`/entries/${entry.id}`, { method: "DELETE" });
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -136,7 +136,7 @@ describe("KB Routes", () => {
   });
 
   it("GET /briefing returns markdown", async () => {
-    store.create({ type: "lesson", title: "Fleet Lesson", content: "Important" });
+    store.createEntry({ type: "lesson", title: "Fleet Lesson", content: "Important" });
     const res = await app.request("/briefing");
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -145,7 +145,7 @@ describe("KB Routes", () => {
   });
 
   it("GET /briefing?format=text returns plain text", async () => {
-    store.create({ type: "lesson", title: "Plain", content: "Text" });
+    store.createEntry({ type: "lesson", title: "Plain", content: "Text" });
     const res = await app.request("/briefing?format=text");
     expect(res.status).toBe(200);
     const text = await res.text();
@@ -153,7 +153,7 @@ describe("KB Routes", () => {
   });
 
   it("GET /stats returns statistics", async () => {
-    store.create({ type: "lesson", title: "L", content: "C" });
+    store.createEntry({ type: "lesson", title: "L", content: "C" });
     const res = await app.request("/stats");
     expect(res.status).toBe(200);
     const body = await res.json();

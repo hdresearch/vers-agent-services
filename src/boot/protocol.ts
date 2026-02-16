@@ -94,7 +94,7 @@ export function registerAgent(input: RegisterInput): BootIdentity {
         persona: persona?.name || "default",
         currentVmId: vmId,
         status: "awake",
-        briefing: taskHint || null,
+        briefing: taskHint || undefined,
       });
     }
 
@@ -112,7 +112,7 @@ export function registerAgent(input: RegisterInput): BootIdentity {
       persona: persona?.name || "default",
       currentVmId: vmId,
       status: "awake",
-      briefing: taskHint || null,
+      briefing: taskHint || undefined,
     });
   }
 
