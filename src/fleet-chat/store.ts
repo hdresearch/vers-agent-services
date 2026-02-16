@@ -190,6 +190,8 @@ export class FleetChatStore {
     }
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
+    this.db.pragma("synchronous = NORMAL");
+    this.db.pragma("busy_timeout = 5000");
     this.privateKey = privateKey;
     this.privateKeyPath = opts?.privateKeyPath;
     this.requireSignatures = opts?.requireSignatures ?? (process.env.REQUIRE_SIGNATURES === "true");

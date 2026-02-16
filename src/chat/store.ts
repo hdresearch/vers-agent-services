@@ -36,6 +36,8 @@ export class WebChatStore {
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     this.db = new Database(dbPath);
     this.db.pragma("journal_mode = WAL");
+    this.db.pragma("synchronous = NORMAL");
+    this.db.pragma("busy_timeout = 5000");
     this.init();
   }
 

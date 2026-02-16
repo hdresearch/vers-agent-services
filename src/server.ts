@@ -19,6 +19,13 @@ import { ServiceLoader } from "./service-loader.js";
 import { bearerAuth } from "./auth.js";
 import { rateLimit } from "./middleware/rate-limit.js";
 import { etag } from "./middleware/etag.js";
+import {
+  globalRateLimit,
+  connectionManager,
+  tagPriority,
+  getRateLimitStatus,
+  writeQueue,
+} from "./ratelimit/index.js";
 import { keyRoutes } from "./auth/key-routes.js";
 import { boardRoutes } from "./board/routes.js";
 import { feedRoutes } from "./feed/routes.js";
@@ -105,6 +112,31 @@ app.route("/v1", routerRoutes);
 
 // Gzip compression for all responses > 1KB
 app.use("*", compress());
+
+// Connection management — close connections for agent API requests to prevent socket exhaustion
+app.use("*", connectionManager());
+
+// Tag request priority (HIGH for UI, NORMAL for agents, LOW for bulk)
+app.use("*", tagPriority());
+
+// Global rate limit — 200 req/min per token, catches runaway agents
+app.use("/board/*", globalRateLimit());
+app.use("/feed/*", globalRateLimit());
+app.use("/log/*", globalRateLimit());
+app.use("/registry/*", globalRateLimit());
+app.use("/events/*", globalRateLimit());
+app.use("/kb/*", globalRateLimit());
+app.use("/chat/*", globalRateLimit());
+app.use("/gossip/*", globalRateLimit());
+app.use("/daemon/*", globalRateLimit());
+
+// Rate limit & write queue status endpoint (unauthenticated — for monitoring)
+app.get("/ratelimit/status", (c) =>
+  c.json({
+    rateLimit: getRateLimitStatus(),
+    writeQueue: writeQueue.stats,
+  }),
+);
 
 // Bearer auth — applied per-route to API endpoints
 app.use("/auth/*", bearerAuth());
