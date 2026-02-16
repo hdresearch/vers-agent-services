@@ -37,6 +37,7 @@ import { daemonRoutes, daemonEngine, daemonStore } from "./daemon/routes.js";
 import { contactsRoutes, contactsPublicRoutes, contactsStore } from "./contacts/routes.js";
 import { notificationRoutes } from "./notifications/routes.js";
 import { blogRoutes } from "./blog/routes.js";
+import { docsRoutes, docsPublicRoutes, docsStore } from "./docs/routes.js";
 
 const app = new Hono();
 
@@ -66,6 +67,9 @@ app.route("/contacts", contactsPublicRoutes);
 
 // Blog — NO bearer auth (public-facing fleet blog)
 app.route("/blog", blogRoutes);
+
+// Docs public routes — NO bearer auth (published docs are public)
+app.route("/docs", docsPublicRoutes);
 
 // LLM Router — NO bearer auth on /v1 (agents auth with x-agent-id or fleet token;
 // router validates internally). This is the single source of truth for API keys.
@@ -103,6 +107,8 @@ app.use("/kb/*", bearerAuth());
 app.use("/daemon/*", bearerAuth());
 // Contacts: auth on management routes. /peer/accept is public (for peering handshake).
 // Note: /:id routes have auth applied at router level in contacts/routes.ts
+app.use("/docs", bearerAuth());                // docs registry (public routes mounted separately above)
+app.use("/docs/*", bearerAuth());
 app.use("/contacts", bearerAuth());            // list + create
 app.use("/contacts/from-github/*", bearerAuth());
 app.use("/contacts/refresh-keys/*", bearerAuth());
@@ -151,6 +157,7 @@ app.route("/fleet-chat", fleetChatRoutes);
 app.route("/contacts", contactsRoutes);
 app.route("/daemon", daemonRoutes);
 app.route("/notifications", notificationRoutes);
+app.route("/docs", docsRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
@@ -210,6 +217,8 @@ async function gracefulShutdown(signal: string) {
   }
   // Close contacts DB
   try { contactsStore.close(); } catch {}
+  // Close docs DB
+  try { docsStore.close(); } catch {}
   // Stop daemon event loop
   if (daemonEngine.isRunning) {
     try { daemonEngine.stop(); } catch {}
