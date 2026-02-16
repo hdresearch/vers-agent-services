@@ -41,6 +41,7 @@ import { docsRoutes, docsPublicRoutes, docsStore } from "./docs/routes.js";
 import { chatRoutes, chatStore } from "./chat/routes.js";
 import { aegisRoutes, aegisStore } from "./aegis/routes.js";
 import { deployRoutes } from "./deploy/routes.js";
+import { subfleetRoutes, subfleetStore, subfleetOrchestrator, setAegisGuard } from "./subfleet/routes.js";
 
 const app = new Hono();
 
@@ -168,6 +169,7 @@ app.route("/notifications", notificationRoutes);
 app.route("/docs", docsRoutes);
 app.route("/aegis", aegisRoutes);
 app.route("/deploy", deployRoutes);
+app.route("/subfleet", subfleetRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
@@ -200,6 +202,9 @@ const server = serve({ fetch: app.fetch, port, hostname: "::" }, () => {
   // Auto-register persistent VMs (infra, gitea, minio) and start heartbeat loop.
   // This ensures they survive TTL purging without manual intervention.
   initPersistentVMs();
+
+  // Wire up Aegis protection for sub-fleet teardowns
+  setAegisGuard((vmId: string) => aegisStore.isProtected(vmId));
 });
 
 // Graceful shutdown — let in-flight requests drain before exiting.
@@ -233,6 +238,9 @@ async function gracefulShutdown(signal: string) {
   try { chatStore.close(); } catch {}
   // Close aegis DB
   try { aegisStore.close(); } catch {}
+  // Stop sub-fleet TTL reaper and close DB
+  try { subfleetOrchestrator.stopReaper(); } catch {}
+  try { subfleetStore.close(); } catch {}
   // Stop daemon event loop
   if (daemonEngine.isRunning) {
     try { daemonEngine.stop(); } catch {}
