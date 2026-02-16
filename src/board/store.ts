@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, existsSync } from "node:fs";
+import { atomicWriteFileSync, recoverTmpFile } from "../utils/atomic-write.js";
 
 export interface Note {
   id: string;
@@ -22,6 +22,8 @@ export interface Artifact {
 
 export type TaskStatus = "open" | "in_progress" | "in_review" | "blocked" | "done";
 
+export type TaskEffort = 'trivial' | 'small' | 'medium' | 'large';
+
 export interface Task {
   id: string;
   title: string;
@@ -36,6 +38,8 @@ export interface Task {
   notes: Note[];
   artifacts: Artifact[];
   score: number;
+  effort?: TaskEffort;
+  unsupervised?: number; // 0-5 confidence score
 }
 
 export interface CreateTaskInput {
@@ -46,6 +50,8 @@ export interface CreateTaskInput {
   tags?: string[];
   dependencies?: string[];
   createdBy: string;
+  effort?: TaskEffort;
+  unsupervised?: number;
 }
 
 export interface UpdateTaskInput {
@@ -55,6 +61,8 @@ export interface UpdateTaskInput {
   assignee?: string | null;
   tags?: string[];
   dependencies?: string[];
+  effort?: TaskEffort | null;
+  unsupervised?: number | null;
 }
 
 export interface AddNoteInput {
@@ -74,11 +82,14 @@ export interface TaskFilters {
   status?: TaskStatus;
   assignee?: string;
   tag?: string;
+  effort?: TaskEffort;
+  unsupervised_gte?: number;
 }
 
 const VALID_STATUSES: Set<string> = new Set(["open", "in_progress", "in_review", "blocked", "done"]);
 const VALID_NOTE_TYPES: Set<string> = new Set(["finding", "blocker", "question", "update"]);
 const VALID_ARTIFACT_TYPES: Set<string> = new Set(["branch", "report", "deploy", "diff", "file", "url"]);
+const VALID_EFFORTS: Set<string> = new Set(["trivial", "small", "medium", "large"]);
 
 export class BoardStore {
   private tasks: Map<string, Task> = new Map();
@@ -93,6 +104,7 @@ export class BoardStore {
   }
 
   private load(): void {
+    recoverTmpFile(this.filePath);
     try {
       if (existsSync(this.filePath)) {
         const raw = readFileSync(this.filePath, "utf-8");
@@ -127,12 +139,8 @@ export class BoardStore {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;
     }
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
     const data = JSON.stringify({ tasks: Array.from(this.tasks.values()) }, null, 2);
-    writeFileSync(this.filePath, data, "utf-8");
+    atomicWriteFileSync(this.filePath, data);
   }
 
   createTask(input: CreateTaskInput): Task {
@@ -144,6 +152,14 @@ export class BoardStore {
     }
     if (input.status && !VALID_STATUSES.has(input.status)) {
       throw new ValidationError(`invalid status: ${input.status}`);
+    }
+    if (input.effort !== undefined && !VALID_EFFORTS.has(input.effort)) {
+      throw new ValidationError(`invalid effort: ${input.effort}`);
+    }
+    if (input.unsupervised !== undefined) {
+      if (typeof input.unsupervised !== "number" || input.unsupervised < 0 || input.unsupervised > 5) {
+        throw new ValidationError("unsupervised must be a number between 0 and 5");
+      }
     }
 
     const now = new Date().toISOString();
@@ -161,6 +177,8 @@ export class BoardStore {
       notes: [],
       artifacts: [],
       score: 0,
+      effort: input.effort,
+      unsupervised: input.unsupervised,
     };
 
     this.tasks.set(task.id, task);
@@ -184,6 +202,12 @@ export class BoardStore {
     if (filters?.tag) {
       results = results.filter((t) => t.tags.includes(filters.tag!));
     }
+    if (filters?.effort) {
+      results = results.filter((t) => t.effort === filters.effort);
+    }
+    if (filters?.unsupervised_gte !== undefined) {
+      results = results.filter((t) => t.unsupervised !== undefined && t.unsupervised >= filters.unsupervised_gte!);
+    }
 
     // Sort by createdAt descending (newest first)
     results.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -197,6 +221,14 @@ export class BoardStore {
     if (input.status !== undefined && !VALID_STATUSES.has(input.status)) {
       throw new ValidationError(`invalid status: ${input.status}`);
     }
+    if (input.effort !== undefined && input.effort !== null && !VALID_EFFORTS.has(input.effort)) {
+      throw new ValidationError(`invalid effort: ${input.effort}`);
+    }
+    if (input.unsupervised !== undefined && input.unsupervised !== null) {
+      if (typeof input.unsupervised !== "number" || input.unsupervised < 0 || input.unsupervised > 5) {
+        throw new ValidationError("unsupervised must be a number between 0 and 5");
+      }
+    }
 
     if (input.title !== undefined) {
       if (typeof input.title !== "string" || !input.title.trim()) {
@@ -209,6 +241,8 @@ export class BoardStore {
     if (input.assignee !== undefined) task.assignee = input.assignee === null ? undefined : input.assignee?.trim();
     if (input.tags !== undefined) task.tags = input.tags;
     if (input.dependencies !== undefined) task.dependencies = input.dependencies;
+    if (input.effort !== undefined) task.effort = input.effort === null ? undefined : input.effort;
+    if (input.unsupervised !== undefined) task.unsupervised = input.unsupervised === null ? undefined : input.unsupervised;
 
     task.updatedAt = new Date().toISOString();
     this.tasks.set(id, task);
@@ -298,16 +332,5 @@ export class BoardStore {
   }
 }
 
-export class NotFoundError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NotFoundError";
-  }
-}
-
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ValidationError";
-  }
-}
+export { NotFoundError, ValidationError } from "../errors.js";
+import { NotFoundError, ValidationError } from "../errors.js";

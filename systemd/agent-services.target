@@ -1,0 +1,6 @@
+[Unit]
+Description=Agent Services — All Microservices
+Wants=agent-core.service agent-fleet.service agent-autonomy.service agent-gateway.service
+
+[Install]
+WantedBy=multi-user.target

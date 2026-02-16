@@ -5,9 +5,18 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "dev:gateway": "tsx watch src/gateway/main.ts",
+    "dev:core": "tsx watch src/core-api/main.ts",
+    "dev:fleet": "tsx watch src/fleet-api/main.ts",
+    "dev:autonomy": "tsx watch src/autonomy-api/main.ts",
     "build": "tsc",
     "postbuild": "rm -rf dist/ui/static && cp -r src/ui/static dist/ui/static",
     "start": "node dist/server.js",
+    "start:gateway": "node dist/gateway/main.js",
+    "start:core": "node dist/core-api/main.js",
+    "start:fleet": "node dist/fleet-api/main.js",
+    "start:autonomy": "node dist/autonomy-api/main.js",
+    "start:microservices": "node dist/core-api/main.js & node dist/fleet-api/main.js & node dist/autonomy-api/main.js & sleep 1 && node dist/gateway/main.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "prepare": "git config core.hooksPath .githooks"

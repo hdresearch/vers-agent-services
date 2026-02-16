@@ -1,6 +1,9 @@
-import { ulid } from "ulid";
-import { readFileSync, appendFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { monotonicFactory } from "ulid";
+
+const ulid = monotonicFactory();
+import { readFileSync, appendFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname } from "node:path";
+import { atomicWriteFileSync, recoverTmpFile } from "../utils/atomic-write.js";
 
 export type FeedEventType =
   | "task_started"
@@ -53,6 +56,7 @@ export interface PublishInput {
 export interface FilterOptions {
   agent?: string;
   type?: string;
+  exclude?: string[]; // event types to exclude from results
   since?: string; // ISO timestamp or ULID
   limit?: number;
 }
@@ -72,6 +76,11 @@ export class FeedStore {
   }
 
   private load(): void {
+    recoverTmpFile(this.filePath, (content) => {
+      for (const line of content.split("\n")) {
+        if (line.trim()) JSON.parse(line);
+      }
+    });
     if (!existsSync(this.filePath)) return;
     const content = readFileSync(this.filePath, "utf-8").trim();
     if (!content) return;
@@ -138,6 +147,10 @@ export class FeedStore {
     if (opts.type) {
       result = result.filter((e) => e.type === opts.type);
     }
+    if (opts.exclude && opts.exclude.length > 0) {
+      const excludeSet = new Set(opts.exclude);
+      result = result.filter((e) => !excludeSet.has(e.type));
+    }
     if (opts.since) {
       const since = opts.since;
       // If it looks like a ULID (26 chars, alphanumeric), compare by ID
@@ -201,11 +214,37 @@ export class FeedStore {
     };
   }
 
+  /**
+   * Archive events older than N days. Moves old events to an archive file
+   * and rewrites the main feed file with only recent events.
+   */
+  archive(days: number = 7): { archived: number; remaining: number } {
+    const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+    const old = this.events.filter((e) => e.timestamp < cutoff);
+    const recent = this.events.filter((e) => e.timestamp >= cutoff);
+
+    if (old.length === 0) {
+      return { archived: 0, remaining: this.events.length };
+    }
+
+    // Append old events to archive file
+    const archivePath = this.filePath.replace(/\.jsonl$/, ".archive.jsonl");
+    const dir = dirname(archivePath);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    const archiveData = old.map((e) => JSON.stringify(e)).join("\n") + "\n";
+    appendFileSync(archivePath, archiveData);
+
+    // Rewrite main file with only recent events
+    const recentData = recent.map((e) => JSON.stringify(e)).join("\n") + (recent.length ? "\n" : "");
+    atomicWriteFileSync(this.filePath, recentData);
+
+    this.events = recent;
+    return { archived: old.length, remaining: recent.length };
+  }
+
   clear(): void {
     this.events = [];
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(this.filePath, "");
+    atomicWriteFileSync(this.filePath, "");
   }
 
   get size(): number {

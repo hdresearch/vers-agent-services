@@ -1,0 +1,33 @@
+{
+  "description": "VMs that should always be registered in the registry. Auto-registered on server startup with pinned=true. Add new persistent VMs here.",
+  "vms": [
+    {
+      "id": "e0e2bf05-93fd-4a30-b4c6-4476b45beb16",
+      "name": "infra",
+      "role": "infra",
+      "address": "e0e2bf05-93fd-4a30-b4c6-4476b45beb16.vm.vers.sh",
+      "services": [
+        { "name": "agent-services", "port": 3000 }
+      ]
+    },
+    {
+      "id": "b6f1cc18-713a-4e3f-bb8d-a0064646f963",
+      "name": "gitea-forge",
+      "role": "infra",
+      "address": "b6f1cc18-713a-4e3f-bb8d-a0064646f963.vm.vers.sh",
+      "services": [
+        { "name": "gitea", "port": 3000 }
+      ]
+    },
+    {
+      "id": "47b9c691-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+      "name": "minio",
+      "role": "infra",
+      "address": "47b9c691-1a2b-4c3d-8e4f-5a6b7c8d9e0f.vm.vers.sh",
+      "services": [
+        { "name": "s3", "port": 9000 },
+        { "name": "console", "port": 9999 }
+      ]
+    }
+  ]
+}
