@@ -175,6 +175,13 @@ uiRoutes.get("/ui/", async (c) => {
   return c.html(file.content);
 });
 
+// Dashboard v2 — Micro-UI panels
+uiRoutes.get("/ui/v2", async (c) => {
+  const file = await getStaticFile("dashboard-v2.html");
+  if (!file) return c.text("Dashboard v2 not found", 500);
+  return c.html(file.content);
+});
+
 // Report viewer
 uiRoutes.get("/ui/report/:id", async (c) => {
   const file = await getStaticFile("report.html");
