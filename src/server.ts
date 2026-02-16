@@ -70,6 +70,7 @@ import { plannerRoutes, plannerStore } from "./planner/routes.js";
 import { bootRoutes } from "./boot/routes.js";
 import { autonomyRoutes, autonomyStore, orchestrator as autonomyOrchestrator } from "./autonomy/routes.js";
 import { subfleetRoutes, subfleetStore, subfleetOrchestrator, setAegisGuard } from "./subfleet/routes.js";
+import { projectRoutes, projectStore } from "./projects/routes.js";
 
 const app = new Hono();
 const loader = new ServiceLoader();
@@ -199,6 +200,7 @@ app.use("/bus/*", bearerAuth());
 app.use("/boot/*", bearerAuth());
 
 app.use("/backup/*", bearerAuth());
+app.use("/projects/*", bearerAuth());
 
 // Rate limiting for write endpoints (applied after auth)
 app.post("/feed/events", rateLimit({ windowMs: 60_000, maxRequests: 60 }));
@@ -242,6 +244,7 @@ app.route("/planner", plannerRoutes);
 app.route("/boot", bootRoutes);
 app.route("/bus", busRoutes);
 app.route("/subfleet", subfleetRoutes);
+app.route("/projects", projectRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
