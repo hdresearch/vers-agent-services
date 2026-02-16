@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { serve } from "@hono/node-server";
+import { ServiceLoader } from "./service-loader.js";
 import { bearerAuth } from "./auth.js";
 import { rateLimit } from "./middleware/rate-limit.js";
 import { etag } from "./middleware/etag.js";
@@ -51,6 +52,7 @@ import { bootRoutes } from "./boot/routes.js";
 import { autonomyRoutes, autonomyStore, orchestrator as autonomyOrchestrator } from "./autonomy/routes.js";
 
 const app = new Hono();
+const loader = new ServiceLoader();
 
 // Health check — unauthenticated (used for liveness probes)
 app.get("/health", (c) => c.json({ status: "ok", uptime: process.uptime() }));
@@ -300,7 +302,12 @@ async function gracefulShutdown(signal: string) {
 process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
 process.on("SIGINT", () => gracefulShutdown("SIGINT"));
 
-export { app };
+// ─── UI manifest endpoint (served via session-auth proxy at /ui/api/manifest) ───
+app.get("/manifest", (c) => {
+  return c.json(loader.getUIManifest());
+});
+
+export { app, loader };
 
 
 

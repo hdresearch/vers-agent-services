@@ -164,7 +164,11 @@ The returned URL can be opened in a browser to authenticate into the dashboard.
 
 ## Authentication
 
-All endpoints except `/health` are protected by bearer token auth when `VERS_AUTH_TOKEN` is set.
+> **Detailed docs:** See [`docs/auth.md`](docs/auth.md) for the full auth flow — bearer tokens, magic links, session cookies, and the UI API proxy.
+
+All API endpoints are protected by bearer token auth when `VERS_AUTH_TOKEN` is set. Exceptions:
+- `/health` — always open (liveness probe)
+- `/reports/share/:linkId` — public share links (no auth)
 
 ```bash
 # Start server with auth
