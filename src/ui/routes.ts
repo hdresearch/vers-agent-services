@@ -121,6 +121,26 @@ uiRoutes.post("/auth/magic-link", async (c) => {
   return c.json({ url, expiresAt: link.expiresAt });
 });
 
+// Generate deep link — magic link with redirect to a specific UI path
+uiRoutes.post("/auth/deep-link", async (c) => {
+  if (!hasBearerAuth(c)) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const path = (body as any).path || "/ui/";
+  // Sanitize path
+  const safePath = (path.startsWith("/ui/") || path.startsWith("/ui#")) ? path : "/ui/";
+
+  const link = createMagicLink();
+  const host = c.req.header("host") || "localhost:3000";
+  const proto = c.req.header("x-forwarded-proto") || "https";
+  const redirect = encodeURIComponent(safePath);
+  const url = `${proto}://${host}/ui/login?token=${link.token}&redirect=${redirect}`;
+
+  return c.json({ url, path: safePath, expiresAt: link.expiresAt });
+});
+
 // Login page / magic link consumer
 uiRoutes.get("/ui/login", (c) => {
   const token = c.req.query("token");
@@ -129,7 +149,11 @@ uiRoutes.get("/ui/login", (c) => {
     const valid = consumeMagicLink(token);
     if (valid) {
       const session = createSession();
-      return c.html(`<html><head><meta http-equiv="refresh" content="0;url=/ui/"></head></html>`, 200, {
+      // Support redirect param for deep links (e.g. /ui/#comms)
+      const redirect = c.req.query("redirect") || "/ui/";
+      // Sanitize: only allow paths starting with /ui/ to prevent open redirect
+      const safeDest = redirect.startsWith("/ui/") || redirect.startsWith("/ui#") ? redirect : "/ui/";
+      return c.html(`<html><head><meta http-equiv="refresh" content="0;url=${safeDest}"></head></html>`, 200, {
         "Set-Cookie": `session=${session.id}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`,
       });
     }

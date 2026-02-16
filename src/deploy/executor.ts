@@ -25,20 +25,27 @@ async function logToService(text: string, agent = "ada-deploy"): Promise<void> {
   } catch {}
 }
 
-// Notification helper
-async function notify(title: string, body: string, type = "alert", priority = "high"): Promise<void> {
+// Notification helper — uses deep-linked notifications when available
+async function notify(title: string, body: string, type = "alert", priority = "high", uiPath = "/ui/#services"): Promise<void> {
   try {
-    const url = INFRA_URL ? `${INFRA_URL}/notifications` : "http://localhost:3000/notifications";
-    const token = process.env.VERS_AUTH_TOKEN || "";
-    await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ title, body, type, priority, source: "deploy" }),
-    }).catch(() => {});
-  } catch {}
+    const { createDeepLinkedNotification } = await import("../notifications/deeplink.js");
+    const baseUrl = INFRA_URL || "http://localhost:3000";
+    createDeepLinkedNotification({ type, title, body, priority, source: "deploy", uiPath }, baseUrl);
+  } catch {
+    // Fallback: direct POST if import fails (e.g. running standalone)
+    try {
+      const url = INFRA_URL ? `${INFRA_URL}/notifications` : "http://localhost:3000/notifications";
+      const token = process.env.VERS_AUTH_TOKEN || "";
+      await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ title, body, type, priority, source: "deploy" }),
+      }).catch(() => {});
+    } catch {}
+  }
 }
 
 function shell(cmd: string, cwd?: string): string {

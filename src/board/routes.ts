@@ -10,6 +10,7 @@ import {
 } from "./store.js";
 import { emit } from "../events/emit.js";
 import { boardStore } from "./shared-store.js";
+import { createDeepLinkedNotification } from "../notifications/deeplink.js";
 
 export const store = boardStore;
 
@@ -21,6 +22,19 @@ boardRoutes.post("/tasks", async (c) => {
     const body = await c.req.json();
     const task = store.createTask(body);
     emit('board', 'board.task.created', { taskId: task.id, title: task.title, tags: task.tags, assignee: task.assignee, status: task.status }, task.createdBy);
+    // Deep-linked notification for task assignments
+    if (task.assignee) {
+      try {
+        createDeepLinkedNotification({
+          type: "update",
+          title: `📋 Task assigned: ${task.title}`,
+          body: `Assigned to ${task.assignee} by ${task.createdBy || "unknown"}`,
+          priority: "normal",
+          source: "board",
+          uiPath: "/ui/#board",
+        });
+      } catch {}
+    }
     return c.json(task, 201);
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);

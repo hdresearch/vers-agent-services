@@ -4,6 +4,7 @@ import { FleetChatStore } from "./store.js";
 import { ValidationError, NotFoundError } from "../errors.js";
 import { emit } from "../events/emit.js";
 import { signContent, encryptContent } from "./crypto.js";
+import { createDeepLinkedNotification } from "../notifications/deeplink.js";
 
 const PRIVATE_KEY_PATH = process.env.FLEET_PRIVATE_KEY_PATH || "/root/.ssh/fleet-identity";
 
@@ -432,6 +433,18 @@ fleetChatPublicRoutes.post("/inbox", async (c) => {
         reason: result.quarantined.reason,
         from: result.quarantined.rawMessage.from?.name,
       });
+      // Notify with deep link to comms tab
+      try {
+        const senderName = result.quarantined.rawMessage.from?.name || "unknown";
+        createDeepLinkedNotification({
+          type: "chat",
+          title: `⚠️ Quarantined message from ${senderName}`,
+          body: `Message quarantined: ${result.quarantined.reason}`,
+          priority: "high",
+          source: "fleet-chat",
+          uiPath: "/ui/#comms",
+        });
+      } catch {}
       return c.json(
         {
           received: true,
@@ -449,6 +462,17 @@ fleetChatPublicRoutes.post("/inbox", async (c) => {
         type: result.message.type,
         from: result.message.from.name,
       });
+      // Notify with deep link to comms tab
+      try {
+        createDeepLinkedNotification({
+          type: "chat",
+          title: `💬 Fleet message from ${result.message.from.name}`,
+          body: result.message.content?.substring(0, 200) || "(no content)",
+          priority: "normal",
+          source: "fleet-chat",
+          uiPath: "/ui/#comms",
+        });
+      } catch {}
       return c.json(
         {
           received: true,

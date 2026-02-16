@@ -4,6 +4,7 @@
  */
 
 import type { AegisStore, BudgetConfig, BudgetStatus } from "./store.js";
+import { createDeepLinkedNotification } from "../notifications/deeplink.js";
 
 export interface BudgetCheckResult {
   allowed: boolean;
@@ -22,6 +23,16 @@ export class BudgetBreaker {
 
     if (status.blocked) {
       this.store.audit("budget", "agent_blocked", `${agentId}: ${status.reason}`);
+      try {
+        createDeepLinkedNotification({
+          type: "alert",
+          title: `🛡️ Aegis: Agent ${agentId} blocked`,
+          body: status.reason || "Budget limit exceeded",
+          priority: "critical",
+          source: "aegis",
+          uiPath: "/ui/v2",
+        });
+      } catch {}
     }
 
     return { allowed: !status.blocked, status };

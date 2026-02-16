@@ -4,6 +4,7 @@ import { analyzeBoard, summarizeAnalysis } from "./analyzer.js";
 import { getTemplate, listTemplates, TEMPLATES } from "./templates.js";
 import { boardStore } from "../board/shared-store.js";
 import { emit } from "../events/emit.js";
+import { createDeepLinkedNotification } from "../notifications/deeplink.js";
 import type { Task } from "../board/store.js";
 import type { SprintGroup, SprintTask } from "./store.js";
 import type { SprintTemplate } from "./templates.js";
@@ -294,6 +295,18 @@ plannerRoutes.post("/sprint", async (c) => {
     totalTokens,
     template: templateName,
   }, "sprint-planner");
+
+  // Deep-linked notification: sprint plan ready for review
+  try {
+    createDeepLinkedNotification({
+      type: "update",
+      title: `📋 Sprint plan ready (${totalTasks} tasks)`,
+      body: `Intent: ${intent}\nBudget: ${budget} tokens`,
+      priority: "normal",
+      source: "sprint-planner",
+      uiPath: "/ui/pm",
+    });
+  } catch {}
 
   return c.json(sprint, 201);
 });

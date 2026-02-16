@@ -21,6 +21,7 @@ import { EscalationEngine } from "./escalation.js";
 import { Scheduler } from "./scheduler.js";
 import { EventLogStore, type EventRecord } from "../events/store.js";
 import { emit } from "../events/emit.js";
+import { createDeepLinkedNotification } from "../notifications/deeplink.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -462,22 +463,16 @@ export class Orchestrator {
 
   // ── Notification helper ────────────────────────────────────────────────────
 
-  private async notify(title: string, body: string, priority = "normal"): Promise<void> {
+  private async notify(title: string, body: string, priority = "normal", uiPath = "/ui/#services"): Promise<void> {
     try {
-      await fetch(`${this.baseUrl}/notifications`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.token}`,
-        },
-        body: JSON.stringify({
-          type: "alert",
-          title,
-          body,
-          priority,
-          source: "orchestrator",
-        }),
-      });
+      createDeepLinkedNotification({
+        type: "alert",
+        title,
+        body,
+        priority,
+        source: "orchestrator",
+        uiPath,
+      }, this.baseUrl);
     } catch {
       // Best effort
     }
