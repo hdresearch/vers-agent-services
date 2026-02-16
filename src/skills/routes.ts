@@ -8,12 +8,35 @@ import {
   ValidationError,
 } from "./store.js";
 import type { ChangeEvent } from "./store.js";
+import { emit } from "../events/emit.js";
 
 export const skillStore = new SkillStore();
 export const extensionStore = new ExtensionStore();
 export const manifestStore = new ManifestStore();
 
 export const skillsRoutes = new Hono();
+
+// ─── Health Check ────────────────────────────────────────────
+
+// GET /health — Report skill/extension counts and restore status
+skillsRoutes.get("/health", (c) => {
+  const skillCount = skillStore.count;
+  const extensionCount = extensionStore.count;
+  const restoredSkills = skillStore.restoredFromBackup;
+  const restoredExtensions = extensionStore.restoredFromBackup;
+  const healthy = skillCount > 0 || extensionCount > 0;
+
+  return c.json({
+    healthy,
+    skills: skillCount,
+    extensions: extensionCount,
+    restored: restoredSkills || restoredExtensions,
+    detail: {
+      skillsRestoredFromBackup: restoredSkills,
+      extensionsRestoredFromBackup: restoredExtensions,
+    },
+  }, healthy ? 200 : 503);
+});
 
 // ─── Skills CRUD ─────────────────────────────────────────────
 
@@ -28,6 +51,7 @@ skillsRoutes.post("/items", async (c) => {
 
   try {
     const skill = skillStore.publish(body as any);
+    emit('skills', 'skills.skill.updated', { name: skill.name, version: skill.version });
     return c.json(skill, 201);
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
@@ -140,6 +164,7 @@ skillsRoutes.post("/sync", async (c) => {
     const currentSkills = skillStore.manifest();
     const currentExtensions = extensionStore.manifest();
     const updates = manifestStore.sync(body as any, currentSkills, currentExtensions);
+    emit('skills', 'skills.skill.synced', { agentId: (body as any).agentId, updateCount: updates.length });
     return c.json({ updates });
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);

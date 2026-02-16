@@ -365,6 +365,38 @@ async function syncExtensionsFromHub(): Promise<string[]> {
 }
 
 // ---------------------------------------------------------------------------
+// KB Briefing — sync fleet knowledge base to agent context
+// ---------------------------------------------------------------------------
+
+const KB_CONTEXT_DIR = join(homedir(), ".pi", "agent", "context");
+const KB_BRIEFING_FILE = join(KB_CONTEXT_DIR, "kb-briefing.md");
+
+async function syncKBBriefing(): Promise<boolean> {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) return false;
+
+  try {
+    const res = await api<{ briefing: string; entryCount: number }>(
+      "GET",
+      "/kb/briefing",
+    );
+
+    if (!res.briefing || res.entryCount === 0) {
+      // No KB entries — remove stale briefing file if it exists
+      await rm(KB_BRIEFING_FILE, { force: true }).catch(() => {});
+      return false;
+    }
+
+    await mkdir(KB_CONTEXT_DIR, { recursive: true });
+    await writeFile(KB_BRIEFING_FILE, res.briefing);
+    return true;
+  } catch {
+    // Best effort — don't block session start
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // SSE stream for real-time skill/extension updates
 // ---------------------------------------------------------------------------
 
@@ -535,6 +567,9 @@ export default function (pi: ExtensionAPI) {
     syncSkillsFromHub().catch(() => {});
     syncExtensionsFromHub().catch(() => {});
 
+    // Sync KB briefing — write fleet knowledge to context file
+    syncKBBriefing().catch(() => {});
+
     // Subscribe to SSE stream for real-time updates
     startSkillStream();
   });
@@ -562,6 +597,10 @@ export default function (pi: ExtensionAPI) {
       clearInterval(widgetTimer);
       widgetTimer = null;
     }
+    if (flushTimer) {
+      clearInterval(flushTimer);
+      flushTimer = null;
+    }
 
     // Stop SkillHub SSE stream
     stopSkillStream();
@@ -583,12 +622,62 @@ export default function (pi: ExtensionAPI) {
   let usageCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
   let usageToolCalls: Record<string, number> = {};
 
+  // --- Periodic flush state ---
+  const FLUSH_TURN_INTERVAL = 5;
+  const FLUSH_TIME_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+  let lastFlushTurn = 0;
+  let lastFlushTime = 0;
+  let flushTimer: ReturnType<typeof setInterval> | null = null;
+  let flushInProgress = false;
+
+  function buildUsagePayload() {
+    const now = new Date().toISOString();
+    return {
+      sessionId: usageSessionId || `session-${Date.now()}`,
+      agent: agentName,
+      parentAgent: process.env.VERS_PARENT_AGENT || null,
+      model: usageModel,
+      tokens: { ...usageTokens },
+      cost: {
+        input: Math.round(usageCost.input * 1e6) / 1e6,
+        output: Math.round(usageCost.output * 1e6) / 1e6,
+        cacheRead: Math.round(usageCost.cacheRead * 1e6) / 1e6,
+        cacheWrite: Math.round(usageCost.cacheWrite * 1e6) / 1e6,
+        total: Math.round(usageCost.total * 1e6) / 1e6,
+      },
+      turns: usageTurns,
+      toolCalls: { ...usageToolCalls },
+      startedAt: usageStartedAt || now,
+      endedAt: now,
+    };
+  }
+
+  async function flushUsageData() {
+    if (!getBaseUrl()) return;
+    if (flushInProgress) return;
+    if (usageTurns === 0) return; // nothing to flush yet
+
+    const sid = usageSessionId || `session-${Date.now()}`;
+    flushInProgress = true;
+    try {
+      await api("PATCH", `/usage/sessions/${encodeURIComponent(sid)}`, buildUsagePayload());
+      lastFlushTurn = usageTurns;
+      lastFlushTime = Date.now();
+    } catch {
+      // best-effort — don't block the agent
+    } finally {
+      flushInProgress = false;
+    }
+  }
+
   function resetUsageAccumulators() {
     usageStartedAt = new Date().toISOString();
     usageTurns = 0;
     usageTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
     usageCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
     usageToolCalls = {};
+    lastFlushTurn = 0;
+    lastFlushTime = 0;
   }
 
   // Reset accumulators and capture session metadata on agent start
@@ -596,6 +685,13 @@ export default function (pi: ExtensionAPI) {
     resetUsageAccumulators();
     usageSessionId = ctx.sessionManager.getSessionId();
     usageModel = ctx.model?.id || "unknown";
+
+    // Start time-based periodic flush (every 3 minutes)
+    if (flushTimer) clearInterval(flushTimer);
+    flushTimer = setInterval(() => {
+      flushUsageData().catch(() => {});
+    }, FLUSH_TIME_INTERVAL_MS);
+    lastFlushTime = Date.now();
   });
 
   // Accumulate token usage from each turn's assistant message
@@ -619,6 +715,11 @@ export default function (pi: ExtensionAPI) {
         usageCost.cacheRead += u.cost.cacheRead || 0;
         usageCost.cacheWrite += u.cost.cacheWrite || 0;
         usageCost.total += u.cost.total || 0;
+      }
+
+      // Periodic flush: every 5 turns since last flush
+      if (usageTurns - lastFlushTurn >= FLUSH_TURN_INTERVAL) {
+        flushUsageData().catch(() => {}); // fire-and-forget
       }
 
       // Emit live token metrics to the feed for real-time speedometer
@@ -738,6 +839,7 @@ export default function (pi: ExtensionAPI) {
           metadata: {
             pid: process.pid,
             startedAt: new Date().toISOString(),
+            parentAgent: process.env.VERS_PARENT_AGENT || null,
           },
         });
       }
@@ -758,28 +860,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_end", async () => {
     if (!getBaseUrl()) return;
 
-    // POST session usage summary
-    const endedAt = new Date().toISOString();
+    // Stop the periodic flush timer — we're about to do the final write
+    if (flushTimer) {
+      clearInterval(flushTimer);
+      flushTimer = null;
+    }
+
+    // Final session upsert — uses PATCH so it merges with any partial flushes
     try {
-      const roundedCost = {
-        input: Math.round(usageCost.input * 1e6) / 1e6,
-        output: Math.round(usageCost.output * 1e6) / 1e6,
-        cacheRead: Math.round(usageCost.cacheRead * 1e6) / 1e6,
-        cacheWrite: Math.round(usageCost.cacheWrite * 1e6) / 1e6,
-        total: Math.round(usageCost.total * 1e6) / 1e6,
-      };
-      await api("POST", "/usage/sessions", {
-        sessionId: usageSessionId || `session-${Date.now()}`,
-        agent: agentName,
-        parentAgent: process.env.VERS_PARENT_AGENT || null,
-        model: usageModel,
-        tokens: { ...usageTokens },
-        cost: roundedCost,
-        turns: usageTurns,
-        toolCalls: { ...usageToolCalls },
-        startedAt: usageStartedAt || endedAt,
-        endedAt,
-      });
+      const sid = usageSessionId || `session-${Date.now()}`;
+      await api("PATCH", `/usage/sessions/${encodeURIComponent(sid)}`, buildUsagePayload());
     } catch {
       // best-effort — don't block agent shutdown
     }
@@ -1182,6 +1272,61 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ===========================================================================
+  // Log Tools
+  // ===========================================================================
+
+  pi.registerTool({
+    name: "log_append",
+    label: "Log: Append Entry",
+    description:
+      "Append a work log entry — timestamped, append-only. Like Carmack's .plan file.",
+    parameters: Type.Object({
+      text: Type.String({ description: "Log entry text" }),
+      agent: Type.Optional(Type.String({ description: "Who is writing this entry (agent name)" })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const entry = await api("POST", "/log", params);
+        return ok(JSON.stringify(entry, null, 2), { entry });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "log_query",
+    label: "Log: Query Entries",
+    description:
+      "Query the work log. Returns timestamped entries filtered by time range. Use raw=true for plain text output suitable for piping into models.",
+    parameters: Type.Object({
+      since: Type.Optional(Type.String({ description: "Start time (ISO timestamp)" })),
+      until: Type.Optional(Type.String({ description: "End time (ISO timestamp)" })),
+      last: Type.Optional(Type.String({ description: 'Duration shorthand, e.g. "24h", "7d", "30d"' })),
+      raw: Type.Optional(Type.Boolean({ description: "Return plain text instead of JSON (default: false)" })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const qs = new URLSearchParams();
+        if (params.since) qs.set("since", params.since);
+        if (params.until) qs.set("until", params.until);
+        if (params.last) qs.set("last", params.last);
+        const query = qs.toString();
+        const endpoint = params.raw ? "/log/raw" : "/log";
+        const result = await api("GET", `${endpoint}${query ? `?${query}` : ""}`);
+        if (params.raw && typeof result === "string") {
+          return ok(result || "(no entries)");
+        }
+        return ok(JSON.stringify(result, null, 2), { result });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  // ===========================================================================
   // Feed Tools
   // ===========================================================================
 
@@ -1404,6 +1549,131 @@ export default function (pi: ExtensionAPI) {
             ? `Synced from hub:\nSkills: ${synced.join(", ") || "up to date"}\nExtensions: ${extsSynced.join(", ") || "up to date"}${skippedNote}${extsSynced.length > 0 ? "\n\nNote: Extension changes require /reload to take effect." : ""}`
             : `Everything up to date.${skippedNote}`;
         return ok(text, { skills: synced, extensions: extsSynced, skippedFromPackages: Array.from(packageSkills) });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  // ===========================================================================
+  // KB (Knowledge Base) Tools
+  // ===========================================================================
+
+  pi.registerTool({
+    name: "kb_add",
+    label: "KB: Add Entry",
+    description:
+      "Add a knowledge base entry — lessons learned, conventions, SOPs, gotchas, decisions, or references. Use when the fleet learns something that should persist across sessions.",
+    parameters: Type.Object({
+      type: StringEnum(
+        ["lesson", "convention", "sop", "gotcha", "reference", "decision"] as const,
+        { description: "Entry type" },
+      ),
+      title: Type.String({ description: "Short descriptive title" }),
+      content: Type.String({ description: "Full content (markdown supported)" }),
+      source: Type.Optional(Type.String({ description: "Source, e.g. 'agent:backend-lt', 'human:noah'" })),
+      tags: Type.Optional(Type.Array(Type.String(), { description: "Tags for filtering" })),
+      priority: Type.Optional(
+        StringEnum(["low", "normal", "high", "critical"] as const, {
+          description: "Priority level (critical entries are always shown)",
+        }),
+      ),
+      decayDays: Type.Optional(
+        Type.Number({ description: "Days until entry expires (omit for permanent)" }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const entry = await api("POST", "/kb/entries", {
+          ...params,
+          source: params.source || `agent:${agentName}`,
+        });
+        return ok(JSON.stringify(entry, null, 2), { entry });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "kb_search",
+    label: "KB: Search",
+    description:
+      "Search the fleet knowledge base. Find lessons, conventions, SOPs, and gotchas. Use before starting unfamiliar work to check what the fleet already knows.",
+    parameters: Type.Object({
+      search: Type.Optional(Type.String({ description: "Full-text search query" })),
+      type: Type.Optional(
+        StringEnum(
+          ["lesson", "convention", "sop", "gotcha", "reference", "decision"] as const,
+          { description: "Filter by entry type" },
+        ),
+      ),
+      tag: Type.Optional(Type.String({ description: "Filter by tag" })),
+      priority: Type.Optional(
+        StringEnum(["low", "normal", "high", "critical"] as const, {
+          description: "Filter by priority",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const qs = new URLSearchParams();
+        if (params.search) qs.set("search", params.search);
+        if (params.type) qs.set("type", params.type);
+        if (params.tag) qs.set("tag", params.tag);
+        if (params.priority) qs.set("priority", params.priority);
+        const query = qs.toString();
+        const result = await api("GET", `/kb/entries${query ? `?${query}` : ""}`);
+        return ok(JSON.stringify(result, null, 2), { result });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "kb_briefing",
+    label: "KB: Get Briefing",
+    description:
+      "Get the full KB briefing document — all non-expired entries formatted as markdown. Also refreshes the local context file.",
+    parameters: Type.Object({
+      tags: Type.Optional(Type.Array(Type.String(), { description: "Filter by tags" })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const qs = new URLSearchParams();
+        if (params.tags?.length) qs.set("tags", params.tags.join(","));
+        const query = qs.toString();
+        const result = await api<{ briefing: string; entryCount: number }>(
+          "GET",
+          `/kb/briefing${query ? `?${query}` : ""}`,
+        );
+        // Also refresh local context file
+        if (result.briefing) {
+          await mkdir(KB_CONTEXT_DIR, { recursive: true }).catch(() => {});
+          await writeFile(KB_BRIEFING_FILE, result.briefing).catch(() => {});
+        }
+        return ok(result.briefing || "(no KB entries)", { entryCount: result.entryCount });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "kb_stats",
+    label: "KB: Stats",
+    description:
+      "Get KB statistics — total entries, entries by type/priority, top tags.",
+    parameters: Type.Object({}),
+    async execute() {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const stats = await api("GET", "/kb/stats");
+        return ok(JSON.stringify(stats, null, 2), { stats });
       } catch (e: any) {
         return err(e.message);
       }

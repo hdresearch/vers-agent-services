@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { CommitStore, ValidationError, ConflictError, type CommitFilters } from "./store.js";
+import { emit } from "../events/emit.js";
 
 export const commitStore = new CommitStore();
 
@@ -10,6 +11,7 @@ commitRoutes.post("/", async (c) => {
   try {
     const body = await c.req.json();
     const entry = commitStore.record(body);
+    emit('commits', 'commits.commit.registered', { commitId: entry.commitId, vmId: entry.vmId, label: entry.label, agent: entry.agent }, entry.agent);
     return c.json(entry, 201);
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);

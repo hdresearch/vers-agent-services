@@ -1,14 +1,55 @@
-// Agent Services Dashboard
+// Agent Services Dashboard — Reliability Edition
+// Fixes: error boundaries, fetch timeouts, lazy tab loading,
+// graceful SSE degradation, loading states, never-blank guarantee
 
 const API = '/ui/api';
 
-// ─── Helpers ───
+// ─── ETag cache for conditional requests ───
+const etagCache = new Map(); // path → { etag, data }
 
-async function api(path) {
-  const res = await fetch(`${API}${path}`);
-  if (!res.ok) throw new Error(`API ${path}: ${res.status}`);
-  return res.json();
+// ─── Fetch with timeout + error boundary + conditional requests ───
+
+async function api(path, opts = {}) {
+  const timeout = opts.timeout || 8000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  const headers = {};
+
+  // Send If-None-Match for conditional requests (polling optimization)
+  const cached = etagCache.get(path);
+  if (cached?.etag) {
+    headers['If-None-Match'] = cached.etag;
+  }
+
+  try {
+    const res = await fetch(`${API}${path}`, { signal: controller.signal, headers });
+    clearTimeout(timer);
+    if (res.status === 401) {
+      window.location.href = '/ui/login';
+      throw new Error('Session expired');
+    }
+    // 304 Not Modified — return cached data
+    if (res.status === 304 && cached?.data) {
+      return cached.data;
+    }
+    if (!res.ok) throw new Error(`API ${path}: ${res.status}`);
+    const data = await res.json();
+
+    // Cache ETag for next request
+    const etag = res.headers.get('etag');
+    if (etag) {
+      etagCache.set(path, { etag, data });
+    }
+
+    return data;
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') throw new Error(`API ${path}: timeout after ${timeout}ms`);
+    throw e;
+  }
 }
+
+// ─── Helpers ───
 
 function timeAgo(iso) {
   const ms = Date.now() - new Date(iso).getTime();
@@ -24,20 +65,46 @@ function esc(s) {
   return d.innerHTML;
 }
 
-// ─── Board ───
+// ─── Loading / Error UI helpers ───
 
-const STATUS_ORDER = ['open', 'in_progress', 'blocked', 'done'];
+function showLoading(el) {
+  if (!el) return;
+  el.innerHTML = '<div class="panel-loading"><span class="loading-spinner">⟳</span> Loading…</div>';
+}
 
-async function loadBoard() {
-  try {
-    const data = await api('/board/tasks');
-    renderBoard(data.tasks || []);
-  } catch (e) {
-    document.getElementById('board').innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+function showError(el, message, retryFn) {
+  if (!el) return;
+  const retryId = 'retry-' + Math.random().toString(36).slice(2, 8);
+  el.innerHTML = `<div class="panel-error">
+    <span class="error-icon">⚠</span> ${esc(message)}
+    ${retryFn ? `<button class="error-retry" id="${retryId}">Retry</button>` : ''}
+  </div>`;
+  if (retryFn) {
+    // Defer to next tick so the element exists in DOM
+    setTimeout(() => {
+      const btn = document.getElementById(retryId);
+      if (btn) btn.onclick = retryFn;
+    }, 0);
   }
 }
 
+// ─── Board ───
+
+const STATUS_ORDER = ['open', 'in_progress', 'blocked', 'done'];
 let lastBoardHash = '';
+
+async function loadBoard() {
+  const board = document.getElementById('board');
+  try {
+    const data = await api('/board/tasks?compact=true');
+    renderBoard(data.tasks || []);
+  } catch (e) {
+    // Only show error if board is currently empty or showing error
+    if (!board.querySelector('.task-card')) {
+      showError(board, e.message, loadBoard);
+    }
+  }
+}
 
 function renderBoard(tasks) {
   const board = document.getElementById('board');
@@ -47,17 +114,17 @@ function renderBoard(tasks) {
     (grouped[t.status] || grouped['open']).push(t);
   }
 
-  // Update stats (always safe — these are just text nodes)
-  document.getElementById('stat-total').textContent = tasks.length;
-  document.getElementById('stat-open').textContent = grouped['open'].length;
-  document.getElementById('stat-blocked').textContent = grouped['blocked'].length;
+  // Update stats
+  setText('stat-total', tasks.length);
+  setText('stat-open', grouped['open'].length);
+  setText('stat-blocked', grouped['blocked'].length);
 
-  // Compute a hash to detect actual data changes — skip DOM rebuild if unchanged
+  // Hash check — skip DOM rebuild if unchanged
   const boardHash = JSON.stringify(tasks.map(t => t.id + ':' + t.status + ':' + (t.score || 0) + ':' + (t.notes || []).length));
   if (boardHash === lastBoardHash) return;
   lastBoardHash = boardHash;
 
-  // Preserve expanded state of task cards across re-render
+  // Preserve expanded state
   const expandedIds = new Set();
   board.querySelectorAll('.task-card.expanded').forEach(el => {
     if (el.dataset.id) expandedIds.add(el.dataset.id);
@@ -128,9 +195,9 @@ function renderEvent(evt) {
 }
 
 async function loadFeed() {
+  const feed = feedEl();
   try {
-    const events = await api('/feed/events?limit=100');
-    const feed = feedEl();
+    const events = await api('/feed/events?limit=50');
     feed.innerHTML = '';
     const list = Array.isArray(events) ? events : (events.events || []);
     list.reverse();
@@ -140,69 +207,136 @@ async function loadFeed() {
       eventCount++;
     }
     feed.scrollTop = 0;
-    document.getElementById('stat-events').textContent = eventCount;
+    setText('stat-events', eventCount);
   } catch (e) {
-    feedEl().innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+    if (!feed.querySelector('.event')) {
+      showError(feed, e.message, loadFeed);
+    }
   }
 }
 
+// ─── SSE — Non-blocking with graceful degradation ───
+
+let sseSource = null;
+let sseRetryCount = 0;
+let sseFallbackTimer = null;
+
 function startSSE() {
-  const evtSource = new EventSource(`${API}/feed/stream`);
+  if (sseSource) {
+    try { sseSource.close(); } catch {}
+  }
+
+  // Clear any fallback polling
+  if (sseFallbackTimer) {
+    clearInterval(sseFallbackTimer);
+    sseFallbackTimer = null;
+  }
+
   const dot = document.getElementById('conn-dot');
   const label = document.getElementById('conn-label');
 
-  evtSource.onopen = () => {
-    dot.classList.add('connected');
-    label.textContent = 'connected';
-  };
+  try {
+    const evtSource = new EventSource(`${API}/feed/stream`);
+    sseSource = evtSource;
 
-  evtSource.onmessage = (e) => {
-    try {
-      const evt = JSON.parse(e.data);
-      // Forward to speedometer for live tok/s gauge
-      if (typeof window._speedometerOnFeedEvent === 'function') {
-        window._speedometerOnFeedEvent(evt);
+    // Timeout: if SSE doesn't connect within 10s, fall back to polling
+    const sseTimeout = setTimeout(() => {
+      if (evtSource.readyState !== EventSource.OPEN) {
+        evtSource.close();
+        startFallbackPolling();
       }
-      const feed = feedEl();
-      feed.prepend(renderEvent(evt));
-      eventCount++;
-      document.getElementById('stat-events').textContent = eventCount;
-      // Auto-scroll if near top
-      if (feed.scrollTop < 100) {
-        feed.scrollTop = 0;
-      }
-    } catch {}
-  };
+    }, 10000);
 
-  evtSource.onerror = () => {
-    dot.classList.remove('connected');
-    label.textContent = 'reconnecting';
-  };
+    evtSource.onopen = () => {
+      clearTimeout(sseTimeout);
+      dot.classList.add('connected');
+      label.textContent = 'connected';
+      sseRetryCount = 0;
+    };
+
+    evtSource.onmessage = (e) => {
+      try {
+        const evt = JSON.parse(e.data);
+        if (typeof window._speedometerOnFeedEvent === 'function') {
+          window._speedometerOnFeedEvent(evt);
+        }
+        if (typeof window._chatOnFeedEvent === 'function') {
+          window._chatOnFeedEvent(evt);
+        }
+        const feed = feedEl();
+        if (feed) {
+          feed.prepend(renderEvent(evt));
+          eventCount++;
+          setText('stat-events', eventCount);
+          if (feed.scrollTop < 100) feed.scrollTop = 0;
+        }
+      } catch {}
+    };
+
+    evtSource.onerror = () => {
+      clearTimeout(sseTimeout);
+      dot.classList.remove('connected');
+      sseRetryCount++;
+      label.textContent = sseRetryCount > 3 ? 'polling' : 'reconnecting';
+      if (sseRetryCount > 5) {
+        evtSource.close();
+        startFallbackPolling();
+      }
+    };
+  } catch (e) {
+    // SSE constructor itself can throw in some browsers
+    startFallbackPolling();
+  }
+}
+
+function startFallbackPolling() {
+  const dot = document.getElementById('conn-dot');
+  const label = document.getElementById('conn-label');
+  dot.classList.remove('connected');
+  dot.classList.add('polling');
+  label.textContent = 'polling';
+
+  if (sseFallbackTimer) return;
+  sseFallbackTimer = setInterval(() => {
+    if (activeView === 'dashboard') loadFeed();
+  }, 15000);
+
+  // Retry SSE every 60s
+  setTimeout(() => {
+    if (sseFallbackTimer) {
+      clearInterval(sseFallbackTimer);
+      sseFallbackTimer = null;
+      sseRetryCount = 0;
+      startSSE();
+    }
+  }, 60000);
 }
 
 // ─── Registry ───
 
+let lastRegistryHash = '';
+
 async function loadRegistry() {
+  const reg = document.getElementById('registry');
   try {
     const data = await api('/registry/vms');
     renderRegistry(data.vms || []);
   } catch (e) {
-    document.getElementById('registry').innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+    if (!reg.querySelector('.vm-card')) {
+      showError(reg, e.message, loadRegistry);
+    }
   }
 }
 
-let lastRegistryHash = '';
-
 function renderRegistry(vms) {
   const reg = document.getElementById('registry');
-  document.getElementById('stat-vms').textContent = vms.length || '0';
+  setText('stat-vms', vms.length || '0');
 
   if (!vms.length) {
     reg.innerHTML = '<div class="empty">No VMs registered</div>';
     return;
   }
 
-  // Skip DOM rebuild if data unchanged
   const regHash = JSON.stringify(vms.map(v => v.id + ':' + (v.status || '') + ':' + (v.lastSeen || v.registeredAt)));
   if (regHash === lastRegistryHash) return;
   lastRegistryHash = regHash;
@@ -210,7 +344,7 @@ function renderRegistry(vms) {
   let html = '';
   for (const vm of vms) {
     const staleMs = Date.now() - new Date(vm.lastSeen || vm.registeredAt).getTime();
-    const isStale = staleMs > 120000; // 2 min
+    const isStale = staleMs > 120000;
     const statusCls = (vm.status || 'idle').toLowerCase();
     html += `<div class="vm-card ${isStale ? 'stale' : ''}">
       <div class="vm-name">${esc(vm.name || vm.id)}</div>
@@ -226,27 +360,29 @@ function renderRegistry(vms) {
 
 // ─── Reports ───
 
+let lastReportsHash = '';
+
 async function loadReports() {
+  const el = document.getElementById('reports');
   try {
     const data = await api('/reports');
     renderReports(data.reports || []);
   } catch (e) {
-    document.getElementById('reports').innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+    if (!el.querySelector('.report-card')) {
+      showError(el, e.message, loadReports);
+    }
   }
 }
 
-let lastReportsHash = '';
-
 function renderReports(reports) {
   const el = document.getElementById('reports');
-  document.getElementById('stat-reports').textContent = reports.length || '0';
+  setText('stat-reports', reports.length || '0');
 
   if (!reports.length) {
     el.innerHTML = '<div class="empty">No reports</div>';
     return;
   }
 
-  // Skip DOM rebuild if data unchanged
   const repHash = JSON.stringify(reports.map(r => r.id + ':' + r.title));
   if (repHash === lastReportsHash) return;
   lastReportsHash = repHash;
@@ -280,18 +416,16 @@ async function loadLog() {
     const data = await api(path);
     let entries = data.entries || [];
 
-    // Client-side agent filter (API doesn't support ?agent= yet)
     if (agentFilter) {
       const q = agentFilter.toLowerCase();
       entries = entries.filter(e => (e.agent || '').toLowerCase().includes(q));
     }
 
-    // Reverse for newest-first display
     entries.reverse();
 
     if (!entries.length) {
       container.innerHTML = '<div class="empty">No log entries for this time range</div>';
-      document.getElementById('log-count').textContent = '0';
+      setText('log-count', '0');
       return;
     }
 
@@ -305,9 +439,9 @@ async function loadLog() {
       </div>`;
     }
     container.innerHTML = html;
-    document.getElementById('log-count').textContent = entries.length;
+    setText('log-count', entries.length);
   } catch (e) {
-    container.innerHTML = `<div class="empty">Failed to load log: ${esc(e.message)}</div>`;
+    showError(container, e.message, loadLog);
   }
 }
 
@@ -340,13 +474,11 @@ async function loadJournal() {
     if (tagFilter) path += `&tag=${encodeURIComponent(tagFilter)}`;
     const data = await api(path);
     let entries = data.entries || [];
-
-    // Reverse for newest-first display
     entries.reverse();
 
     if (!entries.length) {
       container.innerHTML = '<div class="empty">No journal entries for this time range</div>';
-      document.getElementById('journal-count').textContent = '0';
+      setText('journal-count', '0');
       return;
     }
 
@@ -365,9 +497,9 @@ async function loadJournal() {
       </div>`;
     }
     container.innerHTML = html;
-    document.getElementById('journal-count').textContent = entries.length;
+    setText('journal-count', entries.length);
   } catch (e) {
-    container.innerHTML = `<div class="empty">Failed to load journal: ${esc(e.message)}</div>`;
+    showError(container, e.message, loadJournal);
   }
 }
 
@@ -393,7 +525,7 @@ async function loadReview() {
   try {
     const data = await api('/board/review');
     const tasks = data.tasks || [];
-    document.getElementById('review-count').textContent = tasks.length;
+    setText('review-count', tasks.length);
 
     if (!tasks.length) {
       container.innerHTML = '<div class="empty">No tasks awaiting review</div>';
@@ -402,7 +534,6 @@ async function loadReview() {
 
     let html = '';
     for (const t of tasks) {
-      // Find the latest note (review summary)
       const latestNote = t.notes && t.notes.length > 0 ? t.notes[t.notes.length - 1] : null;
       const artifacts = t.artifacts || [];
 
@@ -443,13 +574,13 @@ async function loadReview() {
     }
     container.innerHTML = html;
   } catch (e) {
-    container.innerHTML = `<div class="empty">Failed to load review queue: ${esc(e.message)}</div>`;
+    showError(container, e.message, loadReview);
   }
 }
 
 async function approveTask(taskId) {
   const comment = prompt('Approval comment (optional):');
-  if (comment === null) return; // cancelled
+  if (comment === null) return;
   try {
     await fetch(`${API}/board/tasks/${taskId}/approve`, {
       method: 'POST',
@@ -465,7 +596,7 @@ async function approveTask(taskId) {
 
 async function rejectTask(taskId) {
   const reason = prompt('Rejection reason (required):');
-  if (!reason) return; // cancelled or empty
+  if (!reason) return;
   try {
     await fetch(`${API}/board/tasks/${taskId}/reject`, {
       method: 'POST',
@@ -524,7 +655,7 @@ function renderSkills() {
   if (statusFilter === 'enabled') skills = skills.filter(s => s.enabled);
   if (statusFilter === 'disabled') skills = skills.filter(s => !s.enabled);
 
-  document.getElementById('skills-count').textContent = skills.length;
+  setText('skills-count', skills.length);
 
   if (!skills.length) {
     container.innerHTML = '<div class="empty">No skills found</div>';
@@ -565,7 +696,7 @@ async function loadExtensions() {
 
 function renderExtensions() {
   const container = document.getElementById('extensions-list');
-  document.getElementById('extensions-count').textContent = allExtensions.length;
+  setText('extensions-count', allExtensions.length);
 
   if (!allExtensions.length) {
     container.innerHTML = '<div class="empty">No extensions registered</div>';
@@ -599,7 +730,7 @@ async function loadAgents() {
 
 function renderAgents(agents) {
   const container = document.getElementById('agents-list');
-  document.getElementById('agents-count').textContent = agents.length;
+  setText('agents-count', agents.length);
 
   if (!agents.length) {
     container.innerHTML = '<div class="empty">No agents have synced yet</div>';
@@ -643,9 +774,200 @@ function stopSkillsRefresh() {
   }
 }
 
-// ─── Tabs ───
+// ─── Knowledge Base ───
+
+let kbRefreshTimer = null;
+let allKbEntries = [];
+
+async function loadKbBriefing() {
+  const el = document.getElementById('kb-briefing');
+  try {
+    const data = await api('/kb/briefing/session');
+    const md = data.briefing || '';
+    el.innerHTML = renderMarkdown(md);
+    // Update stats from briefing response
+    if (data.stats) {
+      setText('kb-stat-total', data.stats.total || 0);
+      setText('kb-stat-active', data.stats.active || 0);
+      setText('kb-stat-expired', data.stats.expired || 0);
+      const byType = data.stats.byType || {};
+      setText('kb-stat-warning', byType.warning || 0);
+      setText('kb-stat-convention', byType.convention || 0);
+      setText('kb-stat-lesson', byType.lesson || 0);
+      setText('kb-stat-context', byType.context || 0);
+    }
+  } catch (e) {
+    showError(el, e.message, loadKbBriefing);
+  }
+}
+
+function renderMarkdown(md) {
+  // Minimal markdown → HTML: headers, lists, bold, code, paragraphs
+  return md
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/s, (match) => '<ul>' + match + '</ul>')
+    .replace(/(?:^|\n)(<li>)/g, '$1')
+    // Group consecutive <li> into <ul>
+    .replace(/(<\/li>\n?)(?!<li>)/g, '$1</ul>')
+    .replace(/(?<!<\/ul>)(<li>)/g, '<ul>$1')
+    // Fix double wrapping
+    .replace(/<ul><ul>/g, '<ul>')
+    .replace(/<\/ul><\/ul>/g, '</ul>')
+    .replace(/\n{2,}/g, '<br><br>')
+    .replace(/\n/g, '\n');
+}
+
+async function loadKbEntries() {
+  const container = document.getElementById('kb-entries-list');
+  try {
+    const typeFilter = document.getElementById('kb-type-filter').value;
+    const search = document.getElementById('kb-search').value.trim();
+    let path = '/kb/entries';
+    const params = [];
+    if (typeFilter) params.push(`type=${typeFilter}`);
+    if (search) params.push(`search=${encodeURIComponent(search)}`);
+    if (params.length) path += '?' + params.join('&');
+
+    const data = await api(path);
+    allKbEntries = data.entries || [];
+    renderKbEntries();
+  } catch (e) {
+    showError(container, e.message, loadKbEntries);
+  }
+}
+
+function renderKbEntries() {
+  const container = document.getElementById('kb-entries-list');
+  const entries = allKbEntries;
+
+  if (!entries.length) {
+    container.innerHTML = '<div class="empty">No entries found</div>';
+    return;
+  }
+
+  const now = Date.now();
+  let html = '';
+  for (const e of entries) {
+    const reinforced = new Date(e.lastReinforced || e.createdAt).getTime();
+    const expiresAt = reinforced + (e.decayDays || 60) * 86400000;
+    const daysRemaining = Math.ceil((expiresAt - now) / 86400000);
+    const isExpired = daysRemaining <= 0;
+
+    const expiredCls = isExpired ? ' kb-expired' : '';
+    let decayCls = '';
+    let decayLabel = '';
+    if (isExpired) {
+      decayCls = 'kb-decay-expired';
+      decayLabel = 'expired';
+    } else if (daysRemaining <= 7) {
+      decayCls = 'kb-decay-low';
+      decayLabel = `${daysRemaining}d left`;
+    } else {
+      decayLabel = `${daysRemaining}d left`;
+    }
+
+    const typeIcon = { warning: '⚠️', convention: '📐', lesson: '💡', context: '📋' }[e.type] || '';
+    const tags = (e.tags || []).map(t => `<span class="kb-entry-tag">${esc(t)}</span>`).join('');
+
+    html += `<div class="kb-entry kb-type-${esc(e.type)}${expiredCls}">
+      <div class="kb-entry-header">
+        <span class="kb-entry-type t-${esc(e.type)}">${typeIcon} ${esc(e.type)}</span>
+        <span class="kb-entry-decay ${decayCls}">${decayLabel}</span>
+      </div>
+      <div class="kb-entry-content">${esc(e.content)}</div>
+      <div class="kb-entry-meta">
+        ${e.source ? `<span class="kb-entry-source">${esc(e.source)}</span>` : ''}
+        ${tags}
+        <button class="kb-reinforce-btn" onclick="reinforceKbEntry('${e.id}')">🔄 Reinforce</button>
+      </div>
+    </div>`;
+  }
+  container.innerHTML = html;
+}
+
+async function reinforceKbEntry(id) {
+  try {
+    await fetch(`${API}/kb/entries/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reinforce: true }),
+    });
+    loadKbEntries();
+    loadKbBriefing();
+  } catch (e) {
+    console.error('Reinforce failed:', e);
+  }
+}
+
+async function addKbEntry() {
+  const btn = document.getElementById('kb-submit-btn');
+  const content = document.getElementById('kb-add-content').value.trim();
+  if (!content) return;
+
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+
+  try {
+    const tagsRaw = document.getElementById('kb-add-tags').value.trim();
+    const tags = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
+
+    await fetch(`${API}/kb/entries`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: document.getElementById('kb-add-type').value,
+        content,
+        source: document.getElementById('kb-add-source').value.trim() || 'dashboard',
+        tags,
+        decayDays: parseInt(document.getElementById('kb-add-decay').value) || 60,
+      }),
+    });
+
+    // Clear form
+    document.getElementById('kb-add-content').value = '';
+    document.getElementById('kb-add-source').value = '';
+    document.getElementById('kb-add-tags').value = '';
+    document.getElementById('kb-add-form').style.display = 'none';
+
+    loadKbEntries();
+    loadKbBriefing();
+  } catch (e) {
+    alert('Failed to add entry: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save Entry';
+  }
+}
+
+function startKbRefresh() {
+  if (kbRefreshTimer) return;
+  loadKbBriefing();
+  loadKbEntries();
+  kbRefreshTimer = setInterval(() => {
+    loadKbBriefing();
+    loadKbEntries();
+  }, 30000);
+}
+
+function stopKbRefresh() {
+  if (kbRefreshTimer) {
+    clearInterval(kbRefreshTimer);
+    kbRefreshTimer = null;
+  }
+}
+
+// ─── Tabs — Lazy loading ───
+
+let activeView = 'dashboard';
+const tabLoaded = new Set(); // track which tabs have loaded their initial data
 
 function switchView(viewName) {
+  const prevView = activeView;
   activeView = viewName;
 
   // Update tab buttons
@@ -656,8 +978,8 @@ function switchView(viewName) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(`view-${viewName}`)?.classList.add('active');
 
-  // Refresh board data when switching back to it
-  if (viewName === 'board') {
+  // Dashboard — refresh on switch-back (conditional requests make this cheap if unchanged)
+  if (viewName === 'dashboard') {
     loadBoard();
     loadRegistry();
     loadReports();
@@ -665,9 +987,9 @@ function switchView(viewName) {
 
   // Start/stop polling based on view
   if (viewName === 'review') {
-    startReviewRefresh();
+    if (typeof window._rqInit === 'function') window._rqInit();
   } else {
-    stopReviewRefresh();
+    if (typeof window._rqDestroy === 'function') window._rqDestroy();
   }
   if (viewName === 'log') {
     startLogRefresh();
@@ -684,11 +1006,88 @@ function switchView(viewName) {
   } else {
     stopSkillsRefresh();
   }
+  if (viewName === 'knowledge') {
+    startKbRefresh();
+  } else {
+    stopKbRefresh();
+  }
+
+  // Chat: initialize on first visit, cleanup on leave
+  if (viewName === 'chat') {
+    if (typeof window._chatInit === 'function') window._chatInit();
+  } else {
+    if (typeof window._chatDestroy === 'function') window._chatDestroy();
+  }
+
+  // Metrics: pause/resume
   if (viewName === 'metrics') {
     activateMetricsSubview();
-  } else {
+  } else if (prevView === 'metrics') {
     if (typeof window.metricsDestroy === 'function') window.metricsDestroy();
     if (typeof window.analyticsDestroy === 'function') window.analyticsDestroy();
+  }
+
+  // Fleet: init/destroy
+  if (viewName === 'fleet') {
+    if (typeof window._fleetInit === 'function') window._fleetInit();
+  } else if (prevView === 'fleet') {
+    if (typeof window._fleetDestroy === 'function') window._fleetDestroy();
+  }
+
+  // Couch: init/destroy
+  if (viewName === 'couch') {
+    if (typeof window._couchInit === 'function') window._couchInit();
+  } else if (prevView === 'couch') {
+    if (typeof window._couchDestroy === 'function') window._couchDestroy();
+  }
+
+  // Agents: init/destroy
+  if (viewName === 'agents') {
+    if (typeof window._agentsInit === 'function') window._agentsInit();
+  } else if (prevView === 'agents') {
+    if (typeof window._agentsDestroy === 'function') window._agentsDestroy();
+  }
+
+  // Comms: init/destroy
+  if (viewName === 'comms') {
+    if (typeof window._commsInit === 'function') window._commsInit();
+  } else if (prevView === 'comms') {
+    if (typeof window._commsDestroy === 'function') window._commsDestroy();
+  }
+
+  // Board Full: init/destroy
+  if (viewName === 'board') {
+    if (typeof window._boardFullInit === 'function') window._boardFullInit();
+  } else if (prevView === 'board') {
+    if (typeof window._boardFullDestroy === 'function') window._boardFullDestroy();
+  }
+
+  // Events: init/destroy
+  if (viewName === 'events') {
+    if (typeof window._eventsInit === 'function') window._eventsInit();
+  } else if (prevView === 'events') {
+    if (typeof window._eventsDestroy === 'function') window._eventsDestroy();
+  }
+
+  // Daemon: init/destroy
+  if (viewName === 'daemon') {
+    if (typeof window._daemonInit === 'function') window._daemonInit();
+  } else if (prevView === 'daemon') {
+    if (typeof window._daemonDestroy === 'function') window._daemonDestroy();
+  }
+
+  // Config: init/destroy
+  if (viewName === 'config') {
+    if (typeof window._configInit === 'function') window._configInit();
+  } else if (prevView === 'config') {
+    if (typeof window._configDestroy === 'function') window._configDestroy();
+  }
+
+  // Write: init/destroy
+  if (viewName === 'write') {
+    if (typeof window._writeInit === 'function') window._writeInit();
+  } else if (prevView === 'write') {
+    if (typeof window._writeDestroy === 'function') window._writeDestroy();
   }
 }
 
@@ -701,15 +1100,11 @@ function activateMetricsSubview() {
 }
 
 function switchMetricsSubview(name) {
-  // Update sub-tab buttons
   document.querySelectorAll('.metrics-subtab').forEach(t => t.classList.remove('active'));
   document.querySelector(`.metrics-subtab[data-subview="${name}"]`)?.classList.add('active');
-
-  // Update sub-views
   document.querySelectorAll('.metrics-subview').forEach(v => v.classList.remove('active'));
   document.getElementById(`metrics-subview-${name}`)?.classList.add('active');
 
-  // Init/destroy the correct view
   if (name === 'tree') {
     if (typeof window.analyticsDestroy === 'function') window.analyticsDestroy();
     if (typeof window.metricsInit === 'function') window.metricsInit();
@@ -719,40 +1114,33 @@ function switchMetricsSubview(name) {
   }
 }
 
-// ─── Active View Tracking ───
+// ─── Utility ───
 
-let activeView = 'board';
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
 
-// ─── Init ───
+// ─── Init — Never blocks, never blank ───
 
 async function init() {
-  await Promise.all([loadBoard(), loadFeed(), loadRegistry(), loadReports()]);
-  startSSE();
+  // Show loading states immediately
+  showLoading(document.getElementById('board'));
+  showLoading(document.getElementById('feed'));
+  showLoading(document.getElementById('reports'));
+  showLoading(document.getElementById('registry'));
 
-  // Poll board, registry, reports every 10s — but only refresh visible views
-  setInterval(() => {
-    if (activeView === 'board') loadBoard();
-  }, 10000);
-  setInterval(() => {
-    if (activeView === 'board') loadRegistry();
-  }, 10000);
-  setInterval(() => {
-    if (activeView === 'board') loadReports();
-  }, 10000);
-
-  // Tab switching
+  // Wire up tab switching immediately (before data loads)
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => switchView(tab.dataset.view));
   });
 
-  // Log filter controls
+  // Wire up all filter controls immediately
   document.getElementById('log-range').addEventListener('change', loadLog);
   document.getElementById('log-agent-filter').addEventListener('input', () => {
     clearTimeout(window._logFilterTimeout);
     window._logFilterTimeout = setTimeout(loadLog, 300);
   });
-
-  // Journal filter controls
   document.getElementById('journal-range').addEventListener('change', loadJournal);
   document.getElementById('journal-author-filter').addEventListener('input', () => {
     clearTimeout(window._journalAuthorTimeout);
@@ -762,18 +1150,70 @@ async function init() {
     clearTimeout(window._journalTagTimeout);
     window._journalTagTimeout = setTimeout(loadJournal, 300);
   });
-
-  // Metrics sub-tab switching
   document.querySelectorAll('.metrics-subtab').forEach(tab => {
     tab.addEventListener('click', () => switchMetricsSubview(tab.dataset.subview));
   });
-
-  // Skills filter controls
   document.getElementById('skills-filter').addEventListener('input', () => {
     clearTimeout(window._skillsFilterTimeout);
     window._skillsFilterTimeout = setTimeout(renderSkills, 300);
   });
   document.getElementById('skills-status-filter').addEventListener('change', renderSkills);
+
+  // Knowledge Base controls
+  document.getElementById('kb-type-filter').addEventListener('change', loadKbEntries);
+  document.getElementById('kb-search').addEventListener('input', () => {
+    clearTimeout(window._kbSearchTimeout);
+    window._kbSearchTimeout = setTimeout(loadKbEntries, 300);
+  });
+  document.getElementById('kb-add-toggle').addEventListener('click', () => {
+    const form = document.getElementById('kb-add-form');
+    form.style.display = form.style.display === 'none' ? 'flex' : 'none';
+  });
+  document.getElementById('kb-submit-btn').addEventListener('click', addKbEntry);
+
+  // Load all dashboard panels independently — each succeeds or fails on its own
+  // Use allSettled so one failure doesn't block others
+  await Promise.allSettled([
+    loadBoard(),
+    loadFeed(),
+    loadRegistry(),
+    loadReports(),
+  ]);
+
+  // Hash routing — support deep links like #review, #board, etc.
+  const hash = window.location.hash.replace('#', '').split('?')[0];
+  if (hash && document.getElementById(`view-${hash}`)) {
+    switchView(hash);
+  }
+  window.addEventListener('hashchange', () => {
+    const h = window.location.hash.replace('#', '').split('?')[0];
+    if (h && document.getElementById(`view-${h}`)) switchView(h);
+  });
+
+  // SSE starts non-blocking AFTER initial data is painted
+  startSSE();
+
+  // Poll only the active view — 30s interval (SSE handles real-time feed updates)
+  setInterval(() => {
+    if (activeView === 'dashboard') {
+      loadBoard();
+      loadRegistry();
+      loadReports();
+    }
+  }, 30000);
 }
 
+// ─── Expose functions used by inline onclick handlers ───
+// app.js is loaded as type="module", so all top-level declarations are
+// module-scoped and invisible to HTML onclick attributes. Attach them
+// to window so dynamically-generated onclick="" handlers can call them.
+window.bumpTask = bumpTask;
+window.approveTask = approveTask;
+window.rejectTask = rejectTask;
+window.reinforceKbEntry = reinforceKbEntry;
+window.addKbEntry = addKbEntry;
+
 init();
+
+
+
