@@ -60,7 +60,7 @@
       const data = await commsApi('/identity');
       _identity = data;
       const trustedData = await commsApi('/trusted');
-      const trusted = trustedData.trusted || trustedData.agents || [];
+      const trusted = trustedData.endpoints || trustedData.trusted || trustedData.agents || [];
       const trustedCount = Array.isArray(trusted) ? trusted.length : 0;
       bar.innerHTML = `
         <span class="comms-id-label">Identity</span>
@@ -92,13 +92,14 @@
       let html = '';
       for (const ch of channels) {
         const id = ch.id || ch.name;
+        const channelName = ch.name || (ch.remoteFleet && ch.remoteFleet.name) || id;
         const active = _activeChannel === id ? ' active' : '';
         const unread = ch.unread ? `<span class="comms-ch-unread">${ch.unread}</span>` : '';
         const lastMsg = ch.lastMessage ? `<div class="comms-ch-preview">${esc(ch.lastMessage)}</div>` : '';
-        const time = ch.lastActivity ? `<span class="comms-ch-time">${timeAgo(ch.lastActivity)}</span>` : '';
+        const time = (ch.lastActivity || ch.lastMessageAt) ? `<span class="comms-ch-time">${timeAgo(ch.lastActivity || ch.lastMessageAt)}</span>` : '';
         html += `<div class="comms-channel${active}" data-channel="${esc(id)}" onclick="window._commsSelectChannel('${esc(id)}')">
           <div class="comms-ch-header">
-            <span class="comms-ch-name"># ${esc(ch.name || id)}</span>
+            <span class="comms-ch-name"># ${esc(channelName)}</span>
             ${time}
           </div>
           ${lastMsg}
@@ -165,7 +166,7 @@
     if (!container) return;
     try {
       const data = await commsApi('/quarantine');
-      const items = data.quarantined || data.agents || data || [];
+      const items = data.quarantine || data.quarantined || data.agents || [];
       if (!Array.isArray(items) || !items.length) {
         container.innerHTML = '<div class="comms-empty">No quarantined agents</div>';
         return;
@@ -224,7 +225,9 @@
       return;
     }
     try {
-      const data = await commsApi(`/gossip/messages?to=${encodeURIComponent(agentName)}`);
+      const res = await fetch(`/ui/api/gossip/messages?to=${encodeURIComponent(agentName)}`, { headers: HEADERS });
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const data = await res.json();
       const messages = data.messages || data || [];
       if (!Array.isArray(messages) || !messages.length) {
         container.innerHTML = `<div class="comms-empty">No gossip messages for ${esc(agentName)}</div>`;
