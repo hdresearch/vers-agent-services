@@ -12,7 +12,8 @@ export type ActionType =
   | "reassign_task"
   | "kill_guest"
   | "log_event"
-  | "alert";
+  | "alert"
+  | "auto_snapshot";
 
 export interface DaemonAction {
   id: string;
