@@ -175,6 +175,13 @@ uiRoutes.get("/ui/", async (c) => {
   return c.html(file.content);
 });
 
+// PM tool
+uiRoutes.get("/ui/pm", async (c) => {
+  const file = await getStaticFile("pm.html");
+  if (!file) return c.text("PM tool not found", 500);
+  return c.html(file.content);
+});
+
 // Report viewer
 uiRoutes.get("/ui/report/:id", async (c) => {
   const file = await getStaticFile("report.html");
