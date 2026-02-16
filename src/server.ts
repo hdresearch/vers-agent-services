@@ -36,6 +36,7 @@ import { kbRoutes, kbStore } from "./kb/routes.js";
 import { daemonRoutes, daemonEngine, daemonStore } from "./daemon/routes.js";
 import { contactsRoutes, contactsPublicRoutes, contactsStore } from "./contacts/routes.js";
 import { notificationRoutes } from "./notifications/routes.js";
+import { deployRoutes } from "./deploy/routes.js";
 
 const app = new Hono();
 
@@ -147,6 +148,7 @@ app.route("/fleet-chat", fleetChatRoutes);
 app.route("/contacts", contactsRoutes);
 app.route("/daemon", daemonRoutes);
 app.route("/notifications", notificationRoutes);
+app.route("/deploy", deployRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
