@@ -64,14 +64,11 @@ import { chatRoutes, chatStore, webChatStore, chatBridge, startFleetEventBridge,
 import { aegisRoutes, aegisStore } from "./aegis/routes.js";
 import { deployRoutes } from "./deploy/routes.js";
 import { busRoutes } from "./bus/bridge.js";
-
 import { backupRoutes, backupScheduler } from "./backup/routes.js";
-
 import { plannerRoutes, plannerStore } from "./planner/routes.js";
-
 import { bootRoutes } from "./boot/routes.js";
-
 import { autonomyRoutes, autonomyStore, orchestrator as autonomyOrchestrator } from "./autonomy/routes.js";
+import { subfleetRoutes, subfleetStore, subfleetOrchestrator, setAegisGuard } from "./subfleet/routes.js";
 
 const app = new Hono();
 const loader = new ServiceLoader();
@@ -237,6 +234,7 @@ app.route("/backup", backupRoutes);
 app.route("/planner", plannerRoutes);
 app.route("/boot", bootRoutes);
 app.route("/bus", busRoutes);
+app.route("/subfleet", subfleetRoutes);
 
 // Watchdog — zombie agent detection
 const { routes: watchdogRoutes, store: watchdogStore } = createWatchdogRoutes(
@@ -281,6 +279,9 @@ const server = serve({ fetch: app.fetch, port, hostname: "::" }, () => {
   // Start fleet event bridge — auto-posts interesting events to web chat
   startFleetEventBridge();
   console.log("fleet event bridge started — interesting events → web chat");
+
+  // Wire up Aegis protection for sub-fleet teardowns
+  setAegisGuard((vmId: string) => aegisStore.isProtected(vmId));
 });
 
 // Graceful shutdown — let in-flight requests drain before exiting.
@@ -315,7 +316,6 @@ async function gracefulShutdown(signal: string) {
   // Close aegis DB
   try { aegisStore.close(); } catch {}
 
-
   // Close planner DB
   try { plannerStore.close(); } catch {}
 
@@ -327,6 +327,9 @@ async function gracefulShutdown(signal: string) {
     try { autonomyOrchestrator.disable(); } catch {}
   }
   try { autonomyStore.close(); } catch {}
+  // Stop sub-fleet TTL reaper and close DB
+  try { subfleetOrchestrator.stopReaper(); } catch {}
+  try { subfleetStore.close(); } catch {}
   // Stop daemon event loop
   if (daemonEngine.isRunning) {
     try { daemonEngine.stop(); } catch {}
