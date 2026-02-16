@@ -41,6 +41,7 @@ import { docsRoutes, docsPublicRoutes, docsStore } from "./docs/routes.js";
 import { chatRoutes, chatStore } from "./chat/routes.js";
 import { aegisRoutes, aegisStore } from "./aegis/routes.js";
 import { deployRoutes } from "./deploy/routes.js";
+import { autonomyRoutes, autonomyStore, orchestrator as autonomyOrchestrator } from "./autonomy/routes.js";
 
 const app = new Hono();
 
@@ -132,6 +133,7 @@ app.use("/chat/messages", etag());
 app.use("/gossip/*", bearerAuth());
 app.use("/loop/*", bearerAuth());
 app.use("/aegis/*", bearerAuth());
+app.use("/autonomy/*", bearerAuth());
 app.use("/deploy/*", bearerAuth());
 
 // Rate limiting for write endpoints (applied after auth)
@@ -167,6 +169,7 @@ app.route("/daemon", daemonRoutes);
 app.route("/notifications", notificationRoutes);
 app.route("/docs", docsRoutes);
 app.route("/aegis", aegisRoutes);
+app.route("/autonomy", autonomyRoutes);
 app.route("/deploy", deployRoutes);
 
 // Watchdog — zombie agent detection
@@ -233,6 +236,11 @@ async function gracefulShutdown(signal: string) {
   try { chatStore.close(); } catch {}
   // Close aegis DB
   try { aegisStore.close(); } catch {}
+  // Stop autonomy loop
+  if (autonomyOrchestrator.isEnabled) {
+    try { autonomyOrchestrator.disable(); } catch {}
+  }
+  try { autonomyStore.close(); } catch {}
   // Stop daemon event loop
   if (daemonEngine.isRunning) {
     try { daemonEngine.stop(); } catch {}
