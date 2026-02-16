@@ -1,14 +1,15 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// Analytics Chat — Natural Language → Canvas Charts
-// Pattern-matching query interpreter with animated visualizations
+// Analytics Chat — Server-backed natural language query interface
+// Sends questions to POST /ui/api/analytics/query, renders structured responses
+// with formatted tables, numbers, and inline charts
 // ═══════════════════════════════════════════════════════════════════════════
 
 (function() {
   'use strict';
 
-  const ANALYTICS_API = '/ui/api';
+  const ANALYTICS_API = '/ui/api/analytics/query';
 
-  // ─── Color Palette (matches metrics.js) ───
+  // ─── Color Palette ───
   const P = {
     bg:         '#0a0a0f',
     grid:       'rgba(0, 255, 213, 0.04)',
@@ -25,7 +26,6 @@
     green:      '#44ff88',
     greenRgb:   '68, 255, 136',
     pink:       '#ff66cc',
-    pinkRgb:    '255, 102, 204',
     text:       '#c0c0c0',
     textBright: '#ffffff',
     textDim:    '#556',
@@ -40,12 +40,10 @@
     { hex: P.blue,   rgb: P.blueRgb },
     { hex: P.green,  rgb: P.greenRgb },
     { hex: P.red,    rgb: P.redRgb },
-    { hex: P.pink,   rgb: P.pinkRgb },
+    { hex: P.pink,   rgb: '255, 102, 204' },
   ];
 
   // ─── State ───
-  let sessionsCache = null;
-  let summaryCache = null;
   let canvas, ctx;
   let currentChart = null;
   let animProgress = 0;
@@ -53,504 +51,159 @@
   let hoverInfo = null;
   let mouseX = -1, mouseY = -1;
   let analyticsActive = false;
-  let chartRegions = []; // hit-test regions for tooltips
+  let chartRegions = [];
+  let queryHistory = [];
+  let isQuerying = false;
 
-  // ─── Data Fetching ───
+  // ─── Server Query ───
 
-  async function fetchData() {
-    try {
-      const [sessRes, sumRes] = await Promise.all([
-        fetch(`${ANALYTICS_API}/usage/sessions?range=30d`).then(r => r.ok ? r.json() : null),
-        fetch(`${ANALYTICS_API}/usage?range=30d`).then(r => r.ok ? r.json() : null),
-      ]);
-      sessionsCache = sessRes;
-      summaryCache = sumRes;
-    } catch (e) {
-      console.error('Analytics fetch error:', e);
+  async function sendQuery(question) {
+    const res = await fetch(ANALYTICS_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+    if (!res.ok) {
+      throw new Error(`Query failed: ${res.status}`);
     }
+    return res.json();
   }
 
-  // ─── Query Interpreter ───
+  // ─── Chart Builders from Server Response ───
 
-  const PATTERNS = [
-    {
-      match: /token\s*burn\s*(by|per|over)\s*(day|date|time)/i,
-      handler: () => tokenBurnByDay(),
-      desc: 'Token burn by day',
-    },
-    {
-      match: /tokens?\s*(over|by|per)\s*(time|day|date)/i,
-      handler: () => tokenBurnByDay(),
-      desc: 'Token burn over time',
-    },
-    {
-      match: /daily\s*(token|burn|usage)/i,
-      handler: () => tokenBurnByDay(),
-      desc: 'Daily token burn',
-    },
-    {
-      match: /(which|what|top)\s*agent.*(most|burned|highest|top)/i,
-      handler: () => tokensByAgent(),
-      desc: 'Top agents by tokens',
-    },
-    {
-      match: /(token|usage|burn)\s*(by|per|breakdown)\s*agent/i,
-      handler: () => tokensByAgent(),
-      desc: 'Tokens by agent',
-    },
-    {
-      match: /by\s*agent/i,
-      handler: () => tokensByAgent(),
-      desc: 'Usage by agent',
-    },
-    {
-      match: /agent\s*(breakdown|ranking|comparison|usage)/i,
-      handler: () => tokensByAgent(),
-      desc: 'Agent breakdown',
-    },
-    {
-      match: /cost\s*(over|by|per)\s*(time|day|date)/i,
-      handler: () => costOverTime(),
-      desc: 'Cost over time',
-    },
-    {
-      match: /cost\s*(trend|history|daily)/i,
-      handler: () => costOverTime(),
-      desc: 'Cost trend',
-    },
-    {
-      match: /spend(ing)?\s*(over|by|per)\s*(time|day)/i,
-      handler: () => costOverTime(),
-      desc: 'Spending over time',
-    },
-    {
-      match: /cost\s*(by|per|breakdown)\s*agent/i,
-      handler: () => costByAgent(),
-      desc: 'Cost by agent',
-    },
-    {
-      match: /(which|what|top)\s*agent.*(cost|expens|spend)/i,
-      handler: () => costByAgent(),
-      desc: 'Most expensive agents',
-    },
-    {
-      match: /compare\s*(.+?)\s*vs\.?\s*(.+)/i,
-      handler: (m) => compareAgents(m[1].trim(), m[2].trim()),
-      desc: 'Compare agents',
-    },
-    {
-      match: /compare\s*today\s*(vs\.?|versus|and)\s*yesterday/i,
-      handler: () => compareDays('today', 'yesterday'),
-      desc: 'Compare today vs yesterday',
-    },
-    {
-      match: /today\s*(vs\.?|versus)\s*yesterday/i,
-      handler: () => compareDays('today', 'yesterday'),
-      desc: 'Today vs yesterday',
-    },
-    {
-      match: /model\s*(breakdown|usage|split|distribution)/i,
-      handler: () => modelBreakdown(),
-      desc: 'Model breakdown',
-    },
-    {
-      match: /(by|per|breakdown)\s*model/i,
-      handler: () => modelBreakdown(),
-      desc: 'Breakdown by model',
-    },
-    {
-      match: /cost\s*(breakdown|split)/i,
-      handler: () => costBreakdownDonut(),
-      desc: 'Cost breakdown',
-    },
-    {
-      match: /session(s)?\s*(over|by|per)\s*(time|day|date)/i,
-      handler: () => sessionsOverTime(),
-      desc: 'Sessions over time',
-    },
-    {
-      match: /session(s)?\s*(count|history|trend|daily)/i,
-      handler: () => sessionsOverTime(),
-      desc: 'Session count trend',
-    },
-    {
-      match: /^session(s)?$/i,
-      handler: () => sessionsOverTime(),
-      desc: 'Sessions',
-    },
-    {
-      match: /input\s*vs\.?\s*output/i,
-      handler: () => inputVsOutput(),
-      desc: 'Input vs output tokens',
-    },
-    {
-      match: /token\s*(split|breakdown|ratio)/i,
-      handler: () => inputVsOutput(),
-      desc: 'Token split',
-    },
-    {
-      match: /turns?\s*(by|per)\s*agent/i,
-      handler: () => turnsByAgent(),
-      desc: 'Turns by agent',
-    },
-    {
-      match: /efficiency|cost\s*per\s*token|token\s*per\s*turn/i,
-      handler: () => efficiencyChart(),
-      desc: 'Efficiency metrics',
-    },
-    {
-      match: /overview|summary|dashboard/i,
-      handler: () => overviewChart(),
-      desc: 'Overview',
-    },
-    {
-      match: /^help$/i,
-      handler: () => null, // handled specially
-      desc: 'Help',
-    },
-  ];
-
-  function interpretQuery(query) {
-    const q = query.trim();
-    for (const pattern of PATTERNS) {
-      const m = q.match(pattern.match);
-      if (m) return { handler: pattern.handler, match: m, desc: pattern.desc };
+  function buildChartFromResponse(result) {
+    if (!result.data || !result.data.rows || result.data.rows.length === 0) {
+      return null;
     }
+
+    const hint = result.chartHint || 'table';
+    const data = result.data;
+
+    if (hint === 'number' && data.value !== undefined) {
+      return {
+        type: 'number',
+        title: result.answer,
+        value: data.value,
+        unit: data.unit || '',
+      };
+    }
+
+    if (hint === 'bar' && data.columns && data.rows) {
+      return buildBarFromTable(data);
+    }
+
+    if (hint === 'line' && data.columns && data.rows) {
+      return buildLineFromTable(data);
+    }
+
+    if (hint === 'donut' && data.columns && data.rows) {
+      return buildDonutFromTable(data);
+    }
+
+    // Default: table view
     return null;
   }
 
-  // ─── Chart Data Builders ───
-
-  function getSessions() {
-    return sessionsCache?.sessions || [];
-  }
-
-  function groupByDay(sessions, valueKey) {
-    const buckets = {};
-    for (const s of sessions) {
-      const day = s.startedAt.slice(0, 10);
-      if (!buckets[day]) buckets[day] = 0;
-      if (valueKey === 'tokens') buckets[day] += s.tokens?.total || 0;
-      else if (valueKey === 'cost') buckets[day] += s.cost?.total || 0;
-      else if (valueKey === 'sessions') buckets[day] += 1;
+  function buildBarFromTable(data) {
+    const labels = data.rows.map(r => String(r[0]));
+    // Find first numeric column
+    let valueIdx = 1;
+    for (let i = 1; i < data.columns.length; i++) {
+      const val = data.rows[0]?.[i];
+      if (typeof val === 'number') { valueIdx = i; break; }
+      // Try parsing string numbers
+      if (typeof val === 'string' && !isNaN(parseFloat(val.replace(/[$,KM%]/g, '')))) { valueIdx = i; break; }
     }
-    const sorted = Object.entries(buckets).sort(([a], [b]) => a.localeCompare(b));
-    return { labels: sorted.map(([d]) => d), values: sorted.map(([, v]) => v) };
-  }
 
-  function groupByAgent(sessions, valueKey) {
-    const buckets = {};
-    for (const s of sessions) {
-      const agent = s.agent || 'unknown';
-      if (!buckets[agent]) buckets[agent] = 0;
-      if (valueKey === 'tokens') buckets[agent] += s.tokens?.total || 0;
-      else if (valueKey === 'cost') buckets[agent] += s.cost?.total || 0;
-      else if (valueKey === 'sessions') buckets[agent] += 1;
-      else if (valueKey === 'turns') buckets[agent] += s.turns || 0;
-    }
-    const sorted = Object.entries(buckets).sort(([, a], [, b]) => b - a);
-    return { labels: sorted.map(([n]) => n), values: sorted.map(([, v]) => v) };
-  }
+    const values = data.rows.map(r => {
+      let v = r[valueIdx];
+      if (typeof v === 'string') v = parseFloat(v.replace(/[$,KM%]/g, '')) || 0;
+      return v;
+    });
 
-  function tokenBurnByDay() {
-    const data = groupByDay(getSessions(), 'tokens');
-    if (data.labels.length === 0) return emptyChart('No session data available');
     return {
       type: 'bar',
-      title: 'Token Burn by Day',
-      labels: data.labels.map(d => formatDateLabel(d)),
-      datasets: [{ label: 'Tokens', values: data.values, color: 0 }],
-      formatValue: formatTokens,
+      title: data.columns[valueIdx] + ' by ' + data.columns[0],
+      labels,
+      values,
+      formatValue: (v) => {
+        const col = data.columns[valueIdx].toLowerCase();
+        if (col.includes('cost') || col.includes('$')) return '$' + v.toFixed(2);
+        if (col.includes('%')) return v.toFixed(1) + '%';
+        return formatNumber(v);
+      },
     };
   }
 
-  function tokensByAgent() {
-    const data = groupByAgent(getSessions(), 'tokens');
-    if (data.labels.length === 0) return emptyChart('No session data available');
-    return {
-      type: 'bar',
-      title: 'Tokens by Agent',
-      labels: data.labels.map(shortAgentName),
-      datasets: [{ label: 'Tokens', values: data.values, color: 0 }],
-      formatValue: formatTokens,
-    };
-  }
+  function buildLineFromTable(data) {
+    const labels = data.rows.map(r => String(r[0]));
+    let valueIdx = 1;
+    for (let i = 1; i < data.columns.length; i++) {
+      const val = data.rows[0]?.[i];
+      if (typeof val === 'string' && val.startsWith('$')) { valueIdx = i; break; }
+      if (typeof val === 'number') { valueIdx = i; break; }
+    }
+    const values = data.rows.map(r => {
+      let v = r[valueIdx];
+      if (typeof v === 'string') v = parseFloat(v.replace(/[$,KM%]/g, '')) || 0;
+      return v;
+    });
 
-  function costOverTime() {
-    const data = groupByDay(getSessions(), 'cost');
-    if (data.labels.length === 0) return emptyChart('No session data available');
     return {
       type: 'line',
-      title: 'Cost Over Time',
-      labels: data.labels.map(d => formatDateLabel(d)),
-      datasets: [{ label: 'Cost ($)', values: data.values, color: 1 }],
-      formatValue: v => '$' + v.toFixed(2),
+      title: data.columns[valueIdx] + ' over time',
+      labels,
+      values,
+      formatValue: (v) => {
+        const col = data.columns[valueIdx].toLowerCase();
+        if (col.includes('cost') || col.includes('$')) return '$' + v.toFixed(2);
+        return formatNumber(v);
+      },
     };
   }
 
-  function costByAgent() {
-    const data = groupByAgent(getSessions(), 'cost');
-    if (data.labels.length === 0) return emptyChart('No session data available');
-    return {
-      type: 'bar',
-      title: 'Cost by Agent',
-      labels: data.labels.map(shortAgentName),
-      datasets: [{ label: 'Cost ($)', values: data.values, color: 2 }],
-      formatValue: v => '$' + v.toFixed(2),
-    };
-  }
-
-  function sessionsOverTime() {
-    const data = groupByDay(getSessions(), 'sessions');
-    if (data.labels.length === 0) return emptyChart('No session data available');
-    return {
-      type: 'bar',
-      title: 'Sessions Over Time',
-      labels: data.labels.map(d => formatDateLabel(d)),
-      datasets: [{ label: 'Sessions', values: data.values, color: 3 }],
-      formatValue: v => v.toString(),
-    };
-  }
-
-  function modelBreakdown() {
-    const sessions = getSessions();
-    const buckets = {};
-    for (const s of sessions) {
-      const model = shortModelName(s.model || 'unknown');
-      if (!buckets[model]) buckets[model] = { tokens: 0, cost: 0, sessions: 0 };
-      buckets[model].tokens += s.tokens?.total || 0;
-      buckets[model].cost += s.cost?.total || 0;
-      buckets[model].sessions += 1;
+  function buildDonutFromTable(data) {
+    const labels = data.rows.map(r => String(r[0]));
+    let valueIdx = 1;
+    for (let i = 1; i < data.columns.length; i++) {
+      const val = data.rows[0]?.[i];
+      if (typeof val === 'string' && val.startsWith('$')) { valueIdx = i; break; }
+      if (typeof val === 'number') { valueIdx = i; break; }
     }
-    const entries = Object.entries(buckets).sort(([, a], [, b]) => b.tokens - a.tokens);
-    if (entries.length === 0) return emptyChart('No model data available');
+    const values = data.rows.map(r => {
+      let v = r[valueIdx];
+      if (typeof v === 'string') v = parseFloat(v.replace(/[$,KM%]/g, '')) || 0;
+      return v;
+    });
+
     return {
       type: 'donut',
-      title: 'Model Breakdown (by tokens)',
-      labels: entries.map(([m]) => m),
-      values: entries.map(([, d]) => d.tokens),
-      formatValue: formatTokens,
+      title: data.columns[0] + ' breakdown',
+      labels,
+      values,
+      formatValue: (v) => formatNumber(v),
     };
-  }
-
-  function costBreakdownDonut() {
-    const data = groupByAgent(getSessions(), 'cost');
-    if (data.labels.length === 0) return emptyChart('No cost data available');
-    return {
-      type: 'donut',
-      title: 'Cost Breakdown by Agent',
-      labels: data.labels.map(shortAgentName),
-      values: data.values,
-      formatValue: v => '$' + v.toFixed(2),
-    };
-  }
-
-  function compareAgents(a, b) {
-    const sessions = getSessions();
-    // Try to fuzzy-match agent names
-    const nameA = findAgent(sessions, a);
-    const nameB = findAgent(sessions, b);
-
-    if (!nameA && !nameB) return emptyChart(`Couldn't find agents matching "${a}" or "${b}"`);
-
-    const agents = [nameA, nameB].filter(Boolean);
-    const metrics = ['Tokens', 'Cost ($)', 'Sessions', 'Turns'];
-    const datasets = [];
-
-    for (let i = 0; i < agents.length; i++) {
-      const agentSessions = sessions.filter(s => s.agent === agents[i]);
-      const totTokens = agentSessions.reduce((s, x) => s + (x.tokens?.total || 0), 0);
-      const totCost = agentSessions.reduce((s, x) => s + (x.cost?.total || 0), 0);
-      const totSessions = agentSessions.length;
-      const totTurns = agentSessions.reduce((s, x) => s + (x.turns || 0), 0);
-      datasets.push({
-        label: shortAgentName(agents[i]),
-        values: [totTokens, totCost, totSessions, totTurns],
-        color: i,
-      });
-    }
-
-    return {
-      type: 'grouped-bar',
-      title: `Compare: ${agents.map(shortAgentName).join(' vs ')}`,
-      labels: metrics,
-      datasets,
-      formatValue: (v, idx) => {
-        if (idx === 0) return formatTokens(v);
-        if (idx === 1) return '$' + v.toFixed(2);
-        return v.toString();
-      },
-    };
-  }
-
-  function compareDays(dayA, dayB) {
-    const sessions = getSessions();
-    const today = new Date().toISOString().slice(0, 10);
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-
-    const todaySess = sessions.filter(s => s.startedAt.slice(0, 10) === today);
-    const yesterdaySess = sessions.filter(s => s.startedAt.slice(0, 10) === yesterday);
-
-    const sum = (arr, key) => arr.reduce((s, x) => {
-      if (key === 'tokens') return s + (x.tokens?.total || 0);
-      if (key === 'cost') return s + (x.cost?.total || 0);
-      if (key === 'sessions') return s + 1;
-      if (key === 'turns') return s + (x.turns || 0);
-      return s;
-    }, 0);
-
-    const metrics = ['Tokens', 'Cost ($)', 'Sessions', 'Turns'];
-    return {
-      type: 'grouped-bar',
-      title: 'Today vs Yesterday',
-      labels: metrics,
-      datasets: [
-        { label: 'Today', values: [sum(todaySess, 'tokens'), sum(todaySess, 'cost'), todaySess.length, sum(todaySess, 'turns')], color: 0 },
-        { label: 'Yesterday', values: [sum(yesterdaySess, 'tokens'), sum(yesterdaySess, 'cost'), yesterdaySess.length, sum(yesterdaySess, 'turns')], color: 2 },
-      ],
-      formatValue: (v, idx) => {
-        if (idx === 0) return formatTokens(v);
-        if (idx === 1) return '$' + v.toFixed(2);
-        return v.toString();
-      },
-    };
-  }
-
-  function inputVsOutput() {
-    const data = {};
-    for (const s of getSessions()) {
-      const agent = s.agent || 'unknown';
-      if (!data[agent]) data[agent] = { input: 0, output: 0 };
-      data[agent].input += s.tokens?.input || 0;
-      data[agent].output += s.tokens?.output || 0;
-    }
-    const entries = Object.entries(data).sort(([, a], [, b]) => (b.input + b.output) - (a.input + a.output));
-    if (entries.length === 0) return emptyChart('No token data available');
-    return {
-      type: 'grouped-bar',
-      title: 'Input vs Output Tokens by Agent',
-      labels: entries.map(([n]) => shortAgentName(n)),
-      datasets: [
-        { label: 'Input', values: entries.map(([, d]) => d.input), color: 0 },
-        { label: 'Output', values: entries.map(([, d]) => d.output), color: 1 },
-      ],
-      formatValue: formatTokens,
-    };
-  }
-
-  function turnsByAgent() {
-    const data = groupByAgent(getSessions(), 'turns');
-    if (data.labels.length === 0) return emptyChart('No session data available');
-    return {
-      type: 'bar',
-      title: 'Turns by Agent',
-      labels: data.labels.map(shortAgentName),
-      datasets: [{ label: 'Turns', values: data.values, color: 4 }],
-      formatValue: v => v.toString(),
-    };
-  }
-
-  function efficiencyChart() {
-    const data = {};
-    for (const s of getSessions()) {
-      const agent = s.agent || 'unknown';
-      if (!data[agent]) data[agent] = { tokens: 0, cost: 0, turns: 0 };
-      data[agent].tokens += s.tokens?.total || 0;
-      data[agent].cost += s.cost?.total || 0;
-      data[agent].turns += s.turns || 0;
-    }
-    const entries = Object.entries(data).filter(([, d]) => d.turns > 0);
-    if (entries.length === 0) return emptyChart('No efficiency data available');
-    const sorted = entries.sort(([, a], [, b]) => (b.tokens / b.turns) - (a.tokens / a.turns));
-    return {
-      type: 'bar',
-      title: 'Tokens per Turn (Efficiency)',
-      labels: sorted.map(([n]) => shortAgentName(n)),
-      datasets: [{ label: 'Tokens/Turn', values: sorted.map(([, d]) => Math.round(d.tokens / d.turns)), color: 5 }],
-      formatValue: formatTokens,
-    };
-  }
-
-  function overviewChart() {
-    const sessions = getSessions();
-    const agents = new Set(sessions.map(s => s.agent));
-    const totalTokens = sessions.reduce((s, x) => s + (x.tokens?.total || 0), 0);
-    const totalCost = sessions.reduce((s, x) => s + (x.cost?.total || 0), 0);
-    return {
-      type: 'bar',
-      title: 'Fleet Overview',
-      labels: ['Total Tokens', 'Cost ($)', 'Sessions', 'Agents'],
-      datasets: [{
-        label: 'Overview',
-        values: [totalTokens, totalCost, sessions.length, agents.size],
-        color: 0,
-      }],
-      formatValue: (v, idx) => {
-        if (idx === 0) return formatTokens(v);
-        if (idx === 1) return '$' + v.toFixed(2);
-        return v.toString();
-      },
-    };
-  }
-
-  function emptyChart(message) {
-    return { type: 'empty', message };
-  }
-
-  // ─── Helpers ───
-
-  function findAgent(sessions, query) {
-    const q = query.toLowerCase().replace(/['"]/g, '');
-    const agents = [...new Set(sessions.map(s => s.agent))];
-    // Exact match
-    let found = agents.find(a => a.toLowerCase() === q);
-    if (found) return found;
-    // Partial match
-    found = agents.find(a => a.toLowerCase().includes(q));
-    if (found) return found;
-    // Prefix
-    found = agents.find(a => a.toLowerCase().startsWith(q));
-    return found || null;
-  }
-
-  function shortAgentName(name) {
-    if (name.length > 16) return name.slice(0, 14) + '…';
-    return name;
-  }
-
-  function shortModelName(name) {
-    return name.replace('claude-', '').replace(/-\d{8}$/, '');
-  }
-
-  function formatDateLabel(d) {
-    // "2026-02-11" → "Feb 11"
-    const parts = d.split('-');
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    return months[parseInt(parts[1], 10) - 1] + ' ' + parseInt(parts[2], 10);
-  }
-
-  function formatTokens(n) {
-    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-    if (n >= 1000) return (n / 1000).toFixed(0) + 'K';
-    return n.toString();
   }
 
   function formatNumber(n) {
+    if (typeof n !== 'number') return String(n);
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(0) + 'K';
+    if (n !== Math.floor(n)) return n.toFixed(2);
     return n.toLocaleString('en-US');
   }
 
-  // ─── Canvas Chart Renderers ───
+  // ─── Chart Rendering ───
 
   function renderChart(chart) {
     currentChart = chart;
     animProgress = 0;
     chartRegions = [];
     hoverInfo = null;
-
     if (animFrame) cancelAnimationFrame(animFrame);
 
-    if (!chart || chart.type === 'empty') {
-      drawEmpty(chart?.message || 'No data');
+    if (!chart) {
+      drawEmpty('Ask a question to see a chart');
       return;
     }
 
@@ -559,18 +212,12 @@
 
   function animateChart() {
     if (!analyticsActive || !currentChart) return;
-    animProgress = Math.min(1, animProgress + 0.035);
-    const eased = easeOutCubic(animProgress);
-
+    animProgress = Math.min(1, animProgress + 0.04);
+    const eased = 1 - Math.pow(1 - animProgress, 3);
     drawChartFrame(currentChart, eased);
-
     if (animProgress < 1) {
       animFrame = requestAnimationFrame(animateChart);
     }
-  }
-
-  function easeOutCubic(t) {
-    return 1 - Math.pow(1 - t, 3);
   }
 
   function drawChartFrame(chart, progress) {
@@ -581,191 +228,167 @@
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = P.bg;
     ctx.fillRect(0, 0, w, h);
-
-    // Grid
-    drawChartGrid(w, h);
+    drawGrid(w, h);
 
     // Title
     ctx.font = 'bold 13px "SF Mono", "Cascadia Code", "Fira Code", monospace';
     ctx.fillStyle = P.textBright;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
-    ctx.fillText(chart.title, 20, 16);
-
-    // Legend for multi-dataset
-    if (chart.datasets && chart.datasets.length > 1) {
-      drawLegend(chart, w);
+    const titleText = chart.title || '';
+    if (titleText.length > 60) {
+      ctx.fillText(titleText.slice(0, 58) + '…', 20, 16);
+    } else {
+      ctx.fillText(titleText, 20, 16);
     }
 
     chartRegions = [];
 
     switch (chart.type) {
-      case 'bar': drawBarChart(chart, w, h, progress); break;
-      case 'line': drawLineChart(chart, w, h, progress); break;
-      case 'grouped-bar': drawGroupedBarChart(chart, w, h, progress); break;
-      case 'donut': drawDonutChart(chart, w, h, progress); break;
+      case 'bar': drawBar(chart, w, h, progress); break;
+      case 'line': drawLine(chart, w, h, progress); break;
+      case 'donut': drawDonut(chart, w, h, progress); break;
+      case 'number': drawBigNumber(chart, w, h, progress); break;
     }
 
-    // Hover tooltip
     if (hoverInfo) drawTooltip(hoverInfo, w, h);
   }
 
-  function drawChartGrid(w, h) {
+  function drawGrid(w, h) {
     ctx.strokeStyle = P.grid;
     ctx.lineWidth = 1;
-    const spacing = 50;
-    for (let y = 40; y < h; y += spacing) {
+    for (let y = 40; y < h; y += 50) {
       ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
     }
-    for (let x = 0; x < w; x += spacing) {
+    for (let x = 0; x < w; x += 50) {
       ctx.beginPath(); ctx.moveTo(x, 40); ctx.lineTo(x, h); ctx.stroke();
     }
   }
 
-  function drawLegend(chart, w) {
-    ctx.font = '10px "SF Mono", "Cascadia Code", "Fira Code", monospace';
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'top';
-    let x = w - 20;
-    for (let i = chart.datasets.length - 1; i >= 0; i--) {
-      const ds = chart.datasets[i];
-      const c = CHART_COLORS[ds.color % CHART_COLORS.length];
-      const label = ds.label;
-      const tw = ctx.measureText(label).width;
-      ctx.fillStyle = P.text;
-      ctx.fillText(label, x, 18);
-      ctx.fillStyle = c.hex;
-      ctx.fillRect(x - tw - 16, 20, 10, 10);
-      x -= tw + 28;
-    }
-  }
-
-  // ─── Bar Chart ───
-
-  function drawBarChart(chart, w, h, progress) {
-    const ds = chart.datasets[0];
-    const vals = ds.values;
+  function drawBar(chart, w, h, progress) {
+    const vals = chart.values;
     const labels = chart.labels;
     const n = vals.length;
+    if (n === 0) return;
 
-    const padLeft = 80, padRight = 30, padTop = 50, padBot = 50;
+    const padLeft = 80, padRight = 30, padTop = 50, padBot = 55;
     const chartW = w - padLeft - padRight;
     const chartH = h - padTop - padBot;
-    const maxVal = Math.max(...vals, 1);
-    const barGap = Math.max(4, chartW * 0.08 / n);
-    const barW = Math.max(8, (chartW - barGap * (n + 1)) / n);
-
-    const c = CHART_COLORS[ds.color % CHART_COLORS.length];
-
-    // Y-axis labels
-    ctx.font = '9px "SF Mono", monospace';
-    ctx.fillStyle = P.textDim;
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-    const yTicks = 5;
-    for (let i = 0; i <= yTicks; i++) {
-      const v = (maxVal / yTicks) * i;
-      const y = padTop + chartH - (i / yTicks) * chartH;
-      ctx.fillText(chart.formatValue(v, 0), padLeft - 8, y);
-      ctx.strokeStyle = 'rgba(255,255,255,0.03)';
-      ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(w - padRight, y); ctx.stroke();
-    }
-
-    // Bars
-    for (let i = 0; i < n; i++) {
-      const x = padLeft + barGap + i * (barW + barGap);
-      const barH = (vals[i] / maxVal) * chartH * progress;
-      const y = padTop + chartH - barH;
-
-      // Glow
-      ctx.shadowColor = c.hex;
-      ctx.shadowBlur = 12;
-      ctx.fillStyle = `rgba(${c.rgb}, 0.7)`;
-      ctx.fillRect(x, y, barW, barH);
-      ctx.shadowBlur = 0;
-
-      // Inner gradient
-      const grad = ctx.createLinearGradient(x, y, x, padTop + chartH);
-      grad.addColorStop(0, `rgba(${c.rgb}, 0.9)`);
-      grad.addColorStop(1, `rgba(${c.rgb}, 0.3)`);
-      ctx.fillStyle = grad;
-      ctx.fillRect(x, y, barW, barH);
-
-      // Top highlight
-      ctx.fillStyle = `rgba(${c.rgb}, 1)`;
-      ctx.fillRect(x, y, barW, 2);
-
-      // X label
-      ctx.save();
-      ctx.font = '9px "SF Mono", monospace';
-      ctx.fillStyle = P.textDim;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      const labelX = x + barW / 2;
-      const labelY = padTop + chartH + 8;
-      if (n <= 12) {
-        ctx.fillText(labels[i], labelX, labelY);
-      } else if (i % Math.ceil(n / 10) === 0) {
-        ctx.fillText(labels[i], labelX, labelY);
-      }
-      ctx.restore();
-
-      // Hit region
-      chartRegions.push({
-        x, y: padTop, w: barW, h: chartH,
-        label: labels[i],
-        value: chart.formatValue(vals[i], i),
-        rawValue: vals[i],
-      });
-    }
-  }
-
-  // ─── Line Chart ───
-
-  function drawLineChart(chart, w, h, progress) {
-    const ds = chart.datasets[0];
-    const vals = ds.values;
-    const labels = chart.labels;
-    const n = vals.length;
-    if (n < 2) { drawBarChart(chart, w, h, progress); return; }
-
-    const padLeft = 80, padRight = 30, padTop = 50, padBot = 50;
-    const chartW = w - padLeft - padRight;
-    const chartH = h - padTop - padBot;
-    const maxVal = Math.max(...vals, 1);
-    const c = CHART_COLORS[ds.color % CHART_COLORS.length];
+    const maxVal = Math.max(...vals, 0.001);
+    const barGap = Math.max(4, chartW * 0.06 / n);
+    const barW = Math.max(6, (chartW - barGap * (n + 1)) / n);
 
     // Y-axis
     ctx.font = '9px "SF Mono", monospace';
     ctx.fillStyle = P.textDim;
     ctx.textAlign = 'right';
     ctx.textBaseline = 'middle';
-    const yTicks = 5;
-    for (let i = 0; i <= yTicks; i++) {
-      const v = (maxVal / yTicks) * i;
-      const y = padTop + chartH - (i / yTicks) * chartH;
-      ctx.fillText(chart.formatValue(v, 0), padLeft - 8, y);
+    for (let i = 0; i <= 5; i++) {
+      const v = (maxVal / 5) * i;
+      const y = padTop + chartH - (i / 5) * chartH;
+      ctx.fillText(chart.formatValue(v), padLeft - 8, y);
       ctx.strokeStyle = 'rgba(255,255,255,0.03)';
       ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(w - padRight, y); ctx.stroke();
     }
 
-    // Points
-    const points = [];
     for (let i = 0; i < n; i++) {
-      const x = padLeft + (i / (n - 1)) * chartW;
-      const y = padTop + chartH - (vals[i] / maxVal) * chartH;
-      points.push({ x, y });
+      const x = padLeft + barGap + i * (barW + barGap);
+      const barH = (vals[i] / maxVal) * chartH * progress;
+      const y = padTop + chartH - barH;
+      const ci = i % CHART_COLORS.length;
+      const c = CHART_COLORS[ci];
+
+      // Glow
+      ctx.shadowColor = c.hex;
+      ctx.shadowBlur = 10;
+      const grad = ctx.createLinearGradient(x, y, x, padTop + chartH);
+      grad.addColorStop(0, `rgba(${c.rgb}, 0.9)`);
+      grad.addColorStop(1, `rgba(${c.rgb}, 0.3)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(x, y, barW, barH);
+      ctx.shadowBlur = 0;
+
+      // Top highlight
+      ctx.fillStyle = `rgba(${c.rgb}, 1)`;
+      ctx.fillRect(x, y, barW, Math.min(2, barH));
+
+      // X label
+      ctx.font = '9px "SF Mono", monospace';
+      ctx.fillStyle = P.textDim;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      const labelX = x + barW / 2;
+      const labelY = padTop + chartH + 8;
+      if (n <= 15 || i % Math.ceil(n / 10) === 0) {
+        const lbl = labels[i].length > 12 ? labels[i].slice(0, 10) + '…' : labels[i];
+        ctx.save();
+        if (n > 8) {
+          ctx.translate(labelX, labelY);
+          ctx.rotate(-0.4);
+          ctx.textAlign = 'right';
+          ctx.fillText(lbl, 0, 0);
+        } else {
+          ctx.fillText(lbl, labelX, labelY);
+        }
+        ctx.restore();
+      }
+
+      // Value on top of bar
+      if (barH > 15) {
+        ctx.font = 'bold 9px "SF Mono", monospace';
+        ctx.fillStyle = P.textBright;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(chart.formatValue(vals[i]), x + barW / 2, y - 4);
+      }
+
+      chartRegions.push({
+        x, y: padTop, w: barW, h: chartH,
+        label: labels[i],
+        value: chart.formatValue(vals[i]),
+      });
+    }
+  }
+
+  function drawLine(chart, w, h, progress) {
+    const vals = chart.values;
+    const labels = chart.labels;
+    const n = vals.length;
+    if (n < 2) { drawBar(chart, w, h, progress); return; }
+
+    const padLeft = 80, padRight = 30, padTop = 50, padBot = 50;
+    const chartW = w - padLeft - padRight;
+    const chartH = h - padTop - padBot;
+    const maxVal = Math.max(...vals, 0.001);
+    const c = CHART_COLORS[1]; // purple for line charts
+
+    // Y-axis
+    ctx.font = '9px "SF Mono", monospace';
+    ctx.fillStyle = P.textDim;
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i <= 5; i++) {
+      const v = (maxVal / 5) * i;
+      const y = padTop + chartH - (i / 5) * chartH;
+      ctx.fillText(chart.formatValue(v), padLeft - 8, y);
+      ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+      ctx.beginPath(); ctx.moveTo(padLeft, y); ctx.lineTo(w - padRight, y); ctx.stroke();
     }
 
-    // Draw up to progress
+    const points = [];
+    for (let i = 0; i < n; i++) {
+      points.push({
+        x: padLeft + (i / (n - 1)) * chartW,
+        y: padTop + chartH - (vals[i] / maxVal) * chartH,
+      });
+    }
+
     const drawN = Math.ceil(n * progress);
 
     // Area fill
     ctx.beginPath();
     ctx.moveTo(points[0].x, padTop + chartH);
-    for (let i = 0; i < drawN; i++) {
-      ctx.lineTo(points[i].x, points[i].y);
-    }
+    for (let i = 0; i < drawN; i++) ctx.lineTo(points[i].x, points[i].y);
     ctx.lineTo(points[drawN - 1].x, padTop + chartH);
     ctx.closePath();
     const areaGrad = ctx.createLinearGradient(0, padTop, 0, padTop + chartH);
@@ -797,11 +420,17 @@
       ctx.fill();
       ctx.shadowBlur = 0;
 
-      // Inner bright dot
       ctx.beginPath();
       ctx.arc(points[i].x, points[i].y, 2, 0, Math.PI * 2);
       ctx.fillStyle = P.textBright;
       ctx.fill();
+
+      chartRegions.push({
+        x: points[i].x - 12, y: points[i].y - 12, w: 24, h: 24,
+        isCircle: true, cx: points[i].x, cy: points[i].y, cr: 12,
+        label: labels[i],
+        value: chart.formatValue(vals[i]),
+      });
     }
 
     // X labels
@@ -814,103 +443,24 @@
         ctx.fillText(labels[i], points[i].x, padTop + chartH + 8);
       }
     }
-
-    // Hit regions
-    for (let i = 0; i < n; i++) {
-      chartRegions.push({
-        x: points[i].x - 12, y: points[i].y - 12, w: 24, h: 24,
-        label: labels[i],
-        value: chart.formatValue(vals[i], i),
-        rawValue: vals[i],
-        isCircle: true, cx: points[i].x, cy: points[i].y, cr: 12,
-      });
-    }
   }
 
-  // ─── Grouped Bar Chart ───
-
-  function drawGroupedBarChart(chart, w, h, progress) {
-    const labels = chart.labels;
-    const datasets = chart.datasets;
-    const n = labels.length;
-    const m = datasets.length;
-
-    const padLeft = 80, padRight = 30, padTop = 50, padBot = 50;
-    const chartW = w - padLeft - padRight;
-    const chartH = h - padTop - padBot;
-
-    // Determine max value across all datasets per category
-    // For grouped bar with different scales, normalize per category
-    const maxVals = [];
-    for (let i = 0; i < n; i++) {
-      let mv = 0;
-      for (const ds of datasets) mv = Math.max(mv, ds.values[i] || 0);
-      maxVals.push(mv || 1);
-    }
-
-    const groupW = chartW / n;
-    const barGap = 4;
-    const barW = Math.max(8, (groupW - barGap * (m + 1)) / m);
-
-    // Y-axis — use max of all values
-    const globalMax = Math.max(...maxVals, 1);
-
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < m; j++) {
-        const ds = datasets[j];
-        const c = CHART_COLORS[ds.color % CHART_COLORS.length];
-        const x = padLeft + i * groupW + barGap + j * (barW + barGap);
-        const val = ds.values[i] || 0;
-        const barH = (val / globalMax) * chartH * progress;
-        const y = padTop + chartH - barH;
-
-        ctx.shadowColor = c.hex;
-        ctx.shadowBlur = 8;
-        const grad = ctx.createLinearGradient(x, y, x, padTop + chartH);
-        grad.addColorStop(0, `rgba(${c.rgb}, 0.85)`);
-        grad.addColorStop(1, `rgba(${c.rgb}, 0.3)`);
-        ctx.fillStyle = grad;
-        ctx.fillRect(x, y, barW, barH);
-        ctx.shadowBlur = 0;
-
-        ctx.fillStyle = `rgba(${c.rgb}, 1)`;
-        ctx.fillRect(x, y, barW, 2);
-
-        chartRegions.push({
-          x, y: padTop, w: barW, h: chartH,
-          label: `${labels[i]} — ${ds.label}`,
-          value: chart.formatValue(val, i),
-          rawValue: val,
-        });
-      }
-
-      // Group label
-      ctx.font = '9px "SF Mono", monospace';
-      ctx.fillStyle = P.textDim;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'top';
-      ctx.fillText(labels[i], padLeft + i * groupW + groupW / 2, padTop + chartH + 8);
-    }
-  }
-
-  // ─── Donut Chart ───
-
-  function drawDonutChart(chart, w, h, progress) {
+  function drawDonut(chart, w, h, progress) {
     const values = chart.values;
     const labels = chart.labels;
     const total = values.reduce((s, v) => s + v, 0) || 1;
 
-    const cx = w * 0.42;
+    const cx = w * 0.4;
     const cy = h * 0.52;
-    const outerR = Math.min(w * 0.28, h * 0.35);
+    const outerR = Math.min(w * 0.25, h * 0.33);
     const innerR = outerR * 0.55;
 
     let angle = -Math.PI / 2;
-    const endAngle = -Math.PI / 2 + Math.PI * 2 * progress;
+    const maxAngle = -Math.PI / 2 + Math.PI * 2 * progress;
 
     for (let i = 0; i < values.length; i++) {
       const sliceAngle = (values[i] / total) * Math.PI * 2;
-      const drawAngle = Math.min(sliceAngle, endAngle - angle);
+      const drawAngle = Math.min(sliceAngle, maxAngle - angle);
       if (drawAngle <= 0) break;
 
       const c = CHART_COLORS[i % CHART_COLORS.length];
@@ -919,38 +469,29 @@
       ctx.arc(cx, cy, outerR, angle, angle + drawAngle);
       ctx.arc(cx, cy, innerR, angle + drawAngle, angle, true);
       ctx.closePath();
-
       ctx.fillStyle = `rgba(${c.rgb}, 0.75)`;
       ctx.shadowColor = c.hex;
-      ctx.shadowBlur = 15;
+      ctx.shadowBlur = 12;
       ctx.fill();
       ctx.shadowBlur = 0;
 
-      // Outer edge glow
       ctx.beginPath();
       ctx.arc(cx, cy, outerR, angle, angle + drawAngle);
       ctx.strokeStyle = `rgba(${c.rgb}, 0.9)`;
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      // Hit region (use mid-angle for tooltip)
-      const midAngle = angle + drawAngle / 2;
-      const hitR = (outerR + innerR) / 2;
       chartRegions.push({
-        isArc: true,
-        cx, cy,
-        innerR, outerR,
-        startAngle: angle,
-        endAngle: angle + drawAngle,
+        isArc: true, cx, cy, innerR, outerR,
+        startAngle: angle, endAngle: angle + drawAngle,
         label: labels[i],
         value: chart.formatValue(values[i]) + ` (${(values[i] / total * 100).toFixed(1)}%)`,
-        rawValue: values[i],
       });
 
       angle += drawAngle;
     }
 
-    // Center text
+    // Center total
     ctx.font = 'bold 18px "SF Mono", monospace';
     ctx.fillStyle = P.textBright;
     ctx.textAlign = 'center';
@@ -960,26 +501,43 @@
     ctx.fillStyle = P.textDim;
     ctx.fillText('TOTAL', cx, cy + 12);
 
-    // Legend on the right
-    const legendX = w * 0.72;
-    let legendY = h * 0.2;
+    // Legend
+    const legendX = w * 0.7;
+    let legendY = h * 0.15;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    for (let i = 0; i < labels.length; i++) {
+    for (let i = 0; i < labels.length && i < 10; i++) {
       const c = CHART_COLORS[i % CHART_COLORS.length];
       ctx.fillStyle = c.hex;
       ctx.fillRect(legendX, legendY - 5, 10, 10);
       ctx.font = '10px "SF Mono", monospace';
       ctx.fillStyle = P.text;
-      ctx.fillText(labels[i], legendX + 16, legendY);
+      const lbl = labels[i].length > 18 ? labels[i].slice(0, 16) + '…' : labels[i];
+      ctx.fillText(lbl, legendX + 16, legendY);
       ctx.font = '9px "SF Mono", monospace';
       ctx.fillStyle = P.textDim;
       ctx.fillText(chart.formatValue(values[i]), legendX + 16, legendY + 14);
-      legendY += 32;
+      legendY += 30;
     }
   }
 
-  // ─── Empty State ───
+  function drawBigNumber(chart, w, h, progress) {
+    const value = chart.value * progress;
+    const displayVal = formatNumber(Math.round(value));
+
+    ctx.font = 'bold 48px "SF Mono", "Cascadia Code", monospace';
+    ctx.fillStyle = P.cyan;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = P.cyan;
+    ctx.shadowBlur = 30;
+    ctx.fillText(displayVal, w / 2, h / 2 - 15);
+    ctx.shadowBlur = 0;
+
+    ctx.font = '14px "SF Mono", monospace';
+    ctx.fillStyle = P.textDim;
+    ctx.fillText(chart.unit.toUpperCase(), w / 2, h / 2 + 25);
+  }
 
   function drawEmpty(message) {
     if (!ctx || !canvas) return;
@@ -988,16 +546,14 @@
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = P.bg;
     ctx.fillRect(0, 0, w, h);
-    drawChartGrid(w, h);
+    drawGrid(w, h);
 
     ctx.font = '12px "SF Mono", monospace';
     ctx.fillStyle = P.textDim;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(message || 'No data to display', w / 2, h / 2);
+    ctx.fillText(message || 'Ask a question to see a chart', w / 2, h / 2);
   }
-
-  // ─── Tooltip ───
 
   function drawTooltip(info, w, h) {
     const pad = 10;
@@ -1063,23 +619,18 @@
         const dx = mouseX - r.cx, dy = mouseY - r.cy;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist >= r.innerR && dist <= r.outerR) {
-          let angle = Math.atan2(dy, dx);
-          // Normalize angles
-          const normAngle = (a) => { while (a < -Math.PI) a += Math.PI * 2; while (a > Math.PI) a -= Math.PI * 2; return a; };
-          // Check if angle is within slice
-          const s = normAngle(r.startAngle);
-          const e = normAngle(r.endAngle);
-          const a = normAngle(angle);
-          // Simple check: if arc spans the boundary, handle specially
-          let inSlice = false;
+          const angle = Math.atan2(dy, dx);
           if (r.endAngle - r.startAngle >= Math.PI * 2 - 0.01) {
-            inSlice = true;
-          } else if (r.startAngle <= r.endAngle) {
-            inSlice = angle >= r.startAngle && angle <= r.endAngle;
-          } else {
-            inSlice = angle >= r.startAngle || angle <= r.endAngle;
+            hoverInfo = r; break;
           }
-          if (inSlice) { hoverInfo = r; break; }
+          if (angle >= r.startAngle && angle <= r.endAngle) {
+            hoverInfo = r; break;
+          }
+          // Handle wrap-around
+          const normAngle = angle < r.startAngle ? angle + Math.PI * 2 : angle;
+          if (normAngle >= r.startAngle && normAngle <= r.endAngle) {
+            hoverInfo = r; break;
+          }
         }
       } else if (r.isCircle) {
         const dx = mouseX - r.cx, dy = mouseY - r.cy;
@@ -1092,11 +643,43 @@
     }
 
     canvas.style.cursor = hoverInfo ? 'pointer' : 'default';
+    if (currentChart) drawChartFrame(currentChart, Math.min(1, animProgress));
+  }
 
-    // Redraw with tooltip
-    if (currentChart && currentChart.type !== 'empty') {
-      drawChartFrame(currentChart, Math.min(1, animProgress));
+  // ─── Table Rendering (HTML) ───
+
+  function renderTable(data) {
+    if (!data || !data.columns || !data.rows) return '';
+
+    let html = '<div class="achat-table-wrap"><table class="achat-table"><thead><tr>';
+    for (const col of data.columns) {
+      html += `<th>${escHtml(col)}</th>`;
     }
+    html += '</tr></thead><tbody>';
+
+    const maxRows = 20;
+    const rows = data.rows.slice(0, maxRows);
+    for (const row of rows) {
+      html += '<tr>';
+      for (const cell of row) {
+        const cellStr = String(cell);
+        const isNumber = /^\$?[\d,.]+[KM%]?$/.test(cellStr);
+        html += `<td class="${isNumber ? 'num' : ''}">${escHtml(cellStr)}</td>`;
+      }
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+    if (data.rows.length > maxRows) {
+      html += `<div class="achat-table-more">… and ${data.rows.length - maxRows} more rows</div>`;
+    }
+    html += '</div>';
+    return html;
+  }
+
+  function escHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s || '';
+    return d.innerHTML;
   }
 
   // ─── Chat UI ───
@@ -1106,83 +689,74 @@
     const chatInput = document.getElementById('analytics-chat-input');
     if (!chatMsgs || !chatInput) return;
 
-    // Welcome message
-    addSystemMessage(
-      'Ask me about your agent fleet metrics.\n\n' +
-      'Try:\n' +
-      '  • "token burn by day"\n' +
-      '  • "which agent burned the most tokens?"\n' +
-      '  • "cost over time"\n' +
-      '  • "compare today vs yesterday"\n' +
-      '  • "model breakdown"\n' +
-      '  • "sessions over time"\n' +
-      '  • "input vs output"\n' +
-      '  • "efficiency"'
-    );
+    // Only add welcome if chat is empty (preserve across tab switches)
+    if (chatMsgs.children.length === 0) {
+      addSystemMessage(
+        '🔍 Ask me about your fleet metrics.\n\n' +
+        'Try:\n' +
+        '  • "how many tokens burned today?"\n' +
+        '  • "which agent burned the most?"\n' +
+        '  • "cost by day"\n' +
+        '  • "today vs yesterday"\n' +
+        '  • "overview"\n' +
+        '  • "help" for full list'
+      );
+    }
 
-    chatInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        const query = chatInput.value.trim();
-        if (!query) return;
-        chatInput.value = '';
-        processQuery(query);
-      }
-    });
+    // Remove old listener to avoid duplicates
+    chatInput.removeEventListener('keydown', handleChatKeydown);
+    chatInput.addEventListener('keydown', handleChatKeydown);
+  }
+
+  function handleChatKeydown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const input = e.target;
+      const query = input.value.trim();
+      if (!query || isQuerying) return;
+      input.value = '';
+      processQuery(query);
+    }
   }
 
   async function processQuery(query) {
     addUserMessage(query);
+    queryHistory.push(query);
 
-    // Ensure data
-    if (!sessionsCache) {
-      addSystemMessage('Fetching data…');
-      await fetchData();
+    isQuerying = true;
+    addLoadingMessage();
+
+    try {
+      const result = await sendQuery(query);
+      removeLoadingMessage();
+
+      // Show the text answer
+      const hasTable = result.data && result.data.rows && result.data.rows.length > 0;
+      let messageHtml = escHtml(result.answer);
+
+      // Add table if present
+      if (hasTable) {
+        messageHtml += renderTable(result.data);
+      }
+
+      // Show SQL for transparency
+      if (result.sql) {
+        messageHtml += `<div class="achat-sql"><span class="achat-sql-label">SQL:</span> <code>${escHtml(result.sql.slice(0, 200))}</code></div>`;
+      }
+
+      addSystemMessageHtml(messageHtml);
+
+      // Build and render chart
+      const chart = buildChartFromResponse(result);
+      if (chart) {
+        renderChart(chart);
+      }
+    } catch (err) {
+      removeLoadingMessage();
+      addSystemMessage(`❌ Error: ${err.message}`);
+    } finally {
+      isQuerying = false;
     }
-
-    if (query.trim().toLowerCase() === 'help') {
-      addSystemMessage(
-        'Available queries:\n' +
-        '  • token burn by day\n' +
-        '  • tokens by agent / which agent burned the most\n' +
-        '  • cost over time / cost trend\n' +
-        '  • cost by agent\n' +
-        '  • compare <agent> vs <agent>\n' +
-        '  • today vs yesterday\n' +
-        '  • model breakdown\n' +
-        '  • cost breakdown\n' +
-        '  • sessions over time\n' +
-        '  • input vs output\n' +
-        '  • turns by agent\n' +
-        '  • efficiency\n' +
-        '  • overview'
-      );
-      return;
-    }
-
-    const result = interpretQuery(query);
-    if (!result) {
-      addSystemMessage(
-        'I couldn\'t understand that query.\n\n' +
-        'Try asking:\n' +
-        '  • "token burn by day"\n' +
-        '  • "which agent burned the most?"\n' +
-        '  • "cost over time"\n' +
-        '  • "model breakdown"\n' +
-        '  • "help" for full list'
-      );
-      return;
-    }
-
-    const chart = result.handler(result.match);
-    if (!chart || chart.type === 'empty') {
-      addSystemMessage(chart?.message || 'No data available for that query.');
-      renderChart(chart);
-      return;
-    }
-
-    addSystemMessage(`📊 ${chart.title}`);
-    renderChart(chart);
   }
 
   function addUserMessage(text) {
@@ -1205,6 +779,31 @@
     chatMsgs.scrollTop = chatMsgs.scrollHeight;
   }
 
+  function addSystemMessageHtml(html) {
+    const chatMsgs = document.getElementById('analytics-chat-messages');
+    if (!chatMsgs) return;
+    const el = document.createElement('div');
+    el.className = 'achat-msg achat-system';
+    el.innerHTML = html;
+    chatMsgs.appendChild(el);
+    chatMsgs.scrollTop = chatMsgs.scrollHeight;
+  }
+
+  function addLoadingMessage() {
+    const chatMsgs = document.getElementById('analytics-chat-messages');
+    if (!chatMsgs) return;
+    const el = document.createElement('div');
+    el.className = 'achat-msg achat-system achat-loading';
+    el.innerHTML = '<span class="achat-dots">●●●</span> Querying fleet data…';
+    chatMsgs.appendChild(el);
+    chatMsgs.scrollTop = chatMsgs.scrollHeight;
+  }
+
+  function removeLoadingMessage() {
+    const el = document.querySelector('.achat-loading');
+    if (el) el.remove();
+  }
+
   // ─── Canvas Setup ───
 
   function setupCanvas() {
@@ -1214,9 +813,7 @@
     canvas.addEventListener('mousemove', handleMouseMove);
     canvas.addEventListener('mouseleave', () => {
       hoverInfo = null;
-      if (currentChart && currentChart.type !== 'empty') {
-        drawChartFrame(currentChart, Math.min(1, animProgress));
-      }
+      if (currentChart) drawChartFrame(currentChart, Math.min(1, animProgress));
     });
     window.addEventListener('resize', resizeCanvas);
   }
@@ -1228,7 +825,7 @@
     canvas.width = wrap.clientWidth;
     canvas.height = wrap.clientHeight;
     ctx = canvas.getContext('2d');
-    if (currentChart && currentChart.type !== 'empty') {
+    if (currentChart) {
       drawChartFrame(currentChart, Math.min(1, animProgress));
     } else {
       drawEmpty('Ask a question to see a chart');
@@ -1237,22 +834,18 @@
 
   // ─── Public API ───
 
-  window.analyticsInit = async function() {
+  window.analyticsInit = function() {
     if (analyticsActive) return;
     analyticsActive = true;
     setupCanvas();
     initChat();
-    await fetchData();
-    drawEmpty('Ask a question to see a chart');
+    if (!currentChart) drawEmpty('Ask a question to see a chart');
   };
 
   window.analyticsDestroy = function() {
     analyticsActive = false;
     if (animFrame) cancelAnimationFrame(animFrame);
-    sessionsCache = null;
-    summaryCache = null;
-    currentChart = null;
-    chartRegions = [];
+    // Don't clear state — preserve chat and chart across tab switches
     window.removeEventListener('resize', resizeCanvas);
   };
 

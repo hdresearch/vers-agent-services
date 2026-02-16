@@ -50,7 +50,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { homedir } from "node:os";
-import { mkdir, writeFile, readFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, writeFile, readFile, readdir, rm, stat, rename } from "node:fs/promises";
 import { join } from "node:path";
 
 // =============================================================================
@@ -142,16 +142,20 @@ const TURN_SYNC_COOLDOWN_MS = 60_000; // 60 seconds
 let lastTurnSyncAt = 0;
 
 /**
- * Discover skill names already installed from git-based packages.
+ * Discover skill paths already installed from git-based packages.
  * Scans ~/.pi/agent/git/ recursively for skills/X/SKILL.md patterns.
- * These skills should NOT be downloaded from SkillHub to avoid collision warnings.
+ * Returns a Map of skillName → directory path so we can remove conflicts.
+ *
+ * SkillHub skills OVERRIDE git-package skills. When SkillHub has a skill
+ * that also exists in a git package, the git version is removed to prevent
+ * pi's "first found wins" collision from using the stale git version.
  */
-async function getPackageSkillNames(): Promise<Set<string>> {
-  const names = new Set<string>();
+async function getPackageSkillPaths(): Promise<Map<string, string>> {
+  const paths = new Map<string, string>();
   const gitDir = join(homedir(), ".pi", "agent", "git");
 
   async function walkForSkills(dir: string, depth: number): Promise<void> {
-    if (depth > 8) return; // don't recurse too deep
+    if (depth > 8) return;
     let entries: string[];
     try {
       entries = await readdir(dir);
@@ -167,20 +171,18 @@ async function getPackageSkillNames(): Promise<Set<string>> {
         continue;
       }
       if (entry === "skills") {
-        // Found a skills directory — enumerate its children
         try {
           const skillDirs = await readdir(full);
           for (const skillName of skillDirs) {
+            const skillPath = join(full, skillName);
             try {
-              await stat(join(full, skillName, "SKILL.md"));
-              names.add(skillName);
+              await stat(join(skillPath, "SKILL.md"));
+              paths.set(skillName, skillPath);
             } catch {
               // not a valid skill dir
             }
           }
-        } catch {
-          // can't read skills dir
-        }
+        } catch {}
       } else {
         await walkForSkills(full, depth + 1);
       }
@@ -188,7 +190,30 @@ async function getPackageSkillNames(): Promise<Set<string>> {
   }
 
   await walkForSkills(gitDir, 0);
-  return names;
+  return paths;
+}
+
+// Backward compat helper — returns just names (used by SSE handler)
+async function getPackageSkillNames(): Promise<Set<string>> {
+  const paths = await getPackageSkillPaths();
+  return new Set(paths.keys());
+}
+
+/**
+ * Remove a git-package skill directory so the SkillHub version takes priority.
+ * Creates a .hub-override marker so we know this was intentional.
+ */
+async function removeConflictingPackageSkill(skillName: string, packagePath: string): Promise<void> {
+  try {
+    await rm(packagePath, { recursive: true });
+  } catch {
+    // If we can't remove, at least rename the SKILL.md so pi won't discover it
+    try {
+      await rename(join(packagePath, "SKILL.md"), join(packagePath, "SKILL.md.shadowed-by-hub"));
+    } catch {
+      // Last resort: can't override, will get collision warning
+    }
+  }
 }
 
 /**
@@ -203,8 +228,8 @@ async function syncSkillsLightweight(): Promise<string[]> {
   const synced: string[] = [];
 
   try {
-    // Step 0: Discover skills already installed from packages (skip these)
-    const packageSkills = await getPackageSkillNames();
+    // Step 0: Discover skills installed from git packages (we'll override conflicts)
+    const packageSkillPaths = await getPackageSkillPaths();
 
     // Step 1: Get lightweight manifest (no content, just names + versions)
     const manifest = await api<{
@@ -212,8 +237,8 @@ async function syncSkillsLightweight(): Promise<string[]> {
       extensions: Array<{ name: string; version: number }>;
     }>("GET", "/skills/manifest");
 
-    // Filter out skills that already exist from installed packages
-    const remoteSkills = manifest.skills.filter((s) => !packageSkills.has(s.name));
+    // ALL remote skills are candidates — hub takes priority over git packages
+    const remoteSkills = manifest.skills;
 
     await mkdir(HUB_SKILLS_DIR, { recursive: true });
 
@@ -235,21 +260,30 @@ async function syncSkillsLightweight(): Promise<string[]> {
           "GET",
           `/skills/items/${encodeURIComponent(skill.name)}`,
         );
+
+        // Remove conflicting git-package skill so hub version wins
+        const conflictPath = packageSkillPaths.get(skill.name);
+        if (conflictPath) {
+          await removeConflictingPackageSkill(skill.name, conflictPath);
+          synced.push(`${full.name} v${full.version} (overrode git package)`);
+        } else {
+          synced.push(`${full.name} v${full.version}`);
+        }
+
         const skillDir = join(HUB_SKILLS_DIR, skill.name);
         await mkdir(skillDir, { recursive: true });
         await writeFile(join(skillDir, "SKILL.md"), full.content);
         await writeFile(join(skillDir, ".version"), String(full.version));
-        synced.push(`${full.name} v${full.version}`);
       } catch {
         // Best effort — skip individual skill failures
       }
     }
 
-    // Step 4: Remove hub skills that were deleted from hub or now come from packages
-    const hubOnlyNames = new Set(remoteSkills.map((s) => s.name));
+    // Step 4: Remove hub skills that were deleted from hub
+    const hubNames = new Set(remoteSkills.map((s) => s.name));
     const localDirs = await readdir(HUB_SKILLS_DIR).catch(() => [] as string[]);
     for (const dir of localDirs) {
-      if (!hubOnlyNames.has(dir)) {
+      if (!hubNames.has(dir)) {
         await rm(join(HUB_SKILLS_DIR, dir), { recursive: true });
         synced.push(`${dir} (removed)`);
       }
@@ -266,11 +300,10 @@ async function syncSkillsFromHub(): Promise<string[]> {
   if (!baseUrl) return [];
 
   const synced: string[] = [];
-  const skipped: string[] = [];
 
   try {
-    // Discover skills already installed from packages (skip these)
-    const packageSkills = await getPackageSkillNames();
+    // Discover skills installed from git packages (we'll override conflicts)
+    const packageSkillPaths = await getPackageSkillPaths();
 
     const res = await api<{ skills: Array<{ name: string; version: number; content: string }>; count: number }>(
       "GET",
@@ -281,33 +314,42 @@ async function syncSkillsFromHub(): Promise<string[]> {
     await mkdir(HUB_SKILLS_DIR, { recursive: true });
 
     for (const skill of skills) {
-      // Skip skills already provided by installed packages
-      if (packageSkills.has(skill.name)) {
-        skipped.push(skill.name);
-        continue;
-      }
-
       const skillDir = join(HUB_SKILLS_DIR, skill.name);
       await mkdir(skillDir, { recursive: true });
 
-      // Check if we already have this version
+      // Check if we already have this version in _hub
       const versionFile = join(skillDir, ".version");
       const currentVersion = await readFile(versionFile, "utf-8").catch(() => "0");
-      if (parseInt(currentVersion) >= skill.version) continue;
+
+      if (parseInt(currentVersion) >= skill.version) {
+        // Already up to date in _hub, but still need to remove any conflicting git skill
+        const conflictPath = packageSkillPaths.get(skill.name);
+        if (conflictPath) {
+          await removeConflictingPackageSkill(skill.name, conflictPath);
+          synced.push(`${skill.name} (removed stale git package)`);
+        }
+        continue;
+      }
+
+      // Remove conflicting git-package skill so hub version wins
+      const conflictPath = packageSkillPaths.get(skill.name);
+      if (conflictPath) {
+        await removeConflictingPackageSkill(skill.name, conflictPath);
+        synced.push(`${skill.name} v${skill.version} (overrode git package)`);
+      } else {
+        synced.push(`${skill.name} v${skill.version}`);
+      }
 
       // Write SKILL.md and version tracker
       await writeFile(join(skillDir, "SKILL.md"), skill.content);
       await writeFile(versionFile, String(skill.version));
-      synced.push(`${skill.name} v${skill.version}`);
     }
 
-    // Remove hub skills that were deleted from hub or now come from packages
-    const hubOnlyNames = new Set(
-      skills.filter((s) => !packageSkills.has(s.name)).map((s) => s.name)
-    );
+    // Remove hub skills that were deleted from hub
+    const hubNames = new Set(skills.map((s) => s.name));
     const localDirs = await readdir(HUB_SKILLS_DIR).catch(() => [] as string[]);
     for (const dir of localDirs) {
-      if (!hubOnlyNames.has(dir)) {
+      if (!hubNames.has(dir)) {
         await rm(join(HUB_SKILLS_DIR, dir), { recursive: true });
         synced.push(`${dir} (removed)`);
       }
@@ -365,6 +407,38 @@ async function syncExtensionsFromHub(): Promise<string[]> {
 }
 
 // ---------------------------------------------------------------------------
+// KB Briefing — sync fleet knowledge base to agent context
+// ---------------------------------------------------------------------------
+
+const KB_CONTEXT_DIR = join(homedir(), ".pi", "agent", "context");
+const KB_BRIEFING_FILE = join(KB_CONTEXT_DIR, "kb-briefing.md");
+
+async function syncKBBriefing(): Promise<boolean> {
+  const baseUrl = getBaseUrl();
+  if (!baseUrl) return false;
+
+  try {
+    const res = await api<{ briefing: string; entryCount: number }>(
+      "GET",
+      "/kb/briefing",
+    );
+
+    if (!res.briefing || res.entryCount === 0) {
+      // No KB entries — remove stale briefing file if it exists
+      await rm(KB_BRIEFING_FILE, { force: true }).catch(() => {});
+      return false;
+    }
+
+    await mkdir(KB_CONTEXT_DIR, { recursive: true });
+    await writeFile(KB_BRIEFING_FILE, res.briefing);
+    return true;
+  } catch {
+    // Best effort — don't block session start
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // SSE stream for real-time skill/extension updates
 // ---------------------------------------------------------------------------
 
@@ -396,10 +470,7 @@ async function handleSkillEvent(event: { type: string; name: string; kind?: stri
     return;
   }
 
-  // Handle skill events — skip skills already installed from packages
-  const packageSkills = await getPackageSkillNames();
-  if (packageSkills.has(event.name)) return;
-
+  // Handle skill events — hub takes priority over git packages
   const skillDir = join(HUB_SKILLS_DIR, event.name);
 
   if (event.type === "skill_removed") {
@@ -409,6 +480,13 @@ async function handleSkillEvent(event: { type: string; name: string; kind?: stri
 
   if (event.type === "skill_published" || event.type === "skill_updated") {
     try {
+      // Remove conflicting git-package skill
+      const packageSkillPaths = await getPackageSkillPaths();
+      const conflictPath = packageSkillPaths.get(event.name);
+      if (conflictPath) {
+        await removeConflictingPackageSkill(event.name, conflictPath);
+      }
+
       const skill = await api<{ name: string; version: number; content: string }>(
         "GET",
         `/skills/items/${encodeURIComponent(event.name)}`,
@@ -535,6 +613,9 @@ export default function (pi: ExtensionAPI) {
     syncSkillsFromHub().catch(() => {});
     syncExtensionsFromHub().catch(() => {});
 
+    // Sync KB briefing — write fleet knowledge to context file
+    syncKBBriefing().catch(() => {});
+
     // Subscribe to SSE stream for real-time updates
     startSkillStream();
   });
@@ -562,6 +643,10 @@ export default function (pi: ExtensionAPI) {
       clearInterval(widgetTimer);
       widgetTimer = null;
     }
+    if (flushTimer) {
+      clearInterval(flushTimer);
+      flushTimer = null;
+    }
 
     // Stop SkillHub SSE stream
     stopSkillStream();
@@ -583,12 +668,62 @@ export default function (pi: ExtensionAPI) {
   let usageCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
   let usageToolCalls: Record<string, number> = {};
 
+  // --- Periodic flush state ---
+  const FLUSH_TURN_INTERVAL = 5;
+  const FLUSH_TIME_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+  let lastFlushTurn = 0;
+  let lastFlushTime = 0;
+  let flushTimer: ReturnType<typeof setInterval> | null = null;
+  let flushInProgress = false;
+
+  function buildUsagePayload() {
+    const now = new Date().toISOString();
+    return {
+      sessionId: usageSessionId || `session-${Date.now()}`,
+      agent: agentName,
+      parentAgent: process.env.VERS_PARENT_AGENT || null,
+      model: usageModel,
+      tokens: { ...usageTokens },
+      cost: {
+        input: Math.round(usageCost.input * 1e6) / 1e6,
+        output: Math.round(usageCost.output * 1e6) / 1e6,
+        cacheRead: Math.round(usageCost.cacheRead * 1e6) / 1e6,
+        cacheWrite: Math.round(usageCost.cacheWrite * 1e6) / 1e6,
+        total: Math.round(usageCost.total * 1e6) / 1e6,
+      },
+      turns: usageTurns,
+      toolCalls: { ...usageToolCalls },
+      startedAt: usageStartedAt || now,
+      endedAt: now,
+    };
+  }
+
+  async function flushUsageData() {
+    if (!getBaseUrl()) return;
+    if (flushInProgress) return;
+    if (usageTurns === 0) return; // nothing to flush yet
+
+    const sid = usageSessionId || `session-${Date.now()}`;
+    flushInProgress = true;
+    try {
+      await api("PATCH", `/usage/sessions/${encodeURIComponent(sid)}`, buildUsagePayload());
+      lastFlushTurn = usageTurns;
+      lastFlushTime = Date.now();
+    } catch {
+      // best-effort — don't block the agent
+    } finally {
+      flushInProgress = false;
+    }
+  }
+
   function resetUsageAccumulators() {
     usageStartedAt = new Date().toISOString();
     usageTurns = 0;
     usageTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
     usageCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
     usageToolCalls = {};
+    lastFlushTurn = 0;
+    lastFlushTime = 0;
   }
 
   // Reset accumulators and capture session metadata on agent start
@@ -596,6 +731,13 @@ export default function (pi: ExtensionAPI) {
     resetUsageAccumulators();
     usageSessionId = ctx.sessionManager.getSessionId();
     usageModel = ctx.model?.id || "unknown";
+
+    // Start time-based periodic flush (every 3 minutes)
+    if (flushTimer) clearInterval(flushTimer);
+    flushTimer = setInterval(() => {
+      flushUsageData().catch(() => {});
+    }, FLUSH_TIME_INTERVAL_MS);
+    lastFlushTime = Date.now();
   });
 
   // Accumulate token usage from each turn's assistant message
@@ -619,6 +761,11 @@ export default function (pi: ExtensionAPI) {
         usageCost.cacheRead += u.cost.cacheRead || 0;
         usageCost.cacheWrite += u.cost.cacheWrite || 0;
         usageCost.total += u.cost.total || 0;
+      }
+
+      // Periodic flush: every 5 turns since last flush
+      if (usageTurns - lastFlushTurn >= FLUSH_TURN_INTERVAL) {
+        flushUsageData().catch(() => {}); // fire-and-forget
       }
 
       // Emit live token metrics to the feed for real-time speedometer
@@ -738,6 +885,7 @@ export default function (pi: ExtensionAPI) {
           metadata: {
             pid: process.pid,
             startedAt: new Date().toISOString(),
+            parentAgent: process.env.VERS_PARENT_AGENT || null,
           },
         });
       }
@@ -758,28 +906,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_end", async () => {
     if (!getBaseUrl()) return;
 
-    // POST session usage summary
-    const endedAt = new Date().toISOString();
+    // Stop the periodic flush timer — we're about to do the final write
+    if (flushTimer) {
+      clearInterval(flushTimer);
+      flushTimer = null;
+    }
+
+    // Final session upsert — uses PATCH so it merges with any partial flushes
     try {
-      const roundedCost = {
-        input: Math.round(usageCost.input * 1e6) / 1e6,
-        output: Math.round(usageCost.output * 1e6) / 1e6,
-        cacheRead: Math.round(usageCost.cacheRead * 1e6) / 1e6,
-        cacheWrite: Math.round(usageCost.cacheWrite * 1e6) / 1e6,
-        total: Math.round(usageCost.total * 1e6) / 1e6,
-      };
-      await api("POST", "/usage/sessions", {
-        sessionId: usageSessionId || `session-${Date.now()}`,
-        agent: agentName,
-        parentAgent: process.env.VERS_PARENT_AGENT || null,
-        model: usageModel,
-        tokens: { ...usageTokens },
-        cost: roundedCost,
-        turns: usageTurns,
-        toolCalls: { ...usageToolCalls },
-        startedAt: usageStartedAt || endedAt,
-        endedAt,
-      });
+      const sid = usageSessionId || `session-${Date.now()}`;
+      await api("PATCH", `/usage/sessions/${encodeURIComponent(sid)}`, buildUsagePayload());
     } catch {
       // best-effort — don't block agent shutdown
     }
@@ -1182,6 +1318,61 @@ export default function (pi: ExtensionAPI) {
   });
 
   // ===========================================================================
+  // Log Tools
+  // ===========================================================================
+
+  pi.registerTool({
+    name: "log_append",
+    label: "Log: Append Entry",
+    description:
+      "Append a work log entry — timestamped, append-only. Like Carmack's .plan file.",
+    parameters: Type.Object({
+      text: Type.String({ description: "Log entry text" }),
+      agent: Type.Optional(Type.String({ description: "Who is writing this entry (agent name)" })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const entry = await api("POST", "/log", params);
+        return ok(JSON.stringify(entry, null, 2), { entry });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "log_query",
+    label: "Log: Query Entries",
+    description:
+      "Query the work log. Returns timestamped entries filtered by time range. Use raw=true for plain text output suitable for piping into models.",
+    parameters: Type.Object({
+      since: Type.Optional(Type.String({ description: "Start time (ISO timestamp)" })),
+      until: Type.Optional(Type.String({ description: "End time (ISO timestamp)" })),
+      last: Type.Optional(Type.String({ description: 'Duration shorthand, e.g. "24h", "7d", "30d"' })),
+      raw: Type.Optional(Type.Boolean({ description: "Return plain text instead of JSON (default: false)" })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const qs = new URLSearchParams();
+        if (params.since) qs.set("since", params.since);
+        if (params.until) qs.set("until", params.until);
+        if (params.last) qs.set("last", params.last);
+        const query = qs.toString();
+        const endpoint = params.raw ? "/log/raw" : "/log";
+        const result = await api("GET", `${endpoint}${query ? `?${query}` : ""}`);
+        if (params.raw && typeof result === "string") {
+          return ok(result || "(no entries)");
+        }
+        return ok(JSON.stringify(result, null, 2), { result });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  // ===========================================================================
   // Feed Tools
   // ===========================================================================
 
@@ -1392,18 +1583,139 @@ export default function (pi: ExtensionAPI) {
     async execute() {
       if (!getBaseUrl()) return noUrlError();
       try {
-        const packageSkills = await getPackageSkillNames();
         const synced = await syncSkillsFromHub();
         const extsSynced = await syncExtensionsFromHub();
         const total = synced.length + extsSynced.length;
-        const skippedNote = packageSkills.size > 0
-          ? `\nSkipped (from packages): ${Array.from(packageSkills).join(", ")}`
-          : "";
         const text =
           total > 0
-            ? `Synced from hub:\nSkills: ${synced.join(", ") || "up to date"}\nExtensions: ${extsSynced.join(", ") || "up to date"}${skippedNote}${extsSynced.length > 0 ? "\n\nNote: Extension changes require /reload to take effect." : ""}`
-            : `Everything up to date.${skippedNote}`;
-        return ok(text, { skills: synced, extensions: extsSynced, skippedFromPackages: Array.from(packageSkills) });
+            ? `Synced from hub (hub skills override git packages):\nSkills: ${synced.join(", ") || "up to date"}\nExtensions: ${extsSynced.join(", ") || "up to date"}${extsSynced.length > 0 ? "\n\nNote: Extension changes require /reload to take effect." : ""}`
+            : `Everything up to date.`;
+        return ok(text, { skills: synced, extensions: extsSynced });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  // ===========================================================================
+  // KB (Knowledge Base) Tools
+  // ===========================================================================
+
+  pi.registerTool({
+    name: "kb_add",
+    label: "KB: Add Entry",
+    description:
+      "Add a knowledge base entry — lessons learned, conventions, SOPs, gotchas, decisions, or references. Use when the fleet learns something that should persist across sessions.",
+    parameters: Type.Object({
+      type: StringEnum(
+        ["lesson", "convention", "sop", "gotcha", "reference", "decision"] as const,
+        { description: "Entry type" },
+      ),
+      title: Type.String({ description: "Short descriptive title" }),
+      content: Type.String({ description: "Full content (markdown supported)" }),
+      source: Type.Optional(Type.String({ description: "Source, e.g. 'agent:backend-lt', 'human:noah'" })),
+      tags: Type.Optional(Type.Array(Type.String(), { description: "Tags for filtering" })),
+      priority: Type.Optional(
+        StringEnum(["low", "normal", "high", "critical"] as const, {
+          description: "Priority level (critical entries are always shown)",
+        }),
+      ),
+      decayDays: Type.Optional(
+        Type.Number({ description: "Days until entry expires (omit for permanent)" }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const entry = await api("POST", "/kb/entries", {
+          ...params,
+          source: params.source || `agent:${agentName}`,
+        });
+        return ok(JSON.stringify(entry, null, 2), { entry });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "kb_search",
+    label: "KB: Search",
+    description:
+      "Search the fleet knowledge base. Find lessons, conventions, SOPs, and gotchas. Use before starting unfamiliar work to check what the fleet already knows.",
+    parameters: Type.Object({
+      search: Type.Optional(Type.String({ description: "Full-text search query" })),
+      type: Type.Optional(
+        StringEnum(
+          ["lesson", "convention", "sop", "gotcha", "reference", "decision"] as const,
+          { description: "Filter by entry type" },
+        ),
+      ),
+      tag: Type.Optional(Type.String({ description: "Filter by tag" })),
+      priority: Type.Optional(
+        StringEnum(["low", "normal", "high", "critical"] as const, {
+          description: "Filter by priority",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const qs = new URLSearchParams();
+        if (params.search) qs.set("search", params.search);
+        if (params.type) qs.set("type", params.type);
+        if (params.tag) qs.set("tag", params.tag);
+        if (params.priority) qs.set("priority", params.priority);
+        const query = qs.toString();
+        const result = await api("GET", `/kb/entries${query ? `?${query}` : ""}`);
+        return ok(JSON.stringify(result, null, 2), { result });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "kb_briefing",
+    label: "KB: Get Briefing",
+    description:
+      "Get the full KB briefing document — all non-expired entries formatted as markdown. Also refreshes the local context file.",
+    parameters: Type.Object({
+      tags: Type.Optional(Type.Array(Type.String(), { description: "Filter by tags" })),
+    }),
+    async execute(_toolCallId, params) {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const qs = new URLSearchParams();
+        if (params.tags?.length) qs.set("tags", params.tags.join(","));
+        const query = qs.toString();
+        const result = await api<{ briefing: string; entryCount: number }>(
+          "GET",
+          `/kb/briefing${query ? `?${query}` : ""}`,
+        );
+        // Also refresh local context file
+        if (result.briefing) {
+          await mkdir(KB_CONTEXT_DIR, { recursive: true }).catch(() => {});
+          await writeFile(KB_BRIEFING_FILE, result.briefing).catch(() => {});
+        }
+        return ok(result.briefing || "(no KB entries)", { entryCount: result.entryCount });
+      } catch (e: any) {
+        return err(e.message);
+      }
+    },
+  });
+
+  pi.registerTool({
+    name: "kb_stats",
+    label: "KB: Stats",
+    description:
+      "Get KB statistics — total entries, entries by type/priority, top tags.",
+    parameters: Type.Object({}),
+    async execute() {
+      if (!getBaseUrl()) return noUrlError();
+      try {
+        const stats = await api("GET", "/kb/stats");
+        return ok(JSON.stringify(stats, null, 2), { stats });
       } catch (e: any) {
         return err(e.message);
       }

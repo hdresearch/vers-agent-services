@@ -5,6 +5,7 @@ import { generateOgImage } from "./og-image.js";
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { emit } from "../events/emit.js";
 
 function getReportHtml(): string {
   try {
@@ -22,6 +23,25 @@ function getReportHtml(): string {
  */
 export function createShareAdminRoutes(shareStore: ShareStore, reportsStore: ReportsStore): Hono {
   const routes = new Hono();
+
+  // GET /reports/shares — list ALL active share links across all reports
+  routes.get("/shares", (c) => {
+    const all = c.req.query("all") === "true";
+    const links = all ? shareStore.listAllLinks() : shareStore.listAllActiveLinks();
+    return c.json({ links, count: links.length });
+  });
+
+  // DELETE /reports/shares/:id — revoke and delete a share link
+  routes.delete("/shares/:id", (c) => {
+    const linkId = c.req.param("id");
+    const link = shareStore.getLink(linkId);
+    if (!link) {
+      return c.json({ error: "share link not found" }, 404);
+    }
+    shareStore.revokeLink(linkId);
+    const deleted = shareStore.deleteLink(linkId);
+    return c.json({ deleted: true, linkId });
+  });
 
   // POST /reports/:id/share — create a share link
   routes.post("/:id/share", async (c) => {
@@ -43,6 +63,7 @@ export function createShareAdminRoutes(shareStore: ShareStore, reportsStore: Rep
     const proto = c.req.header("x-forwarded-proto") || (host.includes("vers.sh") ? "https" : "http");
     const url = `${proto}://${host}/reports/share/${link.linkId}`;
 
+    emit('reports', 'reports.share.created', { linkId: link.linkId, reportId, url }, body.createdBy || 'admin');
     return c.json({ linkId: link.linkId, url }, 201);
   });
 
@@ -121,13 +142,21 @@ export function createSharePublicRoutes(shareStore: ShareStore, reportsStore: Re
     const link = shareStore.validateLink(linkId);
 
     if (!link) {
+      // Check if it's expired (not just missing) — return 410 Gone
+      const isExpired = shareStore.isExpired(linkId);
+      const status = isExpired ? 410 : 404;
+      const message = isExpired
+        ? "This share link has expired."
+        : "This share link is invalid or has been revoked.";
+      const title = isExpired ? "Gone" : "Not Found";
+
       return c.html(
         `<!DOCTYPE html>
-<html><head><title>Not Found</title>
+<html><head><title>${title}</title>
 <style>body{font-family:system-ui;background:#111;color:#aaa;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
 .msg{text-align:center}.msg h1{color:#e55;font-size:48px;margin:0}.msg p{font-size:16px;margin-top:12px}</style></head>
-<body><div class="msg"><h1>404</h1><p>This share link is invalid, expired, or has been revoked.</p></div></body></html>`,
-        404
+<body><div class="msg"><h1>${status}</h1><p>${message}</p></div></body></html>`,
+        status
       );
     }
 

@@ -1,6 +1,6 @@
 import { ulid } from "ulid";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, existsSync, copyFileSync } from "node:fs";
+import { atomicWriteFileSync, recoverTmpFile } from "../utils/atomic-write.js";
 
 // ─── Data Models ─────────────────────────────────────────────
 
@@ -49,8 +49,8 @@ export interface ChangeEvent {
 export interface SyncRequest {
   agentId: string;
   vmId?: string;
-  skills: { name: string; version: number }[];
-  extensions: { name: string; version: number }[];
+  skills: { name: string; version: number; source?: "hub" | "git" | "local" }[];
+  extensions: { name: string; version: number; source?: "hub" | "git" | "local" }[];
 }
 
 export interface SyncUpdate {
@@ -92,19 +92,8 @@ export interface SkillFilters {
 
 // ─── Errors ──────────────────────────────────────────────────
 
-export class NotFoundError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "NotFoundError";
-  }
-}
-
-export class ValidationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ValidationError";
-  }
-}
+export { NotFoundError, ValidationError } from "../errors.js";
+import { NotFoundError, ValidationError } from "../errors.js";
 
 // ─── Change Subscriber ──────────────────────────────────────
 
@@ -118,13 +107,24 @@ export class SkillStore {
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
   private subscribers: Set<ChangeSubscriber> = new Set();
   private changeLog: ChangeEvent[] = [];
+  private _restoredFromBackup = false;
 
   constructor(filePath = "data/skills.json") {
     this.filePath = filePath;
     this.load();
   }
 
+  /** Whether the store was restored from a backup file during startup */
+  get restoredFromBackup(): boolean {
+    return this._restoredFromBackup;
+  }
+
+  private get backupPath(): string {
+    return this.filePath + ".bak";
+  }
+
   private load(): void {
+    recoverTmpFile(this.filePath);
     try {
       if (existsSync(this.filePath)) {
         const raw = readFileSync(this.filePath, "utf-8");
@@ -141,6 +141,39 @@ export class SkillStore {
     } catch {
       this.skills = new Map();
     }
+
+    // If we loaded data, create a backup for deploy resilience
+    if (this.skills.size > 0) {
+      try {
+        copyFileSync(this.filePath, this.backupPath);
+      } catch {
+        // best-effort backup
+      }
+    } else {
+      // Data file is empty or missing — try to restore from backup
+      this.restoreFromBackup();
+    }
+  }
+
+  private restoreFromBackup(): void {
+    try {
+      if (!existsSync(this.backupPath)) return;
+      const raw = readFileSync(this.backupPath, "utf-8");
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.skills) && data.skills.length > 0) {
+        for (const s of data.skills) {
+          this.skills.set(s.name, s);
+        }
+        if (Array.isArray(data.changeLog)) {
+          this.changeLog = data.changeLog;
+        }
+        this._restoredFromBackup = true;
+        // Persist the restored data as the primary file
+        this.flush();
+      }
+    } catch {
+      // backup is corrupt — nothing we can do
+    }
   }
 
   private scheduleSave(): void {
@@ -156,16 +189,12 @@ export class SkillStore {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;
     }
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
     const data = JSON.stringify(
       { skills: Array.from(this.skills.values()), changeLog: this.changeLog },
       null,
       2,
     );
-    writeFileSync(this.filePath, data, "utf-8");
+    atomicWriteFileSync(this.filePath, data);
   }
 
   private emitChange(
@@ -327,6 +356,11 @@ export class SkillStore {
       .map((s) => ({ name: s.name, version: s.version }));
   }
 
+  /** Number of skills currently in the store */
+  get count(): number {
+    return this.skills.size;
+  }
+
   clear(): void {
     this.skills.clear();
     this.changeLog = [];
@@ -342,13 +376,24 @@ export class ExtensionStore {
   private writeTimer: ReturnType<typeof setTimeout> | null = null;
   private subscribers: Set<ChangeSubscriber> = new Set();
   private changeLog: ChangeEvent[] = [];
+  private _restoredFromBackup = false;
 
   constructor(filePath = "data/extensions.json") {
     this.filePath = filePath;
     this.load();
   }
 
+  /** Whether the store was restored from a backup file during startup */
+  get restoredFromBackup(): boolean {
+    return this._restoredFromBackup;
+  }
+
+  private get backupPath(): string {
+    return this.filePath + ".bak";
+  }
+
   private load(): void {
+    recoverTmpFile(this.filePath);
     try {
       if (existsSync(this.filePath)) {
         const raw = readFileSync(this.filePath, "utf-8");
@@ -365,6 +410,39 @@ export class ExtensionStore {
     } catch {
       this.extensions = new Map();
     }
+
+    // If we loaded data, create a backup for deploy resilience
+    if (this.extensions.size > 0) {
+      try {
+        copyFileSync(this.filePath, this.backupPath);
+      } catch {
+        // best-effort backup
+      }
+    } else {
+      // Data file is empty or missing — try to restore from backup
+      this.restoreFromBackup();
+    }
+  }
+
+  private restoreFromBackup(): void {
+    try {
+      if (!existsSync(this.backupPath)) return;
+      const raw = readFileSync(this.backupPath, "utf-8");
+      const data = JSON.parse(raw);
+      if (Array.isArray(data.extensions) && data.extensions.length > 0) {
+        for (const e of data.extensions) {
+          this.extensions.set(e.name, e);
+        }
+        if (Array.isArray(data.changeLog)) {
+          this.changeLog = data.changeLog;
+        }
+        this._restoredFromBackup = true;
+        // Persist the restored data as the primary file
+        this.flush();
+      }
+    } catch {
+      // backup is corrupt — nothing we can do
+    }
   }
 
   private scheduleSave(): void {
@@ -380,16 +458,12 @@ export class ExtensionStore {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;
     }
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
     const data = JSON.stringify(
       { extensions: Array.from(this.extensions.values()), changeLog: this.changeLog },
       null,
       2,
     );
-    writeFileSync(this.filePath, data, "utf-8");
+    atomicWriteFileSync(this.filePath, data);
   }
 
   private emitChange(
@@ -508,6 +582,11 @@ export class ExtensionStore {
       .map((e) => ({ name: e.name, version: e.version }));
   }
 
+  /** Number of extensions currently in the store */
+  get count(): number {
+    return this.extensions.size;
+  }
+
   clear(): void {
     this.extensions.clear();
     this.changeLog = [];
@@ -528,6 +607,7 @@ export class ManifestStore {
   }
 
   private load(): void {
+    recoverTmpFile(this.filePath);
     try {
       if (existsSync(this.filePath)) {
         const raw = readFileSync(this.filePath, "utf-8");
@@ -556,16 +636,12 @@ export class ManifestStore {
       clearTimeout(this.writeTimer);
       this.writeTimer = null;
     }
-    const dir = dirname(this.filePath);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
     const data = JSON.stringify(
       { manifests: Array.from(this.manifests.values()) },
       null,
       2,
     );
-    writeFileSync(this.filePath, data, "utf-8");
+    atomicWriteFileSync(this.filePath, data);
   }
 
   /**
@@ -594,9 +670,11 @@ export class ManifestStore {
 
     const updates: SyncUpdate[] = [];
 
-    // Build maps of what agent has
+    // Build maps of what agent has (with source tracking)
     const agentSkills = new Map(request.skills.map((s) => [s.name, s.version]));
+    const agentSkillSources = new Map(request.skills.map((s) => [s.name, s.source || "hub"]));
     const agentExtensions = new Map(request.extensions.map((e) => [e.name, e.version]));
+    const agentExtSources = new Map(request.extensions.map((e) => [e.name, e.source || "hub"]));
 
     // Build maps of what's current
     const hubSkills = new Map(currentSkills.map((s) => [s.name, s.version]));
@@ -612,10 +690,14 @@ export class ManifestStore {
       }
     }
 
-    // Skills: remove (agent has it but hub doesn't)
+    // Skills: remove — only for hub-sourced skills (not git or local)
+    // Git/local skills are managed outside the hub and should never be removed by sync.
     for (const [name, version] of agentSkills) {
       if (!hubSkills.has(name)) {
-        updates.push({ type: "skill", name, version, action: "remove" });
+        const source = agentSkillSources.get(name);
+        if (source === "hub" || source === undefined) {
+          updates.push({ type: "skill", name, version, action: "remove" });
+        }
       }
     }
 
@@ -629,10 +711,13 @@ export class ManifestStore {
       }
     }
 
-    // Extensions: remove
+    // Extensions: remove — only for hub-sourced extensions
     for (const [name, version] of agentExtensions) {
       if (!hubExtensions.has(name)) {
-        updates.push({ type: "extension", name, version, action: "remove" });
+        const source = agentExtSources.get(name);
+        if (source === "hub" || source === undefined) {
+          updates.push({ type: "extension", name, version, action: "remove" });
+        }
       }
     }
 

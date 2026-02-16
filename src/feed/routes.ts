@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { FeedStore, VALID_EVENT_TYPES } from "./store.js";
 import type { PublishInput, FeedEvent } from "./store.js";
+import { emit } from "../events/emit.js";
 
 export const feedStore = new FeedStore();
 export const feedRoutes = new Hono();
@@ -37,19 +38,25 @@ feedRoutes.post("/events", async (c) => {
     detail: input.detail as string | undefined,
     metadata: input.metadata as Record<string, unknown> | undefined,
   });
+  emit('feed', 'feed.event.published', { feedId: event.id, type: event.type, summary: event.summary }, event.agent);
   return c.json(event, 201);
 });
+
+// GET /events/stream — SSE route alias (must be before /events/:id to avoid matching as :id)
+feedRoutes.get("/events/stream", handleSSEStream);
 
 // GET /events — List events with optional filters
 feedRoutes.get("/events", (c) => {
   const agent = c.req.query("agent");
   const type = c.req.query("type");
+  const exclude = c.req.query("exclude");
   const since = c.req.query("since");
   const limitStr = c.req.query("limit");
   const limit = limitStr ? parseInt(limitStr, 10) : 50;
+  const excludeList = exclude ? exclude.split(",").map((s) => s.trim()) : undefined;
 
-  const events = feedStore.list({ agent, type, since, limit });
-  return c.json(events);
+  const events = feedStore.list({ agent, type, exclude: excludeList, since, limit });
+  return c.json({ events, count: events.length });
 });
 
 // GET /events/:id — Get single event
@@ -68,30 +75,44 @@ feedRoutes.delete("/events", (c) => {
   return c.json({ ok: true });
 });
 
+// POST /archive — Archive events older than N days (default: 7), keeping only recent in memory + file
+feedRoutes.post("/archive", (c) => {
+  const daysStr = new URL(c.req.url).searchParams.get("days") || "7";
+  const days = parseInt(daysStr, 10) || 7;
+  const result = feedStore.archive(days);
+  return c.json(result);
+});
+
 // GET /stats — Summary statistics
 feedRoutes.get("/stats", (c) => {
   return c.json(feedStore.stats());
 });
 
-// GET /stream — SSE stream of real-time events
-feedRoutes.get("/stream", (c) => {
+// SSE stream handler — shared between /stream and /events/stream
+function handleSSEStream(c: any) {
   const agent = c.req.query("agent");
   const sinceId = c.req.query("since");
+  const streamExclude = c.req.query("exclude");
+  const streamExcludeSet = streamExclude
+    ? new Set(streamExclude.split(",").map((s: string) => s.trim()))
+    : null;
 
   return streamSSE(c, async (stream) => {
+    // Subscribe FIRST to avoid missing events between replay and subscribe
+    const unsubscribe = feedStore.subscribe((event: FeedEvent) => {
+      if (agent && event.agent !== agent) return;
+      if (streamExcludeSet && streamExcludeSet.has(event.type)) return;
+      stream.writeSSE({ data: JSON.stringify(event) }).catch(() => {});
+    });
+
     // Replay events since a ULID if provided (for reconnection)
     if (sinceId) {
       const missed = feedStore.eventsSince(sinceId, agent);
       for (const event of missed) {
+        if (streamExcludeSet && streamExcludeSet.has(event.type)) continue;
         await stream.writeSSE({ data: JSON.stringify(event) });
       }
     }
-
-    // Subscribe to new events
-    const unsubscribe = feedStore.subscribe((event: FeedEvent) => {
-      if (agent && event.agent !== agent) return;
-      stream.writeSSE({ data: JSON.stringify(event) }).catch(() => {});
-    });
 
     // Heartbeat every 15s
     const heartbeat = setInterval(() => {
@@ -112,4 +133,7 @@ feedRoutes.get("/stream", (c) => {
     unsubscribe();
     clearInterval(heartbeat);
   });
-});
+}
+
+// GET /stream — SSE stream of real-time events
+feedRoutes.get("/stream", handleSSEStream);

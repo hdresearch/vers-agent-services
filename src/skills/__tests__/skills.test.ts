@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { Hono } from "hono";
 import { SkillStore, ExtensionStore, ManifestStore } from "../store.js";
 import { skillStore, extensionStore, manifestStore, skillsRoutes } from "../routes.js";
-import { unlinkSync, existsSync, mkdirSync } from "node:fs";
+import { unlinkSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 
 const app = new Hono();
 app.route("/skills", skillsRoutes);
@@ -376,6 +376,85 @@ describe("SkillHub Service", () => {
       const res = await jsonPost("/sync", { skills: [], extensions: [] });
       expect(res.status).toBe(400);
     });
+
+    it("does NOT remove git-sourced skills absent from hub", async () => {
+      // Agent has a git-sourced skill that the hub doesn't know about.
+      // Sync should NOT tell the agent to remove it.
+      const res = await jsonPost("/sync", {
+        agentId: "agent-1",
+        skills: [{ name: "git-only-skill", version: 1, source: "git" }],
+        extensions: [],
+      });
+      const data = await res.json();
+      expect(data.updates).toHaveLength(0);
+    });
+
+    it("does NOT remove local-sourced skills absent from hub", async () => {
+      const res = await jsonPost("/sync", {
+        agentId: "agent-1",
+        skills: [{ name: "local-skill", version: 1, source: "local" }],
+        extensions: [],
+      });
+      const data = await res.json();
+      expect(data.updates).toHaveLength(0);
+    });
+
+    it("DOES remove hub-sourced skills absent from hub", async () => {
+      // Agent has a hub-sourced skill that was deleted from hub.
+      // Sync should tell the agent to remove it.
+      const res = await jsonPost("/sync", {
+        agentId: "agent-1",
+        skills: [{ name: "deleted-hub-skill", version: 1, source: "hub" }],
+        extensions: [],
+      });
+      const data = await res.json();
+      expect(data.updates).toHaveLength(1);
+      expect(data.updates[0].action).toBe("remove");
+      expect(data.updates[0].name).toBe("deleted-hub-skill");
+    });
+
+    it("removes skills with no source (backward compat defaults to hub)", async () => {
+      // No source field → defaults to "hub" behavior (backward compatible)
+      const res = await jsonPost("/sync", {
+        agentId: "agent-1",
+        skills: [{ name: "old-format-skill", version: 1 }],
+        extensions: [],
+      });
+      const data = await res.json();
+      expect(data.updates).toHaveLength(1);
+      expect(data.updates[0].action).toBe("remove");
+    });
+
+    it("does NOT remove git-sourced extensions absent from hub", async () => {
+      const res = await jsonPost("/sync", {
+        agentId: "agent-1",
+        skills: [],
+        extensions: [{ name: "git-ext", version: 1, source: "git" }],
+      });
+      const data = await res.json();
+      expect(data.updates).toHaveLength(0);
+    });
+
+    it("still installs/updates hub skills even when agent has git version", async () => {
+      // Hub has skill-a v2. Agent has skill-a v1 from git.
+      // Sync should tell agent to update (hub is source of truth).
+      await jsonPost("/items", sampleSkill);
+      await jsonPost("/items", { ...sampleSkill, content: "# v2" }); // version 2
+
+      const res = await jsonPost("/sync", {
+        agentId: "agent-1",
+        skills: [{ name: "test-skill", version: 1, source: "git" }],
+        extensions: [],
+      });
+      const data = await res.json();
+      expect(data.updates).toHaveLength(1);
+      expect(data.updates[0]).toEqual({
+        type: "skill",
+        name: "test-skill",
+        version: 2,
+        action: "update",
+      });
+    });
   });
 
   // ─── Agent Inventory ────────────────────────────────────
@@ -515,13 +594,159 @@ describe("SkillHub Service", () => {
     });
   });
 
+  // ─── Health Check ─────────────────────────────────────────
+
+  describe("GET /skills/health — Health check", () => {
+    it("returns healthy when skills exist", async () => {
+      await jsonPost("/items", sampleSkill);
+      const res = await req("/health");
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.healthy).toBe(true);
+      expect(data.skills).toBe(1);
+      expect(data.restored).toBe(false);
+    });
+
+    it("returns 503 when no skills or extensions exist", async () => {
+      const res = await req("/health");
+      expect(res.status).toBe(503);
+      const data = await res.json();
+      expect(data.healthy).toBe(false);
+      expect(data.skills).toBe(0);
+      expect(data.extensions).toBe(0);
+    });
+  });
+
+  // ─── Deploy Resilience (Backup/Restore) ─────────────────
+
+  describe("SkillStore — Backup on startup", () => {
+    const testFile = "data/test-backup-skills.json";
+    const backupFile = testFile + ".bak";
+
+    afterEach(() => {
+      for (const f of [testFile, backupFile, testFile + ".tmp"]) {
+        if (existsSync(f)) unlinkSync(f);
+      }
+    });
+
+    it("creates a .bak file when loading data", () => {
+      const store1 = new SkillStore(testFile);
+      store1.publish({
+        name: "bak-test",
+        description: "Backup test",
+        content: "# backup",
+        publishedBy: "test",
+      });
+      store1.flush();
+
+      // Reload — should create backup
+      const store2 = new SkillStore(testFile);
+      expect(existsSync(backupFile)).toBe(true);
+      expect(store2.restoredFromBackup).toBe(false);
+    });
+
+    it("restores from .bak when primary file is empty", () => {
+      // Create a store with data and flush to create backup
+      const store1 = new SkillStore(testFile);
+      store1.publish({
+        name: "restore-me",
+        description: "Should be restored",
+        content: "# restore",
+        publishedBy: "test",
+      });
+      store1.flush();
+
+      // Reload to create backup
+      new SkillStore(testFile);
+      expect(existsSync(backupFile)).toBe(true);
+
+      // Simulate deploy wipe — write empty skills file
+      writeFileSync(testFile, JSON.stringify({ skills: [], changeLog: [] }));
+
+      // Reload — should restore from backup
+      const store3 = new SkillStore(testFile);
+      expect(store3.restoredFromBackup).toBe(true);
+      expect(store3.get("restore-me")).toBeDefined();
+      expect(store3.count).toBe(1);
+    });
+
+    it("restores from .bak when primary file is missing", () => {
+      const store1 = new SkillStore(testFile);
+      store1.publish({
+        name: "ghost",
+        description: "Gone",
+        content: "# gone",
+        publishedBy: "test",
+      });
+      store1.flush();
+
+      // Reload to create backup
+      new SkillStore(testFile);
+
+      // Simulate deploy wipe — delete primary
+      unlinkSync(testFile);
+
+      const store3 = new SkillStore(testFile);
+      expect(store3.restoredFromBackup).toBe(true);
+      expect(store3.get("ghost")).toBeDefined();
+    });
+
+    it("does not restore if backup is also empty", () => {
+      writeFileSync(backupFile, JSON.stringify({ skills: [], changeLog: [] }));
+      const store = new SkillStore(testFile);
+      expect(store.restoredFromBackup).toBe(false);
+      expect(store.count).toBe(0);
+    });
+  });
+
+  describe("ExtensionStore — Backup on startup", () => {
+    const testFile = "data/test-backup-extensions.json";
+    const backupFile = testFile + ".bak";
+
+    afterEach(() => {
+      for (const f of [testFile, backupFile, testFile + ".tmp"]) {
+        if (existsSync(f)) unlinkSync(f);
+      }
+    });
+
+    it("restores from .bak when primary file is wiped", () => {
+      const store1 = new ExtensionStore(testFile);
+      store1.publish({
+        name: "ext-restore",
+        description: "Restore me",
+        content: "// ext",
+        publishedBy: "test",
+      });
+      store1.flush();
+
+      // Reload to create backup
+      new ExtensionStore(testFile);
+
+      // Wipe
+      writeFileSync(testFile, JSON.stringify({ extensions: [], changeLog: [] }));
+
+      const store3 = new ExtensionStore(testFile);
+      expect(store3.restoredFromBackup).toBe(true);
+      expect(store3.get("ext-restore")).toBeDefined();
+      expect(store3.count).toBe(1);
+    });
+  });
+
   // ─── Store Persistence ──────────────────────────────────
 
   describe("SkillStore — Persistence", () => {
     const testFile = "data/test-skills.json";
 
+    beforeEach(() => {
+      for (const f of [testFile, testFile + ".tmp", testFile + ".bak"]) {
+        try { unlinkSync(f); } catch {}
+      }
+    });
+
     afterEach(() => {
-      if (existsSync(testFile)) unlinkSync(testFile);
+      for (const f of [testFile, testFile + ".tmp", testFile + ".bak"]) {
+        try { unlinkSync(f); } catch {}
+      }
     });
 
     it("persists and reloads skills", () => {

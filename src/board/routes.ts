@@ -5,10 +5,14 @@ import {
   ValidationError,
   type TaskFilters,
   type TaskStatus,
+  type TaskEffort,
   type AddArtifactInput,
 } from "./store.js";
+import { emit } from "../events/emit.js";
+import { boardStore } from "./shared-store.js";
+import { createDeepLinkedNotification } from "../notifications/deeplink.js";
 
-const store = new BoardStore();
+export const store = boardStore;
 
 export const boardRoutes = new Hono();
 
@@ -17,6 +21,20 @@ boardRoutes.post("/tasks", async (c) => {
   try {
     const body = await c.req.json();
     const task = store.createTask(body);
+    emit('board', 'board.task.created', { taskId: task.id, title: task.title, tags: task.tags, assignee: task.assignee, status: task.status }, task.createdBy);
+    // Deep-linked notification for task assignments
+    if (task.assignee) {
+      try {
+        createDeepLinkedNotification({
+          type: "update",
+          title: `📋 Task assigned: ${task.title}`,
+          body: `Assigned to ${task.assignee} by ${task.createdBy || "unknown"}`,
+          priority: "normal",
+          source: "board",
+          uiPath: "/ui/#board",
+        });
+      } catch {}
+    }
     return c.json(task, 201);
   } catch (e) {
     if (e instanceof ValidationError) return c.json({ error: e.message }, 400);
@@ -24,19 +42,40 @@ boardRoutes.post("/tasks", async (c) => {
   }
 });
 
-// List tasks with optional filters
+// List tasks with optional filters and pagination
 boardRoutes.get("/tasks", (c) => {
   const filters: TaskFilters = {};
   const status = c.req.query("status");
   const assignee = c.req.query("assignee");
   const tag = c.req.query("tag");
 
+  const effort = c.req.query("effort");
+  const unsupervisedGte = c.req.query("unsupervised_gte");
+
   if (status) filters.status = status as TaskStatus;
   if (assignee) filters.assignee = assignee;
   if (tag) filters.tag = tag;
+  if (effort) filters.effort = effort as TaskEffort;
+  if (unsupervisedGte) filters.unsupervised_gte = Number(unsupervisedGte);
 
-  const tasks = store.listTasks(filters);
-  return c.json({ tasks, count: tasks.length });
+  const allTasks = store.listTasks(filters);
+  const total = allTasks.length;
+
+  // Pagination: ?limit=100&offset=0 (default: all for backward compat, max 500)
+  const limitStr = c.req.query("limit");
+  const limit = limitStr ? Math.min(parseInt(limitStr, 10) || 100, 500) : undefined;
+  const offset = parseInt(c.req.query("offset") || "0", 10) || 0;
+
+  const tasks = limit !== undefined ? allTasks.slice(offset, offset + limit) : allTasks;
+
+  // ?compact=true strips notes, artifacts, and description for faster list loads
+  const compact = c.req.query("compact") === "true";
+  if (compact) {
+    const slim = tasks.map(({ notes, artifacts, description, ...rest }) => rest);
+    return c.json({ tasks: slim, count: slim.length, total });
+  }
+
+  return c.json({ tasks, count: tasks.length, total });
 });
 
 // Get a single task
@@ -80,6 +119,7 @@ boardRoutes.post("/tasks/:id/review", async (c) => {
 
     // Set status to in_review
     store.updateTask(id, { status: "in_review" });
+    emit('board', 'board.task.status_changed', { taskId: id, status: 'in_review', previous: 'unknown' }, body.reviewedBy?.trim());
 
     // Add summary note
     const author = body.reviewedBy?.trim() || "unknown";
@@ -118,6 +158,7 @@ boardRoutes.post("/tasks/:id/approve", async (c) => {
 
     // Set status to done
     store.updateTask(id, { status: "done" });
+    emit('board', 'board.task.status_changed', { taskId: id, status: 'done', action: 'approved' }, approvedBy);
 
     // Add approval note
     const noteContent = comment
@@ -152,6 +193,7 @@ boardRoutes.post("/tasks/:id/reject", async (c) => {
 
     // Set status to open
     store.updateTask(id, { status: "open" });
+    emit('board', 'board.task.status_changed', { taskId: id, status: 'open', action: 'rejected', reason: body.reason.trim() }, rejectedBy);
 
     // Add rejection note
     store.addNote(id, {
@@ -181,6 +223,7 @@ boardRoutes.patch("/tasks/:id", async (c) => {
   try {
     const body = await c.req.json();
     const task = store.updateTask(c.req.param("id"), body);
+    emit('board', body.status ? 'board.task.status_changed' : 'board.task.updated', { taskId: task.id, ...body }, task.assignee || undefined);
     return c.json(task);
   } catch (e) {
     if (e instanceof NotFoundError) return c.json({ error: e.message }, 404);
@@ -230,3 +273,5 @@ boardRoutes.get("/tasks/:id/notes", (c) => {
     throw e;
   }
 });
+
+

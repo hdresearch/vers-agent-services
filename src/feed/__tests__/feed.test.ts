@@ -92,16 +92,17 @@ describe("Feed Service", () => {
     it("returns empty array when no events", async () => {
       const res = await req("/events");
       expect(res.status).toBe(200);
-      const events = await res.json();
-      expect(events).toEqual([]);
+      const body = await res.json();
+      expect(body).toEqual({ events: [], count: 0 });
     });
 
     it("returns published events", async () => {
       await publishEvent({ agent: "a1", summary: "first" });
       await publishEvent({ agent: "a2", summary: "second" });
       const res = await req("/events");
-      const events = await res.json();
-      expect(events).toHaveLength(2);
+      const body = await res.json();
+      expect(body.events).toHaveLength(2);
+      expect(body.count).toBe(2);
     });
 
     it("filters by agent", async () => {
@@ -109,8 +110,9 @@ describe("Feed Service", () => {
       await publishEvent({ agent: "a2" });
       await publishEvent({ agent: "a1" });
       const res = await req("/events?agent=a1");
-      const events = await res.json();
+      const { events, count } = await res.json();
       expect(events).toHaveLength(2);
+      expect(count).toBe(2);
       expect(events.every((e: any) => e.agent === "a1")).toBe(true);
     });
 
@@ -119,9 +121,32 @@ describe("Feed Service", () => {
       await publishEvent({ type: "task_completed" });
       await publishEvent({ type: "task_started" });
       const res = await req("/events?type=task_started");
-      const events = await res.json();
+      const { events, count } = await res.json();
       expect(events).toHaveLength(2);
+      expect(count).toBe(2);
       expect(events.every((e: any) => e.type === "task_started")).toBe(true);
+    });
+
+    it("excludes event types with ?exclude param", async () => {
+      await publishEvent({ type: "task_started", summary: "start" });
+      await publishEvent({ type: "cost_update", summary: "cost noise" });
+      await publishEvent({ type: "token_update", summary: "token noise" });
+      await publishEvent({ type: "task_completed", summary: "done" });
+      const res = await req("/events?exclude=cost_update,token_update");
+      const { events, count } = await res.json();
+      expect(count).toBe(2);
+      expect(events[0].summary).toBe("start");
+      expect(events[1].summary).toBe("done");
+      expect(events.every((e: any) => e.type !== "cost_update" && e.type !== "token_update")).toBe(true);
+    });
+
+    it("exclude param with single type", async () => {
+      await publishEvent({ type: "task_started", summary: "keep" });
+      await publishEvent({ type: "cost_update", summary: "noise" });
+      const res = await req("/events?exclude=cost_update");
+      const { events } = await res.json();
+      expect(events).toHaveLength(1);
+      expect(events[0].summary).toBe("keep");
     });
 
     it("filters by since (ISO timestamp)", async () => {
@@ -131,8 +156,9 @@ describe("Feed Service", () => {
       await new Promise((r) => setTimeout(r, 10));
       await publishEvent({ summary: "new" });
       const res = await req(`/events?since=${cutoff}`);
-      const events = await res.json();
+      const { events, count } = await res.json();
       expect(events).toHaveLength(1);
+      expect(count).toBe(1);
       expect(events[0].summary).toBe("new");
     });
 
@@ -141,8 +167,9 @@ describe("Feed Service", () => {
         await publishEvent({ summary: `event-${i}` });
       }
       const res = await req("/events?limit=3");
-      const events = await res.json();
+      const { events, count } = await res.json();
       expect(events).toHaveLength(3);
+      expect(count).toBe(3);
       // Should return last 3
       expect(events[2].summary).toBe("event-9");
     });
@@ -172,8 +199,8 @@ describe("Feed Service", () => {
       const delRes = await req("/events", { method: "DELETE" });
       expect(delRes.status).toBe(200);
       const listRes = await req("/events");
-      const events = await listRes.json();
-      expect(events).toEqual([]);
+      const body = await listRes.json();
+      expect(body).toEqual({ events: [], count: 0 });
     });
   });
 
@@ -368,5 +395,30 @@ describe("Feed Service", () => {
       const e2 = await r2.json();
       expect(e1.id < e2.id).toBe(true);
     });
+  });
+});
+
+// --- Route Alias Tests ---
+
+describe("Feed Route Aliases", () => {
+  it("GET /events/stream returns SSE stream (alias for /stream)", async () => {
+    const res = await req("/events/stream");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+    // Publish an event and verify it arrives through the alias
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+
+    feedStore.publish({
+      agent: "alias-test",
+      type: "task_started",
+      summary: "Test via events/stream alias",
+    });
+
+    const { value } = await reader.read();
+    const text = decoder.decode(value);
+    expect(text).toContain("alias-test");
+    reader.cancel();
   });
 });
