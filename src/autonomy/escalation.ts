@@ -10,6 +10,7 @@
 
 import { AutonomyStore, NEVER_AUTO_APPROVE, type Escalation, type NeverAutoApproveAction } from "./store.js";
 import { emit } from "../events/emit.js";
+import { createDeepLinkedNotification } from "../notifications/deeplink.js";
 
 export interface EscalationDeps {
   store: AutonomyStore;
@@ -170,7 +171,6 @@ export class EscalationEngine {
 
   private async sendNotification(esc: Escalation): Promise<void> {
     const baseUrl = this.deps.selfBaseUrl || "http://localhost:3000";
-    const token = this.deps.authToken || process.env.VERS_AUTH_TOKEN || "";
 
     const priorityMap: Record<Escalation["type"], string> = {
       budget_warning: "high",
@@ -181,24 +181,27 @@ export class EscalationEngine {
       blocker: "high",
     };
 
+    // Map escalation types to UI deep-link paths
+    const uiPathMap: Record<Escalation["type"], string> = {
+      budget_warning: "/ui/v2",
+      agent_failure: "/ui/#services",
+      security_event: "/ui/v2",
+      sprint_approval: "/ui/pm",
+      fleet_message: "/ui/#comms",
+      blocker: "/ui/#board",
+    };
+
     try {
-      await fetch(`${baseUrl}/notifications`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          type: "attention",
-          title: esc.title,
-          body: esc.detail,
-          priority: priorityMap[esc.type] || "normal",
-          source: "autonomy-loop",
-          url: `#autonomy/escalation/${esc.id}`,
-        }),
-      });
+      createDeepLinkedNotification({
+        type: "attention",
+        title: esc.title,
+        body: esc.detail,
+        priority: priorityMap[esc.type] || "normal",
+        source: "autonomy-loop",
+        uiPath: uiPathMap[esc.type] || "/ui/",
+      }, baseUrl);
     } catch (err) {
-      console.error("[autonomy] notification POST failed:", err);
+      console.error("[autonomy] deep-linked notification failed:", err);
     }
   }
 }

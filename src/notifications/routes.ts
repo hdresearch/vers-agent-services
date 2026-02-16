@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 
-interface Notification {
+export interface Notification {
   id: string;
   type: string; // attention, chat, alert, update, custom
   title: string;
@@ -105,6 +105,30 @@ export const notificationRoutes = new Hono();
 notificationRoutes.post("/", async (c) => {
   const body = await c.req.json();
   const notif = notificationStore.create(body);
+  return c.json(notif, 201);
+});
+
+// Test deep-linked notification
+notificationRoutes.post("/test", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const { path = "/ui/#comms", message = "Test deep-linked notification" } = body as any;
+
+  // Lazy import to avoid circular dependency at module load time
+  const { createDeepLinkedNotification } = await import("./deeplink.js");
+
+  const host = c.req.header("host") || "localhost:3000";
+  const proto = c.req.header("x-forwarded-proto") || "https";
+  const baseUrl = `${proto}://${host}`;
+
+  const notif = createDeepLinkedNotification({
+    type: "custom",
+    title: "🔗 Deep Link Test",
+    body: message,
+    priority: "normal",
+    source: "notification-test",
+    uiPath: path,
+  }, baseUrl);
+
   return c.json(notif, 201);
 });
 

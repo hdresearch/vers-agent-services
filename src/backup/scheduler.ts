@@ -8,6 +8,7 @@
 
 import { BackupStore } from "./store.js";
 import { emit } from "../events/emit.js";
+import { createDeepLinkedNotification } from "../notifications/deeplink.js";
 
 export class BackupScheduler {
   private store: BackupStore;
@@ -93,6 +94,20 @@ export class BackupScheduler {
       });
 
       console.error(`[backup-scheduler] Snapshot failed (${this.consecutiveFailures} consecutive):`, err);
+
+      // Notify on repeated failures
+      if (this.consecutiveFailures >= 2) {
+        try {
+          createDeepLinkedNotification({
+            type: "alert",
+            title: `⚠️ Backup failing (${this.consecutiveFailures}x)`,
+            body: `Error: ${this.lastError}`,
+            priority: this.consecutiveFailures >= 3 ? "critical" : "high",
+            source: "backup-scheduler",
+            uiPath: "/ui/#services",
+          });
+        } catch {}
+      }
     }
   }
 
