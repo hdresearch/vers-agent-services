@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { bearerAuth } from "./auth.js";
+import { keyRoutes } from "./auth/key-routes.js";
 import { boardRoutes } from "./board/routes.js";
 import { feedRoutes } from "./feed/routes.js";
 import { logRoutes } from "./log/routes.js";
@@ -28,6 +29,7 @@ app.route("/reports", sharePublicRoutes);
 app.route("/twilio", twilioRoutes);
 
 // Bearer auth — applied per-route to API endpoints
+app.use("/auth/*", bearerAuth());
 app.use("/board/*", bearerAuth());
 app.use("/feed/*", bearerAuth());
 app.use("/log/*", bearerAuth());
@@ -39,6 +41,7 @@ app.use("/commits/*", bearerAuth());
 app.use("/journal/*", bearerAuth());
 
 // Mount service routes
+app.route("/auth", keyRoutes);
 app.route("/board", boardRoutes);
 app.route("/feed", feedRoutes);
 app.route("/log", logRoutes);
