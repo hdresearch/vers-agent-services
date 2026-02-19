@@ -191,11 +191,22 @@ ${artifactsSection}
 ## Instructions:
 1. Clone the repository: git clone ${repo} /root/workspace/chelsea
 2. cd /root/workspace/chelsea
-3. Create a branch: git checkout -b fix/${slug}
+3. Create a NEW branch: git checkout -b fix/${slug}
 4. Implement the changes described in the findings above
-5. Commit and push
-6. Create a PR using: gh pr create --base ${baseBranch} --title "${task.title}" --body "Automated implementation for task ${task.id}\\n\\nBased on investigation findings from the board."
-7. Report back the PR URL
+5. Commit your changes on your new branch
+6. Push your new branch: git push origin fix/${slug}
+7. Create a NEW PR: gh pr create --base ${baseBranch} --title "${task.title}" --body "Automated implementation for task ${task.id}\\n\\nBased on investigation findings from the board."
+8. Report back the PR URL
+
+## CRITICAL SAFETY RULES — READ BEFORE DOING ANYTHING:
+- You may ONLY create a NEW branch and a NEW pull request.
+- Do NOT modify, close, merge, edit, or comment on any existing PRs.
+- Do NOT push to any existing branch (main, next, or any other branch that already exists).
+- Do NOT use \`git push --force\` or \`git push -f\` under any circumstances.
+- Do NOT use \`gh pr close\`, \`gh pr merge\`, \`gh pr edit\`, or \`gh pr review\` on any PR.
+- Do NOT delete any remote branches.
+- If your branch name already exists on the remote, append a short random suffix (e.g. fix/${slug}-a1b2) instead of force-pushing.
+- Your ONLY git write operations should be: create branch, commit, push new branch, create new PR. Nothing else.
 
 ## Progress reporting:
 You have access to the coordination dashboard. Use these tools as you work:
@@ -502,5 +513,6 @@ implementRoutes.get("/implement/jobs/:id/output", (c) => {
   const output = jobOutputs.get(jobId) || "";
   return c.json({ jobId, output });
 });
+
 
 
