@@ -12,6 +12,7 @@ import { commitRoutes } from "./commits/routes.js";
 import { journalRoutes } from "./journal/routes.js";
 import { uiRoutes } from "./ui/routes.js";
 import { twilioRoutes } from "./twilio/routes.js";
+import { implementRoutes } from "./implement/routes.js";
 
 const app = new Hono();
 
@@ -37,6 +38,7 @@ app.use("/reports/*", bearerAuth());
 app.use("/usage/*", bearerAuth());
 app.use("/commits/*", bearerAuth());
 app.use("/journal/*", bearerAuth());
+app.use("/implement/*", bearerAuth());
 
 // Mount service routes
 app.route("/board", boardRoutes);
@@ -48,6 +50,7 @@ app.route("/reports", reportsRoutes);
 app.route("/usage", usageRoutes);
 app.route("/commits", commitRoutes);
 app.route("/journal", journalRoutes);
+app.route("/", implementRoutes);
 
 // TODO: mount these as they're built
 // app.route("/context", contextRoutes);
@@ -67,3 +70,6 @@ serve({ fetch: app.fetch, port, hostname: "::" }, () => {
 });
 
 export { app };
+
+
+
