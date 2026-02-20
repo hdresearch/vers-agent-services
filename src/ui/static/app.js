@@ -384,6 +384,197 @@ function stopJournalRefresh() {
   }
 }
 
+// ─── Implementation Jobs Tracker ───
+
+// Map of taskId -> { jobId, status, startedAt, prUrl, error, pollTimer }
+const activeJobs = {};
+
+function elapsedStr(startedAt) {
+  if (!startedAt) return '';
+  const ms = Date.now() - new Date(startedAt).getTime();
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+function statusIcon(status) {
+  if (status === 'done') return '✅';
+  if (status === 'failed') return '❌';
+  return '🔄';
+}
+
+function renderJobStatus(taskId) {
+  const job = activeJobs[taskId];
+  if (!job) return '';
+  const statusCls = job.status || 'starting';
+  let inner = `<div class="job-status-header">
+    <span class="rj-status">${statusIcon(job.status)}</span>
+    <span class="job-status-label">Implementation: ${esc(job.status)}</span>
+    <span class="job-elapsed">${elapsedStr(job.startedAt)}</span>
+  </div>`;
+  if (job.status === 'done' && job.prUrl) {
+    inner += `<div class="job-actions"><a class="job-link" href="${esc(job.prUrl)}" target="_blank">🔗 View Pull Request</a></div>`;
+  }
+  if (job.status === 'failed' && job.error) {
+    inner += `<div class="job-error">Error: ${esc(job.error)}</div>`;
+  }
+  inner += `<div class="job-actions"><a class="job-link" href="${API}/implement/jobs/${job.jobId}/output" target="_blank">View raw output</a></div>`;
+  return `<div class="job-status ${statusCls}" id="job-status-${taskId}">${inner}</div>`;
+}
+
+function updateJobStatusInline(taskId) {
+  const el = document.getElementById(`job-status-${taskId}`);
+  const job = activeJobs[taskId];
+  if (!el || !job) return;
+  const statusCls = job.status || 'starting';
+  el.className = `job-status ${statusCls}`;
+  let inner = `<div class="job-status-header">
+    <span class="rj-status">${statusIcon(job.status)}</span>
+    <span class="job-status-label">Implementation: ${esc(job.status)}</span>
+    <span class="job-elapsed">${elapsedStr(job.startedAt)}</span>
+  </div>`;
+  if (job.status === 'done' && job.prUrl) {
+    inner += `<div class="job-actions"><a class="job-link" href="${esc(job.prUrl)}" target="_blank">🔗 View Pull Request</a></div>`;
+  }
+  if (job.status === 'failed' && job.error) {
+    inner += `<div class="job-error">Error: ${esc(job.error)}</div>`;
+  }
+  inner += `<div class="job-actions"><a class="job-link" href="${API}/implement/jobs/${job.jobId}/output" target="_blank">View raw output</a></div>`;
+  el.innerHTML = inner;
+}
+
+function startJobPolling(taskId, jobId) {
+  if (activeJobs[taskId]?.pollTimer) clearInterval(activeJobs[taskId].pollTimer);
+
+  const poll = async () => {
+    try {
+      const res = await fetch(`${API}/implement/jobs/${jobId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const job = activeJobs[taskId];
+      if (!job) return;
+      job.status = data.status;
+      job.prUrl = data.prUrl || job.prUrl;
+      job.error = data.error || job.error;
+      job.startedAt = data.startedAt || job.startedAt;
+      updateJobStatusInline(taskId);
+      renderRunningJobs();
+      if (data.status === 'done' || data.status === 'failed') {
+        clearInterval(job.pollTimer);
+        job.pollTimer = null;
+      }
+    } catch (e) {
+      console.error('Job poll error:', e);
+    }
+  };
+
+  activeJobs[taskId].pollTimer = setInterval(poll, 5000);
+  // Immediate first poll
+  poll();
+}
+
+function renderRunningJobs() {
+  const container = document.getElementById('running-jobs');
+  if (!container) return;
+  const running = Object.entries(activeJobs).filter(([, j]) => j.status === 'starting' || j.status === 'running');
+  if (!running.length) {
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = 'block';
+  let chips = '';
+  for (const [taskId, job] of running) {
+    chips += `<div class="running-job-chip">
+      <span class="rj-status">${statusIcon(job.status)}</span>
+      <span>${esc(job.taskTitle || taskId.slice(0, 8))}</span>
+      <span style="color:var(--text-dim)">${elapsedStr(job.startedAt)}</span>
+    </div>`;
+  }
+  container.innerHTML = `<div class="running-jobs-title">🔄 Running Implementations</div><div class="running-jobs-list">${chips}</div>`;
+}
+
+// ─── Implement Task ───
+
+let _implementResolve = null;
+let _implementTaskId = null;
+
+function implementTask(taskId) {
+  _implementTaskId = taskId;
+  const modal = document.getElementById('implement-modal');
+  modal.style.display = 'flex';
+}
+
+function _initImplementModal() {
+  document.getElementById('impl-confirm').addEventListener('click', async () => {
+    const taskId = _implementTaskId;
+    const commitId = document.getElementById('impl-commit-id').value.trim();
+    const repo = document.getElementById('impl-repo').value.trim();
+    const baseBranch = document.getElementById('impl-base-branch').value.trim();
+
+    if (!commitId || !repo || !baseBranch) {
+      alert('All fields are required');
+      return;
+    }
+
+    document.getElementById('implement-modal').style.display = 'none';
+
+    try {
+      const res = await fetch(`${API}/board/tasks/${taskId}/implement`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ goldenCommitId: commitId, repoUrl: repo, baseBranch }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        alert('Failed to start implementation: ' + text);
+        return;
+      }
+      const data = await res.json();
+      const jobId = data.jobId;
+
+      // Get task title for display
+      const card = document.querySelector(`.review-card[data-id="${taskId}"]`);
+      const title = card ? card.querySelector('.review-title')?.textContent : '';
+
+      activeJobs[taskId] = {
+        jobId,
+        status: data.status || 'starting',
+        startedAt: new Date().toISOString(),
+        prUrl: null,
+        error: null,
+        pollTimer: null,
+        taskTitle: title,
+      };
+
+      // Insert job status into the review card
+      if (card) {
+        // Remove existing job status if any
+        const existing = card.querySelector('.job-status');
+        if (existing) existing.remove();
+        card.insertAdjacentHTML('beforeend', renderJobStatus(taskId));
+      }
+
+      renderRunningJobs();
+      startJobPolling(taskId, jobId);
+    } catch (e) {
+      alert('Implementation error: ' + e.message);
+    }
+  });
+
+  document.getElementById('impl-cancel').addEventListener('click', () => {
+    document.getElementById('implement-modal').style.display = 'none';
+  });
+
+  // Close on overlay click
+  document.getElementById('implement-modal').addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) {
+      e.currentTarget.style.display = 'none';
+    }
+  });
+}
+
 // ─── Review Queue ───
 
 let reviewRefreshTimer = null;
@@ -425,6 +616,9 @@ async function loadReview() {
       const submittedBy = latestNote ? latestNote.author : t.createdBy;
       const submittedAt = t.updatedAt;
 
+      // Check if there's an active job for this task
+      const jobStatusHtml = activeJobs[t.id] ? renderJobStatus(t.id) : '';
+
       html += `<div class="review-card" data-id="${t.id}">
         <div class="review-card-header">
           <div class="review-title">${esc(t.title)}</div>
@@ -437,8 +631,10 @@ async function loadReview() {
         ${artifactsHtml}
         <div class="review-actions">
           <button class="btn btn-approve" onclick="approveTask('${t.id}')">✓ Approve</button>
+          <button class="btn btn-implement" onclick="implementTask('${t.id}')">🚀 Implement</button>
           <button class="btn btn-reject" onclick="rejectTask('${t.id}')">✗ Reject</button>
         </div>
+        ${jobStatusHtml}
       </div>`;
     }
     container.innerHTML = html;
@@ -725,8 +921,36 @@ let activeView = 'board';
 
 // ─── Init ───
 
+async function restoreActiveJobs() {
+  // On page load, check for any running implementation jobs
+  try {
+    const data = await api('/implement/jobs');
+    const jobs = data.jobs || [];
+    for (const job of jobs) {
+      if (job.status === 'starting' || job.status === 'running') {
+        activeJobs[job.taskId] = {
+          jobId: job.id,
+          status: job.status,
+          startedAt: job.startedAt,
+          prUrl: job.prUrl || null,
+          error: job.error || null,
+          pollTimer: null,
+          taskTitle: job.taskId.slice(0, 8),
+        };
+        startJobPolling(job.taskId, job.id);
+      }
+    }
+    renderRunningJobs();
+  } catch (e) {
+    // Jobs endpoint may not exist yet, that's fine
+    console.debug('Could not restore active jobs:', e.message);
+  }
+}
+
 async function init() {
   await Promise.all([loadBoard(), loadFeed(), loadRegistry(), loadReports()]);
+  _initImplementModal();
+  restoreActiveJobs();
   startSSE();
 
   // Poll board, registry, reports every 10s — but only refresh visible views
@@ -777,3 +1001,10 @@ async function init() {
 }
 
 init();
+
+// Expose functions used by inline onclick handlers (module scope is not global)
+window.bumpTask = bumpTask;
+window.approveTask = approveTask;
+window.rejectTask = rejectTask;
+window.implementTask = implementTask;
+

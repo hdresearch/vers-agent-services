@@ -67,6 +67,7 @@
         <span class="log-refresh-hint">auto-refresh 30s</span>
       </div>
     </div>
+    <div class="running-jobs" id="running-jobs" style="display:none"></div>
     <div class="review-list" id="review-list">
       <div class="empty">Loading review queue…</div>
     </div>
@@ -228,6 +229,20 @@
         <div class="analytics-viz-panel">
           <canvas id="analytics-chart-canvas"></canvas>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Implementation config modal -->
+  <div class="modal-overlay" id="implement-modal" style="display:none">
+    <div class="implement-modal">
+      <h3>Configure Implementation</h3>
+      <label>Golden Commit ID<input type="text" id="impl-commit-id" value="8517339b-a9e7-47cc-94f2-533eb99e162d"></label>
+      <label>Repository URL<input type="text" id="impl-repo" value="https://github.com/hdresearch/chelsea.git"></label>
+      <label>Base Branch<input type="text" id="impl-base-branch" value="next"></label>
+      <div class="modal-actions">
+        <button class="btn btn-approve" id="impl-confirm">🚀 Start Implementation</button>
+        <button class="btn" id="impl-cancel">Cancel</button>
       </div>
     </div>
   </div>

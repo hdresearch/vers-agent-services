@@ -800,6 +800,114 @@ html, body {
   height: 100%;
 }
 
+/* ─── Implement Button ─── */
+.btn-implement {
+  color: #4a4; border-color: #4a4;
+}
+.btn-implement:hover { background: #0a1a0a; }
+
+/* ─── Job Status (inline on review card) ─── */
+.job-status {
+  margin-top: 12px; padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px; border-radius: 3px;
+  background: rgba(255,255,255,0.02);
+}
+.job-status .job-status-header {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+}
+.job-status .job-status-label {
+  font-weight: 600; font-size: 11px;
+}
+.job-status .job-elapsed {
+  color: var(--text-dim); font-size: 10px; margin-left: auto;
+}
+.job-status .job-link {
+  color: var(--blue); text-decoration: none; font-size: 11px;
+}
+.job-status .job-link:hover { text-decoration: underline; }
+.job-status .job-error {
+  color: var(--red); font-size: 11px; margin-top: 4px;
+  word-break: break-word;
+}
+.job-status .job-actions {
+  display: flex; gap: 8px; margin-top: 6px;
+}
+
+.job-status.running {
+  border-left: 3px solid var(--yellow);
+  animation: jobPulse 2s ease-in-out infinite;
+}
+.job-status.done {
+  border-left: 3px solid var(--accent);
+}
+.job-status.failed {
+  border-left: 3px solid var(--red);
+}
+.job-status.starting {
+  border-left: 3px solid var(--blue);
+  animation: jobPulse 2s ease-in-out infinite;
+}
+
+@keyframes jobPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+/* ─── Implement Modal ─── */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.7); z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+}
+.implement-modal {
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 6px; padding: 24px; width: 440px; max-width: 90vw;
+}
+.implement-modal h3 {
+  color: var(--text-bright); font-size: 14px; margin-bottom: 16px;
+  font-weight: 600;
+}
+.implement-modal label {
+  display: block; margin-bottom: 12px; font-size: 11px;
+  color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px;
+}
+.implement-modal input {
+  display: block; width: 100%; margin-top: 4px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--text); padding: 8px 10px; border-radius: 3px;
+  font-family: inherit; font-size: 12px;
+}
+.implement-modal input:focus {
+  outline: none; border-color: #4a4;
+}
+.modal-actions {
+  display: flex; gap: 8px; margin-top: 20px; justify-content: flex-end;
+}
+
+/* ─── Running Jobs Section ─── */
+.running-jobs {
+  padding: 10px 20px; border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.running-jobs-title {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--yellow); font-weight: 600; margin-bottom: 8px;
+  display: flex; align-items: center; gap: 6px;
+}
+.running-jobs-list {
+  display: flex; flex-wrap: wrap; gap: 8px;
+}
+.running-job-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 3px; padding: 4px 10px; font-size: 11px;
+  color: var(--text);
+}
+.running-job-chip .rj-status {
+  font-size: 12px;
+}
+
 /* Responsive */
 @media (max-width: 900px) {
   .main { grid-template-columns: 1fr; height: auto; }
