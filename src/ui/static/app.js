@@ -1001,3 +1001,10 @@ async function init() {
 }
 
 init();
+
+// Expose functions used by inline onclick handlers (module scope is not global)
+window.bumpTask = bumpTask;
+window.approveTask = approveTask;
+window.rejectTask = rejectTask;
+window.implementTask = implementTask;
+

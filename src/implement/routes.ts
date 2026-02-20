@@ -268,6 +268,76 @@ async function runImplementation(job: ImplementJob, task: Task, request: Impleme
       throw new Error("VM did not become SSH-ready within 60 seconds");
     }
 
+    // 4b. Install safety wrappers that mechanically block destructive operations.
+    //     These replace the real gh/git with wrapper scripts that filter commands.
+    //     The agent CAN'T bypass these — they're the actual binaries on PATH.
+    const safetyScript = [
+      "set -e",
+      "",
+      "# --- gh wrapper: only allow 'gh pr create' and read-only commands ---",
+      "REAL_GH=$(which gh)",
+      "cat > /usr/local/bin/gh << 'GHWRAP'",
+      "#!/bin/bash",
+      'BLOCKED_PR="close merge edit review comment delete"',
+      'BLOCKED_TOP="repo issue gist"',
+      'if [ "$1" = "pr" ]; then',
+      '  for b in $BLOCKED_PR; do',
+      '    if [ "$2" = "$b" ]; then',
+      '      echo "BLOCKED: gh pr $2 is not allowed. This agent may only create new PRs." >&2',
+      "      exit 1",
+      "    fi",
+      "  done",
+      "fi",
+      'for b in $BLOCKED_TOP; do',
+      '  if [ "$1" = "$b" ] && [ "$2" != "view" ] && [ "$2" != "list" ]; then',
+      '    echo "BLOCKED: gh $1 $2 is not allowed." >&2',
+      "    exit 1",
+      "  fi",
+      "done",
+      'exec "$REAL_GH_BIN" "$@"',
+      "GHWRAP",
+      'sed -i "s|\\$REAL_GH_BIN|$REAL_GH|" /usr/local/bin/gh',
+      "chmod +x /usr/local/bin/gh",
+      "",
+      "# --- git wrapper: block force-push, push to protected branches, delete ---",
+      "REAL_GIT=$(which git)",
+      'mv "$REAL_GIT" "${REAL_GIT}.real"',
+      'cat > "$REAL_GIT" << \'GITWRAP\'',
+      "#!/bin/bash",
+      'D=$(dirname "$0"); R="$D/git.real"',
+      'if [ "$1" = "push" ]; then',
+      '  for a in "$@"; do',
+      '    case "$a" in',
+      "      --force|--force-with-lease|-f)",
+      '        echo "BLOCKED: force-push is not allowed." >&2; exit 1;;',
+      "      --delete)",
+      '        echo "BLOCKED: deleting remote branches is not allowed." >&2; exit 1;;',
+      "      :*)",
+      '        echo "BLOCKED: deleting remote refs is not allowed." >&2; exit 1;;',
+      "      main|next|master|develop)",
+      '        echo "BLOCKED: pushing to protected branch is not allowed." >&2; exit 1;;',
+      "    esac",
+      "  done",
+      "fi",
+      'if [ "$1" = "branch" ]; then',
+      '  for a in "$@"; do',
+      '    case "$a" in -D|-d|--delete)',
+      '      echo "BLOCKED: deleting branches is not allowed." >&2; exit 1;;',
+      "    esac",
+      "  done",
+      "fi",
+      'exec "$R" "$@"',
+      "GITWRAP",
+      'chmod +x "$REAL_GIT"',
+      "",
+      "echo safety_installed",
+    ].join("\n");
+
+    const safetyResult = await sshExec(vmId, keyFile, safetyScript);
+    if (!safetyResult.stdout.trim().endsWith("safety_installed")) {
+      throw new Error(`Failed to install safety wrappers: ${safetyResult.stderr || safetyResult.stdout}`);
+    }
+
     // 5. Start pi in RPC mode on the VM
     const anthropicKey = process.env.ANTHROPIC_API_KEY;
     if (!anthropicKey) throw new Error("ANTHROPIC_API_KEY is not set");
@@ -513,6 +583,9 @@ implementRoutes.get("/implement/jobs/:id/output", (c) => {
   const output = jobOutputs.get(jobId) || "";
   return c.json({ jobId, output });
 });
+
+
+
 
 
 
