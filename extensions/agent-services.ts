@@ -121,6 +121,7 @@ async function api<T = unknown>(
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(10000),
   });
 
   const text = await res.text();
@@ -459,10 +460,13 @@ async function startSkillStream(): Promise<void> {
   if (sseToken) headers["Authorization"] = `Bearer ${sseToken}`;
 
   try {
+    // Use the abort controller for ongoing streaming, but add a connect timeout
+    const connectTimeout = setTimeout(() => { if (!sseAbort?.signal.aborted) sseAbort?.abort(); }, 10000);
     const res = await fetch(`${baseUrl}/skills/stream`, {
       headers,
       signal: sseAbort.signal,
     });
+    clearTimeout(connectTimeout);
 
     const reader = res.body?.getReader();
     if (!reader) return;
