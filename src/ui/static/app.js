@@ -690,6 +690,11 @@ function switchView(viewName) {
     if (typeof window.metricsDestroy === 'function') window.metricsDestroy();
     if (typeof window.analyticsDestroy === 'function') window.analyticsDestroy();
   }
+  if (viewName === 'chat') {
+    if (typeof window.chatInit === 'function') window.chatInit();
+  } else {
+    if (typeof window.chatDestroy === 'function') window.chatDestroy();
+  }
 }
 
 // ─── Metrics Sub-tabs ───

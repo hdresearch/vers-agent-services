@@ -16,6 +16,7 @@
       <button class="tab" data-view="journal">Journal</button>
       <button class="tab" data-view="skills">Skills</button>
       <button class="tab" data-view="metrics">Metrics</button>
+      <button class="tab" data-view="chat">Chat</button>
     </nav>
     <div class="status">
       <span id="conn-label">connecting</span>
@@ -232,9 +233,32 @@
     </div>
   </div>
 
+  <!-- Chat view -->
+  <div class="view" id="view-chat">
+    <div class="chat-layout">
+      <div class="chat-sidebar">
+        <div class="chat-sidebar-header">
+          <span class="chat-sidebar-title">Context</span>
+          <button class="chat-clear-btn" id="chat-clear-btn" title="Clear chat">Clear</button>
+        </div>
+        <div class="chat-sidebar-info">
+          Claude sees your live infra state: board tasks, feed events, registered VMs, work logs, and usage metrics.
+        </div>
+      </div>
+      <div class="chat-main">
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-input-row">
+          <input type="text" id="chat-input" placeholder="Ask about your infrastructure…" autocomplete="off" spellcheck="false">
+          <button class="chat-send-btn" id="chat-send-btn" title="Send">↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="/ui/static/speedometer.js"></script>
   <script src="/ui/static/metrics.js"></script>
   <script src="/ui/static/analytics.js"></script>
+  <script src="/ui/static/chat.js"></script>
   <script type="module" src="/ui/static/app.js"></script>
 </body>
 </html>
