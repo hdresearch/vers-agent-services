@@ -1028,6 +1028,17 @@ html, body {
 }
 
 @media (max-width: 768px) {
-  .chat-layout { flex-direction: column; }
-  .chat-sidebar { width: 100%; border-right: none; border-bottom: 1px solid rgba(0, 255, 213, 0.08); }
+  .chat-layout {
+    flex-direction: column;
+    height: calc(100vh - 90px);
+    height: calc(100dvh - 90px);
+  }
+  .chat-sidebar { display: none; }
+  .chat-msg { max-width: 95%; }
+  .chat-msg-body { font-size: 14px; padding: 10px 12px; }
+  .chat-messages { padding: 12px; gap: 12px; }
+  .chat-input-row { padding: 8px 12px 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  .chat-input-row input { font-size: 16px; padding: 12px; }
+  .chat-send-btn { width: 44px; height: 44px; font-size: 20px; }
+  .chat-codeblock { font-size: 11px; padding: 8px; }
 }
