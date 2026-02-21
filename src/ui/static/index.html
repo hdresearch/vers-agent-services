@@ -16,6 +16,7 @@
       <button class="tab" data-view="journal">Journal</button>
       <button class="tab" data-view="skills">Skills</button>
       <button class="tab" data-view="metrics">Metrics</button>
+      <button class="tab" data-view="config">Config</button>
       <button class="tab" data-view="chat">Chat</button>
     </nav>
     <div class="status">
@@ -229,6 +230,31 @@
         <div class="analytics-viz-panel">
           <canvas id="analytics-chart-canvas"></canvas>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Config view -->
+  <div class="view" id="view-config">
+    <div class="log-toolbar">
+      <div class="log-filters">
+        <span style="color:var(--text-dim);font-size:11px;text-transform:uppercase;letter-spacing:1px;">Config & Secrets</span>
+      </div>
+      <div class="log-meta">
+        <button class="btn" onclick="showAddConfig()" style="font-size:11px;padding:4px 12px;">+ Add</button>
+      </div>
+    </div>
+    <div class="config-list" id="config-list">
+      <div class="empty">Loading config…</div>
+    </div>
+    <div class="config-add-form" id="config-add-form" style="display:none">
+      <input type="text" id="config-new-key" placeholder="key (e.g. GITHUB_PAT)">
+      <input type="text" id="config-new-label" placeholder="label (optional)">
+      <input type="text" id="config-new-value" placeholder="value">
+      <label class="config-secret-label"><input type="checkbox" id="config-new-secret"> Secret</label>
+      <div class="config-form-actions">
+        <button class="btn btn-approve" onclick="saveNewConfig()">Save</button>
+        <button class="btn" onclick="hideAddConfig()">Cancel</button>
       </div>
     </div>
   </div>

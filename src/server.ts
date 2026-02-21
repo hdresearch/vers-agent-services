@@ -11,6 +11,7 @@ import { usageRoutes } from "./usage/routes.js";
 import { commitRoutes } from "./commits/routes.js";
 import { journalRoutes } from "./journal/routes.js";
 import { chatRoutes } from "./chat/routes.js";
+import { configRoutes } from "./config/routes.js";
 import { uiRoutes } from "./ui/routes.js";
 import { twilioRoutes } from "./twilio/routes.js";
 
@@ -39,6 +40,8 @@ app.use("/usage/*", bearerAuth());
 app.use("/commits/*", bearerAuth());
 app.use("/journal/*", bearerAuth());
 app.use("/chat", bearerAuth());
+app.use("/config/*", bearerAuth());
+app.use("/config", bearerAuth());
 
 // Mount service routes
 app.route("/board", boardRoutes);
@@ -51,6 +54,7 @@ app.route("/usage", usageRoutes);
 app.route("/commits", commitRoutes);
 app.route("/journal", journalRoutes);
 app.route("/chat", chatRoutes);
+app.route("/config", configRoutes);
 
 // TODO: mount these as they're built
 // app.route("/context", contextRoutes);
