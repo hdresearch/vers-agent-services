@@ -800,24 +800,81 @@ html, body {
   height: 100%;
 }
 
-/* Responsive */
+/* ═══════════════════════════════════════════════════════════════════════
+   MOBILE / RESPONSIVE
+   ═══════════════════════════════════════════════════════════════════════ */
+
 @media (max-width: 900px) {
-  .main { grid-template-columns: 1fr; height: auto; }
-  .panel { border-right: none; border-bottom: 1px solid var(--border); max-height: 50vh; }
+  /* Header: stack title above tabs */
+  .header {
+    flex-wrap: wrap; padding: 8px 12px; gap: 6px;
+  }
+  .header h1 { font-size: 13px; }
+  .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; gap: 1px; flex-shrink: 0; }
+  .tab { padding: 6px 10px; font-size: 10px; white-space: nowrap; }
+  .header .status { font-size: 10px; }
+
+  /* Stats bar */
+  .stats { padding: 6px 12px; gap: 12px; font-size: 10px; }
+
+  /* Dashboard panels → single column */
+  .main { grid-template-columns: 1fr; height: auto; overflow: auto; }
+  .panel { border-right: none; border-bottom: 1px solid var(--border); max-height: 60vh; }
   .panel-right { flex-direction: column; }
+  .panel-header { padding: 8px 12px; }
+  .panel-body { padding: 6px; }
+
+  /* Cards — bigger touch targets */
+  .task-card { padding: 12px; }
+  .task-card .title { font-size: 13px; }
+  .task-card .meta { font-size: 12px; gap: 8px; }
+  .bump-btn { padding: 4px 10px; font-size: 12px; }
+  .vm-card { padding: 12px; }
+  .report-card { padding: 12px; }
+
+  /* Feed */
+  .event { padding: 10px 12px; font-size: 12px; }
+  .event .event-header { flex-wrap: wrap; gap: 4px; }
+
+  /* Review */
+  .review-list { padding: 8px 12px; height: auto; }
+  .review-card { padding: 12px; }
+  .review-actions { flex-direction: column; }
+  .btn { padding: 10px 16px; font-size: 12px; text-align: center; }
+
+  /* Log */
+  .log-toolbar { padding: 8px 12px; }
+  .log-filters { flex-wrap: wrap; gap: 6px; }
+  .log-filters input { width: 120px; }
   .log-entries { height: calc(100vh - 160px); }
-  .log-entry { flex-wrap: wrap; gap: 4px; }
+  .log-entry { flex-wrap: wrap; gap: 4px; padding: 8px 12px; }
   .log-entry .log-agent { min-width: auto; }
-  .skills-sections { grid-template-columns: 1fr; height: auto; }
-  .skills-section { border-right: none; border-bottom: 1px solid var(--border); max-height: 50vh; }
+  .log-entry .log-time { min-width: auto; }
+
+  /* Skills → single column */
+  .skills-sections { grid-template-columns: 1fr; height: auto; overflow: auto; }
+  .skills-section { border-right: none; border-bottom: 1px solid var(--border); max-height: 60vh; }
+  .skills-section-header { padding: 8px 12px; }
   .skills-filter-row { margin-left: 0; width: 100%; }
-  .metrics-layout { flex-direction: column; height: auto; }
-  .metrics-sidebar { width: 100%; border-right: none; border-bottom: 1px solid rgba(0, 255, 213, 0.08); max-height: 40vh; }
-  .metrics-tree-wrap { min-height: 400px; }
-  .metrics-timeline-wrap { height: 180px; }
+  .skills-filter-row input { width: 100%; }
+  .skill-card { padding: 12px; }
+  .ext-card { padding: 12px; }
+
+  /* Metrics */
+  .metrics-layout { flex-direction: column; height: auto; overflow: auto; }
+  .metrics-sidebar { width: 100%; border-right: none; border-bottom: 1px solid rgba(0, 255, 213, 0.08); max-height: none; }
+  .metrics-main { min-height: 0; }
+  .metrics-tree-wrap { min-height: 300px; }
+  .metrics-timeline-wrap { height: 160px; }
+  .m-counters { padding: 12px; }
+  .m-counter-value { font-size: 22px; }
+  .m-counter-value.m-small-val { font-size: 16px; }
+  .m-panel-scroll { max-height: 40vh; }
+
+  /* Analytics */
   .analytics-layout { flex-direction: column; height: auto; }
   .analytics-chat-panel { width: 100%; border-right: none; border-bottom: 1px solid rgba(0, 255, 213, 0.08); max-height: 40vh; }
-  .analytics-viz-panel { min-height: 400px; }
+  .analytics-viz-panel { min-height: 300px; }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1027,7 +1084,7 @@ html, body {
   border-color: rgba(0, 255, 213, 0.4);
 }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
   .chat-layout {
     flex-direction: column;
     height: calc(100vh - 90px);
