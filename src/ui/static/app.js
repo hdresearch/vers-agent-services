@@ -643,6 +643,128 @@ function stopSkillsRefresh() {
   }
 }
 
+// ─── Config ───
+
+let configRefreshTimer = null;
+
+async function loadConfig() {
+  const container = document.getElementById('config-list');
+  try {
+    const data = await api('/config');
+    const items = data.items || [];
+    if (!items.length) {
+      container.innerHTML = '<div class="empty">No config entries. Click + Add to store secrets & config.</div>';
+      return;
+    }
+    let html = '';
+    for (const item of items) {
+      const isSecret = item.secret;
+      const displayVal = isSecret ? '••••••••' : esc(item.value);
+      const label = item.label ? `<span class="config-label">${esc(item.label)}</span>` : '';
+      html += `<div class="config-card" data-key="${esc(item.key)}">
+        <div class="config-card-header">
+          <div class="config-key">${esc(item.key)}</div>
+          ${label}
+          ${isSecret ? '<span class="config-badge-secret">secret</span>' : ''}
+        </div>
+        <div class="config-value-row">
+          <code class="config-value" id="cv-${esc(item.key)}">${displayVal}</code>
+          ${isSecret ? `<button class="btn config-reveal-btn" onclick="toggleReveal('${esc(item.key)}')">show</button>` : ''}
+          <button class="btn config-copy-btn" onclick="copyConfig('${esc(item.key)}')">copy</button>
+          <button class="btn btn-reject config-del-btn" onclick="deleteConfig('${esc(item.key)}')">✕</button>
+        </div>
+      </div>`;
+    }
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = `<div class="empty">Failed to load: ${esc(e.message)}</div>`;
+  }
+}
+
+// Track revealed secrets so we can toggle
+const revealedSecrets = new Set();
+
+async function toggleReveal(key) {
+  const el = document.getElementById('cv-' + key);
+  const btn = el?.parentElement?.querySelector('.config-reveal-btn');
+  if (!el || !btn) return;
+  if (revealedSecrets.has(key)) {
+    el.textContent = '••••••••';
+    btn.textContent = 'show';
+    revealedSecrets.delete(key);
+  } else {
+    try {
+      const data = await api('/config/' + encodeURIComponent(key));
+      el.textContent = data.value;
+      btn.textContent = 'hide';
+      revealedSecrets.add(key);
+    } catch (e) {
+      el.textContent = 'error loading';
+    }
+  }
+}
+
+async function copyConfig(key) {
+  try {
+    const data = await api('/config/' + encodeURIComponent(key));
+    await navigator.clipboard.writeText(data.value);
+    const btn = document.querySelector(`.config-card[data-key="${key}"] .config-copy-btn`);
+    if (btn) { btn.textContent = '✓'; setTimeout(() => btn.textContent = 'copy', 1500); }
+  } catch (e) {
+    alert('Copy failed: ' + e.message);
+  }
+}
+
+async function deleteConfig(key) {
+  if (!confirm(`Delete config "${key}"?`)) return;
+  try {
+    await fetch(`${API}/config/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    loadConfig();
+  } catch (e) {
+    alert('Delete failed: ' + e.message);
+  }
+}
+
+function showAddConfig() {
+  document.getElementById('config-add-form').style.display = 'flex';
+  document.getElementById('config-new-key').focus();
+}
+function hideAddConfig() {
+  document.getElementById('config-add-form').style.display = 'none';
+  document.getElementById('config-new-key').value = '';
+  document.getElementById('config-new-label').value = '';
+  document.getElementById('config-new-value').value = '';
+  document.getElementById('config-new-secret').checked = false;
+}
+
+async function saveNewConfig() {
+  const key = document.getElementById('config-new-key').value.trim();
+  const value = document.getElementById('config-new-value').value;
+  const label = document.getElementById('config-new-label').value.trim();
+  const secret = document.getElementById('config-new-secret').checked;
+  if (!key || value === '') { alert('Key and value required'); return; }
+  try {
+    await fetch(`${API}/config/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value, label: label || undefined, secret }),
+    });
+    hideAddConfig();
+    loadConfig();
+  } catch (e) {
+    alert('Save failed: ' + e.message);
+  }
+}
+
+function startConfigRefresh() {
+  if (configRefreshTimer) return;
+  loadConfig();
+  configRefreshTimer = setInterval(loadConfig, 30000);
+}
+function stopConfigRefresh() {
+  if (configRefreshTimer) { clearInterval(configRefreshTimer); configRefreshTimer = null; }
+}
+
 // ─── Tabs ───
 
 function switchView(viewName) {
@@ -684,11 +806,21 @@ function switchView(viewName) {
   } else {
     stopSkillsRefresh();
   }
+  if (viewName === 'config') {
+    startConfigRefresh();
+  } else {
+    stopConfigRefresh();
+  }
   if (viewName === 'metrics') {
     activateMetricsSubview();
   } else {
     if (typeof window.metricsDestroy === 'function') window.metricsDestroy();
     if (typeof window.analyticsDestroy === 'function') window.analyticsDestroy();
+  }
+  if (viewName === 'chat') {
+    if (typeof window.chatInit === 'function') window.chatInit();
+  } else {
+    if (typeof window.chatDestroy === 'function') window.chatDestroy();
   }
 }
 

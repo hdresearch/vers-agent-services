@@ -57,8 +57,35 @@ import { join } from "node:path";
 // HTTP client helpers
 // =============================================================================
 
+/** Config file path — written by bootstrap, read as fallback when env vars aren't set. */
+const AGENT_SERVICES_CONFIG = join(homedir(), ".vers", "agent-services.json");
+
+/** Cached config so we only read the file once per session. */
+let _cachedConfig: { url?: string; token?: string } | null | undefined;
+
+function loadConfig(): { url?: string; token?: string } | null {
+  if (_cachedConfig !== undefined) return _cachedConfig;
+  try {
+    const data = require("fs").readFileSync(AGENT_SERVICES_CONFIG, "utf-8");
+    _cachedConfig = JSON.parse(data);
+  } catch {
+    _cachedConfig = null;
+  }
+  return _cachedConfig;
+}
+
 function getBaseUrl(): string | null {
-  return process.env.VERS_INFRA_URL || null;
+  const envUrl = process.env.VERS_INFRA_URL;
+  if (envUrl) return envUrl;
+  const config = loadConfig();
+  return config?.url || null;
+}
+
+function getAuthToken(): string | null {
+  const envToken = process.env.VERS_AUTH_TOKEN;
+  if (envToken) return envToken;
+  const config = loadConfig();
+  return config?.token || null;
 }
 
 function noUrlError() {
@@ -66,7 +93,7 @@ function noUrlError() {
     content: [
       {
         type: "text" as const,
-        text: "Error: VERS_INFRA_URL environment variable is not set.\n\nSet it to the base URL of your vers-agent-services instance, e.g.:\n  export VERS_INFRA_URL=http://localhost:3000",
+        text: `Error: Agent services URL not configured.\n\nEither:\n  1. Run the bootstrap-fleet skill to deploy agent-services\n  2. Set VERS_INFRA_URL env var manually\n  3. Create ${AGENT_SERVICES_CONFIG} with {"url": "...", "token": "..."}`,
       },
     ],
     isError: true,
@@ -85,7 +112,7 @@ async function api<T = unknown>(
     "Content-Type": "application/json",
   };
 
-  const token = process.env.VERS_AUTH_TOKEN;
+  const token = getAuthToken();
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
@@ -94,6 +121,7 @@ async function api<T = unknown>(
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(10000),
   });
 
   const text = await res.text();
@@ -428,14 +456,17 @@ async function startSkillStream(): Promise<void> {
 
   sseAbort = new AbortController();
   const headers: Record<string, string> = {};
-  const token = process.env.VERS_AUTH_TOKEN;
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const sseToken = getAuthToken();
+  if (sseToken) headers["Authorization"] = `Bearer ${sseToken}`;
 
   try {
+    // Use the abort controller for ongoing streaming, but add a connect timeout
+    const connectTimeout = setTimeout(() => { if (!sseAbort?.signal.aborted) sseAbort?.abort(); }, 10000);
     const res = await fetch(`${baseUrl}/skills/stream`, {
       headers,
       signal: sseAbort.signal,
     });
+    clearTimeout(connectTimeout);
 
     const reader = res.body?.getReader();
     if (!reader) return;
@@ -483,10 +514,10 @@ export default function (pi: ExtensionAPI) {
   // ---------------------------------------------------------------------------
   // Widget — compact status line, polls every 30s
   // ---------------------------------------------------------------------------
-  let widgetTimer: ReturnType<typeof setInterval> | null = null;
+  let statusTimer: ReturnType<typeof setInterval> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
-  async function updateWidget(ctx: { ui: { setWidget: Function } }) {
+  async function updateStatus(ctx: { ui: { setStatus: (key: string, text: string | undefined) => void } }) {
     const base = getBaseUrl();
     if (!base) return;
 
@@ -499,27 +530,23 @@ export default function (pi: ExtensionAPI) {
 
       const open = boardRes.tasks.filter((t) => t.status === "open").length;
       const blocked = boardRes.tasks.filter((t) => t.status === "blocked").length;
-      const inProgress = boardRes.tasks.filter((t) => t.status === "in_progress").length;
-
-      const total = registryRes.count;
       const running = registryRes.vms.filter((v) => v.status === "running").length;
 
-      const lines = [
-        `─── Agent Services ─── ${base}/ui`,
-        `Board: ${open} open, ${inProgress} in-progress, ${blocked} blocked`,
-        `Feed: ${feedRes.total} events`,
-        `Registry: ${total} VMs (${running} running)`,
-      ];
-      ctx.ui.setWidget("agent-services", lines);
+      const parts = [];
+      if (open > 0 || blocked > 0) parts.push(`📋 ${open} tasks${blocked > 0 ? ` (${blocked} blocked)` : ""}`);
+      parts.push(`📡 ${feedRes.total} events`);
+      if (running > 0) parts.push(`🖥  ${running} vms`);
+
+      ctx.ui.setStatus("agent-services", parts.join("  ") + `  ${base}/ui`);
     } catch {
-      // Silently ignore — widget is best-effort
+      ctx.ui.setStatus("agent-services", undefined);
     }
   }
 
   pi.on("session_start", async (_event, ctx) => {
     if (!getBaseUrl()) return;
-    updateWidget(ctx);
-    widgetTimer = setInterval(() => updateWidget(ctx), 30_000);
+    updateStatus(ctx);
+    statusTimer = setInterval(() => updateStatus(ctx), 30_000);
 
     // Start heartbeat
     const vmId = process.env.VERS_VM_ID;
@@ -558,9 +585,9 @@ export default function (pi: ExtensionAPI) {
       clearInterval(heartbeatTimer);
       heartbeatTimer = null;
     }
-    if (widgetTimer) {
-      clearInterval(widgetTimer);
-      widgetTimer = null;
+    if (statusTimer) {
+      clearInterval(statusTimer);
+      statusTimer = null;
     }
 
     // Stop SkillHub SSE stream
@@ -807,7 +834,7 @@ export default function (pi: ExtensionAPI) {
 
   // ---------------------------------------------------------------------------
   // Auto-heartbeat — keeps registry entry alive while agent is running
-  // (heartbeatTimer declared above with widgetTimer, started in session_start)
+  // (heartbeatTimer declared above with statusTimer, started in session_start)
   // ---------------------------------------------------------------------------
 
   // ---------------------------------------------------------------------------
