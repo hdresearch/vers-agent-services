@@ -154,11 +154,13 @@ uiRoutes.all("/ui/api/*", async (c) => {
   try {
     const resp = await fetch(internalUrl, { method, headers, body });
 
-    // For SSE streams, pipe through
+    // For SSE streams, pipe through with chunked transfer-encoding
+    // so @hono/node-server doesn't try to pre-read/buffer the stream body
     if (resp.headers.get("content-type")?.includes("text/event-stream")) {
       return new Response(resp.body, {
         status: resp.status,
         headers: {
+          "Transfer-Encoding": "chunked",
           "Content-Type": "text/event-stream",
           "Cache-Control": "no-cache",
           "Connection": "keep-alive",
